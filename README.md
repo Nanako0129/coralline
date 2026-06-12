@@ -6,6 +6,11 @@
 
 [繁體中文說明](./README.zh-TW.md)
 
+> **Athena fork** of [Nanako0129/coralline](https://github.com/Nanako0129/coralline) — adds four
+> segments tuned for the Athena setup: `ip` (pinned first), `worktree` (beside git), `agent`
+> (beside model), and `warn200k` (pinned last). The default `VL_SEGMENTS` ships with all four
+> enabled; everything else tracks upstream.
+
 ![All six coralline themes rendered side by side](./assets/hero.png)
 
 ## Install (the fun way)
@@ -30,9 +35,12 @@ config editing required.
 
 | Segment | Shows |
 |---|---|
+| `ip` | local machine IP, cached for `VL_IP_TTL`s — _Athena fork_ |
 | `dir` | current directory, long paths collapsed to `~/a/…/z` |
 | `git` | branch, staged `+` / modified `!` / untracked `?`, ahead `⇡` behind `⇣` |
+| `worktree` | git worktree name — _Athena fork_ |
 | `model` | active Claude model |
+| `agent` | active subagent name — _Athena fork_ |
 | `ctx` | context-window gauge, input/output/cache token counts |
 | `limit5h` / `limit7d` | rate-limit gauges with reset countdown |
 | `cost` | session cost in USD |
@@ -41,6 +49,7 @@ config editing required.
 | `style` | active output style |
 | `duration` | session wall-clock duration |
 | `stash` | git stash count |
+| `warn200k` | 200k-token overflow alert; reuses the theme's hot color — _Athena fork_ |
 
 Gauges change color as they fill: green → yellow at 50% → red at 75% (thresholds configurable).
 
@@ -84,7 +93,8 @@ Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the scrip
 | `VL_STYLE` | `pill` | `pill`: powerline pills · `lean`: flat colored text, p10k-lean style |
 | `VL_LAYOUT` | `fixed` | `fixed`: one line per `VL_SEGMENTS*` var · `auto`: responsive |
 | `VL_MAX_LINES` | `2` | `auto` only — wrap into at most this many lines (`1` = never wrap) |
-| `VL_SEGMENTS` | `dir git model ctx limit5h limit7d cost clock` | segments on line 1, in order (the full list in `auto` mode) |
+| `VL_SEGMENTS` | `ip dir git worktree model agent ctx limit5h limit7d cost clock warn200k` | segments on line 1, in order (the full list in `auto` mode) |
+| `VL_IP_TTL` | `30` | seconds the resolved IP is cached (Athena fork `ip` segment) |
 | `VL_SEGMENTS2` / `VL_SEGMENTS3` | _(empty)_ | `fixed` only — optional second/third line |
 | `VL_CLOCK` | `12h` | `12h` / `24h` / `off` |
 | `VL_CLOCK_SECONDS` | `1` | show seconds in the clock |

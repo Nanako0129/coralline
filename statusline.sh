@@ -18,7 +18,9 @@ VL_LEAN_SEP=""                  # lean only — extra text between segments, e.g
 VL_LAYOUT="fixed"               # fixed: one line per VL_SEGMENTS* var
                                 # auto:  single line, wraps when the window is narrow
 VL_MAX_LINES=2                  # auto only — wrap into at most this many lines
-VL_SEGMENTS="dir git model ctx limit5h limit7d cost clock"
+# Athena fork default order: IP first · worktree beside git · agent beside model
+# · 200k alert last. Reset to upstream with "dir git model ctx limit5h limit7d cost clock".
+VL_SEGMENTS="ip dir git worktree model agent ctx limit5h limit7d cost clock warn200k"
 VL_SEGMENTS2=""                 # fixed only — optional second line
 VL_SEGMENTS3=""                 # fixed only — optional third line
 VL_BAR_WIDTH=5
@@ -51,11 +53,18 @@ VL_BG_LINES=240
 VL_BG_STYLE=96
 VL_BG_DURATION=60
 
+# Athena fork segments (per-theme overrides live in the theme .conf files)
+VL_BG_IP="72,160,170"           # machine IP — steel teal
+VL_BG_AGENT=97                  # subagent — mauve (sits next to model)
+VL_BG_WT=66                     # git worktree — teal-green (sits next to git)
+VL_BG_WARN=""                   # 200k-token alert — empty = reuse the theme's hot color (VL_FG_HOT)
+
 VL_FG_TEXT=231
 VL_FG_DIM=245
 VL_FG_OK=114
 VL_FG_WARN=179
 VL_FG_HOT=167
+VL_FG_ALERT=""                  # text on the 200k alert pill — empty = reuse VL_FG_TEXT
 
 # ── Load user config ─────────────────────────────────────────────────────────
 VL_CONF="${CORALLINE_CONFIG:-$HOME/.claude/coralline.conf}"
@@ -73,12 +82,18 @@ if [ "$VL_STYLE" = "lean" ]; then
   VL_FG_TEXT="${VL_LEAN_FG:-}"
 fi
 
+# The 200k alert reuses the theme's hot/alert color and normal text unless the
+# theme or user overrides them — softer and theme-consistent, not an alarm red.
+: "${VL_BG_WARN:=$VL_FG_HOT}"
+: "${VL_FG_ALERT:=$VL_FG_TEXT}"
+
 # ── Parse JSON (single jq call) ──────────────────────────────────────────────
 # Fields are joined with \x1f (unit separator): unlike tab, a non-whitespace
 # IFS preserves empty fields instead of collapsing consecutive delimiters.
 IFS=$'\037' read -r cwd model ctx_pct tok_in tok_out tok_cr tok_cw \
                  fh_pct fh_rst wd_pct wd_rst cost \
-                 lines_add lines_del out_style dur_ms <<JSON
+                 lines_add lines_del out_style dur_ms \
+                 agent worktree exceeds200k <<JSON
 $(printf '%s' "$input" | jq -r '[
   (.workspace.current_dir // .cwd // ""),
   (.model.display_name // ""),
@@ -95,7 +110,10 @@ $(printf '%s' "$input" | jq -r '[
   (.cost.total_lines_added // 0),
   (.cost.total_lines_removed // 0),
   (.output_style.name // ""),
-  (.cost.total_duration_ms // 0)
+  (.cost.total_duration_ms // 0),
+  (.agent.name // ""),
+  (.worktree.name // ""),
+  (.exceeds_200k_tokens // false | tostring)
 ] | map(tostring) | join("\u001f")' 2>/dev/null)
 JSON
 
@@ -214,6 +232,33 @@ GIT
 }
 case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" git "*|*" stash "*) read_git ;; esac
 
+# ── Local IP (cached; resolved only when the ip segment is enabled) ──────────
+# A network lookup every refresh would defeat the one-jq/one-git budget, so the
+# result is cached in TMPDIR for VL_IP_TTL seconds (IPs rarely change mid-session).
+VL_IP=""
+read_ip() {
+  local cache="${TMPDIR:-/tmp}/coralline-ip" mt now iface
+  now=$(date +%s)
+  if [ -f "$cache" ]; then
+    mt=$(stat -f %m "$cache" 2>/dev/null || stat -c %Y "$cache" 2>/dev/null || echo 0)
+    if [ "$(( now - mt ))" -lt "${VL_IP_TTL:-30}" ]; then
+      VL_IP=$(cat "$cache" 2>/dev/null); return
+    fi
+  fi
+  if command -v ipconfig >/dev/null 2>&1; then            # macOS
+    iface=$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')
+    [ -n "$iface" ] && VL_IP=$(ipconfig getifaddr "$iface" 2>/dev/null)
+    [ -z "$VL_IP" ] && VL_IP=$(ipconfig getifaddr en0 2>/dev/null)
+    [ -z "$VL_IP" ] && VL_IP=$(ipconfig getifaddr en1 2>/dev/null)
+  fi
+  if [ -z "$VL_IP" ] && command -v ip >/dev/null 2>&1; then   # Linux (iproute2)
+    VL_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+  fi
+  [ -z "$VL_IP" ] && command -v hostname >/dev/null 2>&1 && VL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+  printf '%s' "$VL_IP" > "$cache" 2>/dev/null
+}
+case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" ip "*) read_ip ;; esac
+
 # ── Segments ─────────────────────────────────────────────────────────────────
 # Each seg_* appends (background, text, visible width) to the segment arrays.
 ESC=$'\033'
@@ -316,6 +361,27 @@ seg_stash() {
   n=$(git -C "$cwd" rev-list --walk-reflogs --count refs/stash 2>/dev/null) || return 0
   [ "${n:-0}" -gt 0 ] || return 0
   push "$VL_BG_GIT_OK" "$(fg $VL_FG_TEXT) ⚑ ${n} "
+}
+
+# ── Athena fork segments ─────────────────────────────────────────────────────
+seg_ip() {        # machine IP, pinned to the very start of the line
+  [ -n "$VL_IP" ] || return 0
+  push "$VL_BG_IP" "${BOLD}$(fg $VL_FG_TEXT) ⌂ ${VL_IP} ${NORM}"
+}
+
+seg_agent() {     # active subagent, sits right after the model
+  [ -n "$agent" ] || return 0
+  push "$VL_BG_AGENT" "${BOLD}$(fg $VL_FG_TEXT) ❖ ${agent} ${NORM}"
+}
+
+seg_worktree() {  # git worktree name, sits right after git
+  [ -n "$worktree" ] || return 0
+  push "$VL_BG_WT" "${BOLD}$(fg $VL_FG_TEXT) ⑂ ${worktree} ${NORM}"
+}
+
+seg_warn200k() {  # 200k-token overflow alert, pinned to the very end
+  [ "$exceeds200k" = "true" ] || return 0
+  push "$VL_BG_WARN" "${BOLD}$(fg $VL_FG_ALERT) ⚠ 200k ${NORM}"
 }
 
 # ── Render ───────────────────────────────────────────────────────────────────
