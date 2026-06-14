@@ -47,8 +47,11 @@ Gauges change color as they fill: green → yellow at 50% → red at 75% (thresh
 
 ## Why it's fast
 
-The statusline runs every second (`refreshInterval: 1`), so the script is built to be cheap:
-one `jq` invocation extracts every field at once, and one `git status --porcelain=v2 --branch`
+The statusline is just a local shell script: it makes no network or API calls and uses zero
+tokens. Claude Code pipes the session JSON to it on stdin and renders whatever it prints.
+
+It runs every second (`refreshInterval: 1`), so the script is built to be cheap on CPU: one
+`jq` invocation extracts every field at once, and one `git status --porcelain=v2 --branch`
 call provides branch, dirty state, and ahead/behind together. No `bc`, no per-field subprocess
 spam. Works on stock macOS bash 3.2 and any Linux bash.
 
