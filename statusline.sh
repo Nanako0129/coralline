@@ -29,6 +29,7 @@ VL_BAR_EMPTY="▱"
 VL_CLOCK="12h"                  # 12h | 24h | off
 VL_CLOCK_SECONDS=1
 VL_PATH_DEPTH=4                 # collapse paths deeper than this
+VL_NAME_MAX=0                   # max chars for project/git names before … truncation (0 = off)
 VL_COST_DECIMALS=2
 VL_WARN_PCT=50                  # percentage thresholds for bar colors
 VL_HOT_PCT=75
@@ -183,7 +184,7 @@ pct_fg() {
 }
 
 # ── Git state (single subprocess, parsed once, used by git/stash segments) ──
-GIT_BRANCH="" GIT_MARKS="" GIT_AB="" GIT_DIRTY=0
+GIT_BRANCH="" GIT_MARKS="" GIT_AB="" GIT_DIRTY=0 GIT_ROOT=""
 read_git() {
   local line oid="" head="" a="" b="" staged=0 unstaged=0 untracked=0
   [ -n "$cwd" ] || return
@@ -207,6 +208,19 @@ GIT
   else
     GIT_BRANCH="$head"
   fi
+  # Stable project name (seg_project): basename of the MAIN repo root, which is
+  # shared by every linked worktree — so it stays constant whichever worktree
+  # you're in. Resolved only when the project segment is enabled, to keep the
+  # one-git-call default untouched.
+  case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" project "*)
+    local cdir
+    cdir=$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+    [ -n "$cdir" ] || cdir=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
+    if [ -n "$cdir" ]; then
+      cdir="${cdir%/}" ; cdir="${cdir%/.git}"
+      GIT_ROOT="${cdir##*/}"
+    fi ;;
+  esac
   [ "$staged"    -eq 1 ] && GIT_MARKS="${GIT_MARKS}+"
   [ "$unstaged"  -eq 1 ] && GIT_MARKS="${GIT_MARKS}!"
   [ "$untracked" -eq 1 ] && GIT_MARKS="${GIT_MARKS}?"
@@ -214,7 +228,7 @@ GIT
   [ "${b:-0}" -gt 0 ] 2>/dev/null && GIT_AB="${GIT_AB}⇣${b}"
   [ -n "$GIT_MARKS" ] && GIT_DIRTY=1
 }
-case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" git "*|*" stash "*) read_git ;; esac
+case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" git "*|*" stash "*|*" project "*) read_git ;; esac
 
 # ── Segments ─────────────────────────────────────────────────────────────────
 # Each seg_* appends (background, text, visible width) to the segment arrays.
@@ -235,6 +249,20 @@ push() {
   SEG_LEN[${#SEG_LEN[@]}]="$SEG_LEN_R"
 }
 
+trunc() {  # echo $1 clipped to $2 visible chars (… suffix); $2=0/unset → unchanged
+  local s="$1" max="${2:-0}"
+  case "$max" in (''|*[!0-9]*) max=0 ;; esac
+  if [ "$max" -gt 0 ] && [ "${#s}" -gt "$max" ]; then
+    s="${s:0:$((max-1))}…"
+  fi
+  printf '%s' "$s"
+}
+
+seg_project() {  # stable repo-root name (same in every worktree); hidden outside a repo
+  [ -n "$GIT_ROOT" ] || return 0
+  push "$VL_BG_DIR" "${BOLD}$(fg $VL_FG_TEXT) ⬢ $(trunc "$GIT_ROOT" "$VL_NAME_MAX") ${NORM}"
+}
+
 seg_dir() {
   [ -n "$cwd" ] || return 0
   local short="${cwd/#$HOME/~}" n
@@ -250,7 +278,7 @@ seg_git() {
   [ -n "$GIT_BRANCH" ] || return 0
   local bgc="$VL_BG_GIT_OK"
   [ "$GIT_DIRTY" -eq 1 ] && bgc="$VL_BG_GIT_DIRTY"
-  push "$bgc" "${BOLD}$(fg $VL_FG_TEXT) ⎇ ${GIT_BRANCH}${GIT_MARKS}${GIT_AB} ${NORM}"
+  push "$bgc" "${BOLD}$(fg $VL_FG_TEXT) ⎇ $(trunc "$GIT_BRANCH" "$VL_NAME_MAX")${GIT_MARKS}${GIT_AB} ${NORM}"
 }
 
 seg_model() {

@@ -31,6 +31,7 @@ config editing required.
 | Segment | Shows |
 |---|---|
 | `dir` | current directory, long paths collapsed to `~/a/…/z` |
+| `project` | repo name (`⬢`), stable across every worktree; hidden outside a git repo |
 | `git` | branch, staged `+` / modified `!` / untracked `?`, ahead `⇡` behind `⇣` |
 | `model` | active Claude model |
 | `ctx` | context-window gauge, input/output/cache token counts |
@@ -91,6 +92,7 @@ Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the scrip
 | `VL_CLOCK_SECONDS` | `1` | show seconds in the clock |
 | `VL_BAR_WIDTH` | `5` | gauge width in cells |
 | `VL_PATH_DEPTH` | `4` | collapse paths deeper than this |
+| `VL_NAME_MAX` | `0` | max chars for the `project` / `git` names before `…` truncation (`0` = off) |
 | `VL_COST_DECIMALS` | `2` | decimal places for the cost segment |
 | `VL_WARN_PCT` / `VL_HOT_PCT` | `50` / `75` | gauge color thresholds |
 | `VL_ASCII` | `0` | `1` disables Nerd Font glyphs |
