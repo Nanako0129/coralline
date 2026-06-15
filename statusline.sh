@@ -259,8 +259,11 @@ trunc() {  # echo $1 clipped to $2 visible chars, middle-truncated with … ; $2
   printf '%s…%s' "${s:0:head}" "${s:start}"
 }
 
-seg_project() {  # stable repo-root name (same in every worktree); hidden outside a repo
-  [ -n "$GIT_ROOT" ] || return 0
+seg_project() {  # repo-root name in a repo; falls back to dir outside one (unless dir is already shown)
+  if [ -z "$GIT_ROOT" ]; then
+    case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" dir "*) return 0 ;; esac
+    seg_dir; return
+  fi
   push "$VL_BG_DIR" "${BOLD}$(fg $VL_FG_TEXT) ⬢ $(trunc "$GIT_ROOT" "$VL_NAME_MAX") ${NORM}"
 }
 
