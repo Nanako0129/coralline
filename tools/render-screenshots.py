@@ -31,7 +31,7 @@ FAKE_HOME = Path(tempfile.gettempdir()) / "vl-home"
 DEMO = FAKE_HOME / "dev" / "coralline"
 
 THEMES = ["claude-coral", "catppuccin-mocha", "nord",
-          "gruvbox-dark", "tokyo-night", "mono"]
+          "gruvbox-dark", "tokyo-night", "mono", "dracula"]
 
 # ── Geometry (S = supersampling factor, downscaled at save time) ─────────────
 S = 2

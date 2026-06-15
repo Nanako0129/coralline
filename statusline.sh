@@ -45,6 +45,7 @@ printf -v VL_SEP   '\xee\x82\xb0'   # U+E0B0 segment separator
 
 # Default theme: claude-coral (steel blue · mauve · Claude coral)
 VL_BG_DIR="81,166,199"
+VL_BG_PROJECT=""               # optional; falls back to VL_BG_DIR when empty
 VL_BG_GIT_OK=65
 VL_BG_GIT_DIRTY=130
 VL_BG_MODEL=173
@@ -279,7 +280,7 @@ seg_project() {  # repo-root name in a repo; falls back to dir outside one (unle
     seg_dir; return
   fi
   fg "$VL_FG_TEXT"; trunc "$GIT_ROOT" "$VL_NAME_MAX"
-  push "$VL_BG_DIR" "${BOLD}${_FG} ⬢ ${_TR} ${NORM}"
+  push "${VL_BG_PROJECT:-$VL_BG_DIR}" "${BOLD}${_FG} ⬢ ${_TR} ${NORM}"
 }
 
 seg_dir() {

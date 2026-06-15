@@ -55,6 +55,7 @@ user can compare themes visually:
 | `nord` | frost cyan · green · purple, arctic tones |
 | `gruvbox-dark` | retro blue · aqua · orange, warm cream text |
 | `tokyo-night` | neon blue · green · purple on deep navy |
+| `dracula` | cyan · pink · purple on Dracula charcoal |
 | `mono` | grayscale, minimalist |
 
 Use ASCII previews shaped like the real bar, for example:
