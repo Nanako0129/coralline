@@ -258,17 +258,63 @@ case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" git "*|*" stash "*|*" pr
 # ── Segments ─────────────────────────────────────────────────────────────────
 # Each seg_* appends (background, text, visible width) to the segment arrays.
 ESC=$'\033'
-seg_len() {  # visible char count of $1 with ANSI sequences stripped → SEG_LEN_R
-  local s="$1" plain=""
-  while [ "${s#*$ESC}" != "$s" ]; do
+# Visible DISPLAY WIDTH (terminal columns) of $1, ANSI stripped → SEG_LEN_R.
+# Decodes UTF-8 straight from the bytes (LC_ALL=C forced locally) so the count is
+# correct no matter what $LANG is. This matters: Git Bash usually leaves LANG empty,
+# where ${#s} counts *bytes* — a 5-glyph "▰▰▰▱▱" bar then reads as 15 and a CJK path
+# char as 3, inflating every segment so the auto-layout wrap fires far too early.
+# Wide CJK / kana / Hangul / fullwidth / emoji code points count as 2 columns,
+# combining and zero-width marks as 0, everything else as 1. Pure bash, no subprocess.
+seg_len() {
+  local s="$1" plain="" LC_ALL=C n i b cp c2 c3 c4 w=0
+  while [ "${s#*$ESC}" != "$s" ]; do          # strip CSI "...m" color escapes
     plain+="${s%%$ESC*}"
     s="${s#*$ESC}" ; s="${s#*m}"
   done
   plain+="$s"
-  SEG_LEN_R=${#plain}
+  n=${#plain} ; i=0
+  while [ "$i" -lt "$n" ]; do
+    printf -v b '%d' "'${plain:i:1}" ; [ "$b" -lt 0 ] && b=$((b + 256))
+    if   [ "$b" -lt 192 ]; then cp=$b ; i=$((i + 1))                  # ASCII / stray byte
+    elif [ "$b" -lt 224 ]; then                                      # 2-byte sequence
+      printf -v c2 '%d' "'${plain:i+1:1}" ; [ "$c2" -lt 0 ] && c2=$((c2 + 256))
+      cp=$(( (b - 192) * 64 + (c2 - 128) )) ; i=$((i + 2))
+    elif [ "$b" -lt 240 ]; then                                      # 3-byte sequence
+      printf -v c2 '%d' "'${plain:i+1:1}" ; [ "$c2" -lt 0 ] && c2=$((c2 + 256))
+      printf -v c3 '%d' "'${plain:i+2:1}" ; [ "$c3" -lt 0 ] && c3=$((c3 + 256))
+      cp=$(( (b - 224) * 4096 + (c2 - 128) * 64 + (c3 - 128) )) ; i=$((i + 3))
+    else                                                             # 4-byte sequence
+      printf -v c2 '%d' "'${plain:i+1:1}" ; [ "$c2" -lt 0 ] && c2=$((c2 + 256))
+      printf -v c3 '%d' "'${plain:i+2:1}" ; [ "$c3" -lt 0 ] && c3=$((c3 + 256))
+      printf -v c4 '%d' "'${plain:i+3:1}" ; [ "$c4" -lt 0 ] && c4=$((c4 + 256))
+      cp=$(( (b - 240) * 262144 + (c2 - 128) * 4096 + (c3 - 128) * 64 + (c4 - 128) )) ; i=$((i + 4))
+    fi
+    if [ "$cp" -lt 768 ]; then w=$((w + 1)) ; continue ; fi          # ASCII + Latin fast path
+    if   { [ "$cp" -ge 768 ]   && [ "$cp" -le 879 ]; }   \
+      || { [ "$cp" -ge 8203 ]  && [ "$cp" -le 8207 ]; }  \
+      || { [ "$cp" -ge 65024 ] && [ "$cp" -le 65039 ]; }; then
+      :                                                              # combining / ZWSP / variation selector → 0 cols
+    elif { [ "$cp" -ge 4352 ]   && [ "$cp" -le 4447 ]; }   \
+      || { [ "$cp" -ge 11904 ]  && [ "$cp" -le 42191 ]; }  \
+      || { [ "$cp" -ge 44032 ]  && [ "$cp" -le 55203 ]; }  \
+      || { [ "$cp" -ge 63744 ]  && [ "$cp" -le 64255 ]; }  \
+      || { [ "$cp" -ge 65040 ]  && [ "$cp" -le 65049 ]; }  \
+      || { [ "$cp" -ge 65072 ]  && [ "$cp" -le 65103 ]; }  \
+      || { [ "$cp" -ge 65280 ]  && [ "$cp" -le 65376 ]; }  \
+      || { [ "$cp" -ge 65504 ]  && [ "$cp" -le 65510 ]; }  \
+      || { [ "$cp" -ge 127744 ] && [ "$cp" -le 129791 ]; } \
+      || { [ "$cp" -ge 131072 ] && [ "$cp" -le 262143 ]; }; then
+      w=$((w + 2))                                                   # East-Asian wide / fullwidth / emoji → 2 cols
+    else
+      w=$((w + 1))
+    fi
+  done
+  SEG_LEN_R=$w
 }
 push() {
-  seg_len "$2"
+  # SEG_LEN[] is read only by the auto-layout wrap; fixed-layout print_range never
+  # touches it, so skip the per-char width scan entirely outside auto layout.
+  if [ "$VL_LAYOUT" = "auto" ]; then seg_len "$2" ; else SEG_LEN_R=0 ; fi
   SEG_BGS[${#SEG_BGS[@]}]="$1"
   SEG_TXT[${#SEG_TXT[@]}]="$2"
   SEG_LEN[${#SEG_LEN[@]}]="$SEG_LEN_R"
