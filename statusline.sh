@@ -57,6 +57,7 @@ VL_BG_CLOCK="70,80,110"
 VL_BG_LINES=240
 VL_BG_STYLE=96
 VL_BG_DURATION=60
+VL_BG_EFFORT=141
 
 VL_FG_TEXT=231
 VL_FG_DIM=245
@@ -89,7 +90,7 @@ printf -v NOW '%(%s)T' -1 2>/dev/null || NOW=$(date +%s)
 # IFS preserves empty fields instead of collapsing consecutive delimiters.
 IFS=$'\037' read -r cwd model ctx_pct tok_in tok_out tok_cr tok_cw \
                  fh_pct fh_rst wd_pct wd_rst cost \
-                 lines_add lines_del out_style dur_ms <<JSON
+                 lines_add lines_del out_style dur_ms effort <<JSON
 $(printf '%s' "$input" | jq -r '[
   (.workspace.current_dir // .cwd // ""),
   (.model.display_name // ""),
@@ -106,7 +107,8 @@ $(printf '%s' "$input" | jq -r '[
   (.cost.total_lines_added // 0),
   (.cost.total_lines_removed // 0),
   (.output_style.name // ""),
-  (.cost.total_duration_ms // 0)
+  (.cost.total_duration_ms // 0),
+  (.effort.level // "")
 ] | map(tostring) | join("")' 2>/dev/null)
 JSON
 
@@ -375,6 +377,14 @@ seg_duration() {
   fmt_duration "$dur_ms"
   fg "$VL_FG_TEXT"
   push "$VL_BG_DURATION" "${_FG} ⧖ ${_DUR} "
+}
+
+seg_effort() {  # reasoning effort level (low/medium/high/xhigh); glyph ψ is editable
+  [ -n "$effort" ] || return 0
+  local label="$effort"
+  case "$effort" in (medium) label="med" ;; esac
+  fg "$VL_FG_TEXT"
+  push "$VL_BG_EFFORT" "${_FG} ψ ${label} "
 }
 
 seg_stash() {
