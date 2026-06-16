@@ -41,6 +41,7 @@ config editing required.
 | `lines` | lines added/removed this session |
 | `style` | active output style |
 | `duration` | session wall-clock duration |
+| `effort` | reasoning effort level (`ψ`) — `low` / `med` / `high` / `xhigh` |
 | `stash` | git stash count |
 
 Gauges change color as they fill: green → yellow at 50% → red at 75% (thresholds configurable).
