@@ -1,250 +1,129 @@
 # coralline — AI Installation Playbook
 
-> **You are an AI coding assistant** (Claude Code or similar) and a user asked you to install
-> coralline. Follow this playbook top to bottom. Do not skip the interview step — letting the
-> user pick their own colors and layout is the whole point of this installer.
+> **You are an AI coding assistant** and a user asked you to install coralline.
+> Humans and AI use the same entrypoint: the one-line installer. Run it for the
+> user, handle missing prerequisites, choose a setup path, and remind them they can
+> rerun the visual wizard later if they want to rice the statusline themselves.
 
 ## Overview
 
-coralline is a powerline-style statusline for Claude Code. Installation means placing two files
-and registering the script in `settings.json`:
+coralline is a powerline-style statusline for Claude Code. Installation places the
+renderer under `~/.claude/coralline`, writes `~/.claude/coralline.conf`, and merges
+the `statusLine` command into `~/.claude/settings.json`.
 
 | Artifact | Destination | Purpose |
 |---|---|---|
-| `statusline.sh` | `~/.claude/coralline/statusline.sh` | The statusline renderer |
-| `configure.sh` | `~/.claude/coralline/configure.sh` | Visual setup wizard and reconfiguration entrypoint |
-| `themes/<chosen>.conf` | `~/.claude/coralline/themes/<chosen>.conf` | Color palette |
-| `sample-input.json` | `~/.claude/coralline/sample-input.json` | Local preview + verification sample |
-| generated config | `~/.claude/coralline.conf` | User's layout + theme choices |
-| `statusLine` entry | `~/.claude/settings.json` | Registers the script |
+| `statusline.sh` | `~/.claude/coralline/statusline.sh` | Statusline renderer |
+| `configure.sh` | `~/.claude/coralline/configure.sh` | Setup wizard and reconfiguration entrypoint |
+| `themes/*.conf` | `~/.claude/coralline/themes/` | Bundled palettes |
+| `sample-input.json` | `~/.claude/coralline/sample-input.json` | Local preview and verification sample |
+| generated config | `~/.claude/coralline.conf` | User layout, segments, and theme choices |
+| `statusLine` entry | `~/.claude/settings.json` | Registers coralline in Claude Code |
 
-```mermaid
-flowchart LR
-    A[Check prerequisites] --> B[Interview the user]
-    B --> C[Download files]
-    C --> D[Generate coralline.conf]
-    D --> E[Update settings.json]
-    E --> F[Verify with sample input]
-```
+## Fast Path
 
-## Fast path
-
-If you are working from a local clone, prefer the built-in wizard:
+Run:
 
 ```bash
-bash configure.sh --install
+curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash
 ```
 
-If the repository has not been cloned yet:
+If you are already inside a local clone, run:
 
 ```bash
-git clone https://github.com/Nanako0129/coralline ~/.claude/coralline-src
-bash ~/.claude/coralline-src/configure.sh --install
+bash install.sh
 ```
 
-The wizard copies the renderer and bundled themes, updates `settings.json`, offers the
-default config, local `~/.p10k.zsh` import when present, or a visual wizard, then verifies the
-final render with sample input. Use the manual steps below only when the wizard cannot run in
-the current environment.
+The installer delegates to `configure.sh --install`, so it automatically enters the setup
+flow after downloading or locating the runtime files. It will:
 
-## Step 1 — Check prerequisites
+1. copy the renderer, wizard, sample input, and bundled themes;
+2. merge the Claude Code `statusLine` setting with `jq`;
+3. offer setup choices for either the user or the AI assistant:
+   - **Default**: install the recommended look immediately;
+   - **Import `.p10k.zsh`**: carry over matching Powerlevel10k style and colors when available;
+   - **Visual wizard**: choose theme, segments, layout, glyph mode, and clock format with previews;
+4. render a sample statusline to verify the final config.
+
+## Prerequisites
+
+Check:
 
 ```bash
 command -v jq || echo "MISSING: jq"
-command -v git && bash --version | head -1
+command -v curl || echo "MISSING: curl"
 ```
 
-> **Note:** `jq` is required. If missing, offer to install it (`brew install jq` on macOS,
-> `apt/dnf install jq` on Linux) before continuing. `git` is optional — the git segment
-> silently disappears without it.
+`jq` is required because coralline uses it at runtime and the installer uses it to merge
+`settings.json`. If it is missing, help the user install it first:
 
-> **Windows:** coralline is a bash script. Claude Code runs it through **Git Bash** when
-> installed, or PowerShell otherwise. If the user is on Windows, confirm Git Bash is present
-> (`git --version` from a Claude Code shell, or check for `C:/Program Files/Git`). If Git Bash
-> is absent, tell the user coralline needs [Git for Windows](https://git-scm.com/download/win)
-> plus `jq`; there is no native PowerShell version yet. Use forward slashes in the
-> `settings.json` command path on Windows.
-
-## Step 2 — Interview the user
-
-Use your interactive question tool (e.g. `AskUserQuestion`). If you have no such tool, ask in
-plain text and wait for answers. Ask these five questions — include the preview blocks so the
-user can compare themes visually:
-
-> **Note:** before asking, check whether `~/.p10k.zsh` exists. If it does, offer the
-> Powerlevel10k import (Step 2.5) as the first option — p10k users usually want their
-> existing look carried over, which answers most of these questions automatically.
-
-### Question 1 · Theme
-
-| Option | Palette |
-|---|---|
-| `claude-coral` | steel blue · mauve · coral (default) |
-| `catppuccin-mocha` | pastel blue · green · mauve on dark |
-| `nord` | frost cyan · green · purple, arctic tones |
-| `gruvbox-dark` | retro blue · aqua · orange, warm cream text |
-| `tokyo-night` | neon blue · green · purple on deep navy |
-| `dracula` | cyan · pink · purple on Dracula charcoal |
-| `mono` | grayscale, minimalist |
-
-Use ASCII previews shaped like the real bar, for example:
-
-```text
-claude-coral:     ~/proj  ⎇ main  ◆ Fable 5  ⬡ ▰▰▰▱▱ 62%  ⊙ 2:45 pm
-tokyo-night:      ~/proj  ⎇ main  ◆ Fable 5  ⬡ ▰▰▰▱▱ 62%  ⊙ 2:45 pm
+```bash
+brew install jq
 ```
 
-### Question 2 · Style
+Use the platform package manager on Linux (`apt`, `dnf`, `pacman`, etc.). `curl` is only
+needed for the remote one-line installer; local clone installs can run without it.
 
-| Option | Config to write | Looks like |
-|---|---|---|
-| Pill (default) | `VL_STYLE="pill"` | powerline pills with colored backgrounds |
-| Lean | `VL_STYLE="lean"` | flat colored text, like Powerlevel10k's lean preset |
+`git` is optional. Git segments disappear automatically when unavailable.
 
-```text
-pill:   ~/proj  ⎇ main  ◆ Fable 5  ⊙ 14:45     (colored capsule backgrounds)
-lean:   ~/proj  ⎇ main  ◆ Fable 5  ⊙ 14:45     (no backgrounds, colored text)
+## Reconfigure
+
+Rice-focused users can rerun the visual wizard at any time:
+
+```bash
+bash ~/.claude/coralline/configure.sh
 ```
 
-### Question 3 · Segments (multi-select)
+To reinstall files and re-merge Claude settings:
 
-| Segment | Shows | Default |
-|---|---|---|
-| `dir` | current directory (shortened) | on |
-| `git` | branch, dirty marks `+!?`, ahead/behind `⇡⇣` | on |
-| `model` | active Claude model | on |
-| `ctx` | context-window gauge + token counts | on |
-| `limit5h` / `limit7d` | rate-limit gauges with reset countdown | on |
-| `cost` | session cost in USD | on |
-| `clock` | current time | on |
-| `lines` | lines added/removed this session | off |
-| `style` | active output style | off |
-| `duration` | session wall-clock duration | off |
-| `effort` | reasoning effort level (`ψ`) | off |
-| `stash` | git stash count | off |
-| `project` | stable repo name (`⬢`), same across all git worktrees | off |
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash
+```
 
-### Question 4 · Layout
+## AI Guidance
 
-| Option | Config to write |
-|---|---|
-| Responsive (recommended) | `VL_LAYOUT="auto"` — one line when wide, wraps into `VL_MAX_LINES` rows when the window narrows; ask 2 or 3 as the cap |
-| Always single line | `VL_LAYOUT="auto"` + `VL_MAX_LINES=1` |
-| Fixed two lines | `VL_LAYOUT="fixed"` — path/git/model in `VL_SEGMENTS`, gauges in `VL_SEGMENTS2` |
-| Fixed three lines | `VL_LAYOUT="fixed"` + `VL_SEGMENTS3` |
+When installing for a user:
 
-### Question 5 · Details
+1. Run the fast-path installer first.
+2. If it fails because `jq` is missing, explain the package-manager command and rerun after
+   the user installs it.
+3. If `~/.p10k.zsh` exists, prefer the import path unless the user asks for a fresh design.
+4. If the user wants detailed visual control, choose the visual wizard path and let them pick.
+5. If the user wants you to handle it, choose the default path or the p10k import path yourself.
+6. After success, tell the user to restart Claude Code or open a new session if the statusline
+   does not appear immediately, and mention they can rerun
+   `bash ~/.claude/coralline/configure.sh` to customize it later.
 
-Ask about: clock format (`12h` / `24h` / `off`), and whether their terminal uses a
-**Nerd Font** (if not, set `VL_ASCII=1` so no broken glyphs appear).
+Do not manually rewrite `~/.claude/settings.json` unless the installer cannot run. The wizard
+already performs a merge and creates a backup when a settings file exists.
 
-Also ask whether they work in **git worktrees**. If yes, suggest adding the `project`
-segment (a stable repo name that stays the same across worktrees) and setting `VL_NAME_MAX`
-(e.g. `14`) to truncate long branch names. If they don't use worktrees, skip both — `dir`
-already shows what they need.
+## Manual Fallback
 
-## Step 2.5 — Powerlevel10k import (optional)
+Use this only if the one-line installer cannot run in the current environment.
 
-If the user opts in, read `~/.p10k.zsh` and translate their existing p10k look into the
-coralline config. You are the parser — read the file and map fuzzily, don't script it.
+```bash
+git clone https://github.com/Nanako0129/coralline ~/.claude/coralline-src
+cd ~/.claude/coralline-src
+bash configure.sh --install
+```
 
-| What to look for in `~/.p10k.zsh` | Write into coralline config |
-|---|---|
-| `# Wizard options:` comment contains `lean` | `VL_STYLE="lean"` |
-| `# Wizard options:` contains `classic`, `rainbow`, or `powerline` | `VL_STYLE="pill"` |
-| `# Wizard options:` contains `24h time` | `VL_CLOCK="24h"` |
-| `POWERLEVEL9K_TIME_FORMAT` with `%H` / `%S` | `VL_CLOCK="24h"` / `VL_CLOCK_SECONDS=1` |
-| `POWERLEVEL9K_DIR_BACKGROUND` (pill) or `_FOREGROUND` (lean) | `VL_BG_DIR` |
-| `POWERLEVEL9K_VCS_CLEAN_*` | `VL_BG_GIT_OK` |
-| `POWERLEVEL9K_VCS_MODIFIED_*` / `_UNTRACKED_*` | `VL_BG_GIT_DIRTY` |
-| `POWERLEVEL9K_TIME_*` | `VL_BG_CLOCK` |
-| `POWERLEVEL9K_STATUS_OK_*` greens | `VL_FG_OK` |
-| `POWERLEVEL9K_STATUS_ERROR_*` reds | `VL_FG_HOT` |
-
-Conversion rules:
-
-| p10k value | coralline value |
-|---|---|
-| Plain number (e.g. `4`, `76`) | Same number — both use xterm-256 indexes |
-| `#RRGGBB` | Convert to `"R,G,B"` decimal triplet |
-| In **lean** style, p10k sets `*_FOREGROUND` only | Use those as `VL_BG_*` — lean mode treats them as text accents |
-
-Segments coralline has no counterpart for (os_icon, virtualenv, kubecontext, …) are simply
-skipped; segments coralline adds (ctx, limits, cost) keep theme defaults unless the user says
-otherwise. Show the user the generated palette before writing it.
-
-## Step 3 — Download the files
+If the repository is already available locally, copy from that clone instead of downloading:
 
 ```bash
 mkdir -p ~/.claude/coralline/themes
-BASE="https://raw.githubusercontent.com/Nanako0129/coralline/main"
-curl -fsSL "$BASE/statusline.sh"            -o ~/.claude/coralline/statusline.sh
-curl -fsSL "$BASE/configure.sh"             -o ~/.claude/coralline/configure.sh
-curl -fsSL "$BASE/themes/<CHOSEN>.conf"     -o ~/.claude/coralline/themes/<CHOSEN>.conf
-curl -fsSL "$BASE/test/sample-input.json"   -o ~/.claude/coralline/sample-input.json
+cp statusline.sh configure.sh install.sh ~/.claude/coralline/
+cp test/sample-input.json ~/.claude/coralline/sample-input.json
+cp themes/*.conf ~/.claude/coralline/themes/
 chmod +x ~/.claude/coralline/statusline.sh ~/.claude/coralline/configure.sh
+bash ~/.claude/coralline/configure.sh --install
 ```
 
-> **Note:** if the repo is already cloned locally, copy from the clone instead of downloading.
+## Verification
 
-## Step 4 — Generate `~/.claude/coralline.conf`
-
-Write the user's answers into the config. Template:
+The installer verifies rendering automatically. For a manual check, run:
 
 ```bash
-# coralline config — generated by AI installer on <DATE>
-. ~/.claude/coralline/themes/<CHOSEN>.conf
-
-VL_STYLE="pill"          # pill: powerline pills · lean: flat p10k-lean text
-VL_LAYOUT="auto"         # auto: responsive · fixed: pinned rows
-VL_MAX_LINES=3           # auto only — wrap cap (1 = never wrap)
-VL_WRAP_MARGIN=4         # auto only — columns kept free on the right edge
-VL_SEGMENTS="dir git model ctx limit5h limit7d cost clock"
-VL_SEGMENTS2=""          # fixed only — second line, e.g. "lines style duration"
-VL_SEGMENTS3=""          # fixed only — third line
-VL_CLOCK="12h"           # 12h | 24h | off
-VL_CLOCK_SECONDS=1
-VL_BAR_WIDTH=5
-VL_COST_DECIMALS=2
-VL_PATH_DEPTH=4
-VL_NAME_MAX=0            # 0 = off; >0 truncates project/git names (middle-truncation)
-VL_ASCII=0               # 1 = no Nerd Font glyphs
+bash ~/.claude/coralline/statusline.sh < ~/.claude/coralline/sample-input.json
 ```
 
-> ⚠️ **Warning:** if `~/.claude/coralline.conf` already exists, show the user a diff and ask
-> before overwriting — it may contain their manual tweaks.
-
-## Step 5 — Update `settings.json`
-
-Merge — never overwrite the whole file. Back up first:
-
-```bash
-cp ~/.claude/settings.json ~/.claude/settings.json.bak 2>/dev/null
-jq '.statusLine = {
-  "type": "command",
-  "command": "bash ~/.claude/coralline/statusline.sh",
-  "refreshInterval": 1
-}' ~/.claude/settings.json > /tmp/settings.json && mv /tmp/settings.json ~/.claude/settings.json
-```
-
-If `settings.json` does not exist, create it containing only the `statusLine` key.
-
-## Step 6 — Verify
-
-Run the script against the bundled sample input and confirm it renders without errors:
-
-```bash
-curl -fsSL "$BASE/test/sample-input.json" | bash ~/.claude/coralline/statusline.sh
-```
-
-Success criteria:
-
-| Check | Expected |
-|---|---|
-| Exit code | `0` |
-| Output | One (or two) colored pill rows, no error text |
-| stderr | Empty |
-
-Finally, tell the user the statusline appears after their next Claude Code restart (or
-immediately in new sessions), and that they can re-run this installer anytime to restyle, or
-hand-edit `~/.claude/coralline.conf`.
+Success means exit code `0`, a rendered statusline on stdout, and no error text on stderr.

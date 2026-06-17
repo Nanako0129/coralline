@@ -946,3 +946,4 @@ main_menu
 write_final_config || exit 0
 verify_render
 printf '\nDone. Restart Claude Code or open a new session to see coralline.\n'
+printf 'Reconfigure anytime with:\n  bash %s/configure.sh\n' "$TARGET_DIR"
