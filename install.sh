@@ -74,37 +74,27 @@ download() {
   curl -fsSL "$src" -o "$dst" || die "failed to download $src"
 }
 
+github_theme_paths() {
+  local tree_sha
+  tree_sha=$(curl -fsSL "https://api.github.com/repos/$REPO/commits/$REF" \
+    | jq -r '.commit.tree.sha // empty' 2>/dev/null || true)
+  [ -n "$tree_sha" ] || return 0
+  curl -fsSL "https://api.github.com/repos/$REPO/git/trees/$tree_sha?recursive=1" \
+    | jq -r '.tree[]? | select(.type == "blob" and (.path | test("^themes/.+\\.conf$"))) | .path' 2>/dev/null || true
+}
+
 download_themes() {
-  local paths path dst count=0 local_base default_base tree_sha
-  default_base="https://raw.githubusercontent.com/$REPO/$REF"
+  local paths path dst count=0 local_base
   case "$BASE_URL" in
     file://*)
       local_base="${BASE_URL#file://}"
       paths=$(cd "$local_base" 2>/dev/null && find themes -type f -name '*.conf' | sort || true)
       ;;
-    "$default_base")
-      tree_sha=$(curl -fsSL "https://api.github.com/repos/$REPO/commits/$REF" \
-        | jq -r '.commit.tree.sha // empty' 2>/dev/null || true)
-      if [ -n "$tree_sha" ]; then
-        paths=$(curl -fsSL "https://api.github.com/repos/$REPO/git/trees/$tree_sha?recursive=1" \
-          | jq -r '.tree[]? | select(.type == "blob" and (.path | test("^themes/.+\\.conf$"))) | .path' 2>/dev/null || true)
-      else
-        paths=""
-      fi
-      ;;
     *)
-      paths=""
+      paths=$(github_theme_paths)
       ;;
   esac
-  if [ -z "$paths" ]; then
-    paths="themes/claude-coral.conf
-themes/catppuccin-mocha.conf
-themes/nord.conf
-themes/gruvbox-dark.conf
-themes/tokyo-night.conf
-themes/dracula.conf
-themes/mono.conf"
-  fi
+  [ -n "$paths" ] || die "no themes found for $REPO@$REF"
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     dst="$WORK_DIR/$path"
@@ -205,6 +195,12 @@ if [ "$CONFIGURE_MODE" = "--install-only" ]; then
   ok "installing runtime files"
 else
   ok "starting setup"
+fi
+if [ "$CONFIGURE_MODE" = "--install-only" ]; then
+  if [ -r /dev/tty ] && [ -t 1 ]; then
+    exec bash "$WORK_DIR/configure.sh" --install-only < /dev/tty
+  fi
+  exec bash "$WORK_DIR/configure.sh" --install-only
 fi
 if [ -r /dev/tty ] && [ -t 1 ]; then
   exec bash "$WORK_DIR/configure.sh" --install $CONFIGURE_MODE < /dev/tty
