@@ -184,9 +184,9 @@ narrow window:  ~/dev/app  ⎇ main  ◆ Fable 5
 | `VL_LEAN_SEP` | （空） | 區段之間的額外分隔字串，例如 `·` |
 | `VL_LEAN_FG` | （空） | 強制指定文字色；留空 = 繼承各區段的強調色 |
 
-> **提示：** 本來就是 p10k 使用者？跟 AI 安裝員說一聲，它會讀你的 `~/.p10k.zsh`，
-> 把風格、配色、時間格式都搬過來。詳見
-> [INSTALL.md 的 Powerlevel10k 匯入步驟](./INSTALL.md#step-25--powerlevel10k-import-optional)。
+> **提示：** 本來就是 p10k 使用者？跟 AI 安裝員或視覺化 wizard 說要匯入
+> `~/.p10k.zsh`，它會在你同意後帶入風格、配色與時間格式。詳見
+> [INSTALL.md 的 AI interview](./INSTALL.md#ai-interview)。
 
 ## 主題
 

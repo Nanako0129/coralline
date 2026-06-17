@@ -187,9 +187,9 @@ Prefer Powerlevel10k's *lean* look — no backgrounds, just colored text? Set
 | `VL_LEAN_SEP` | _(empty)_ | extra text between segments, e.g. `·` |
 | `VL_LEAN_FG` | _(empty)_ | force a text color; empty = inherit each segment's accent |
 
-> **Tip:** already a p10k user? Tell the AI installer to import your `~/.p10k.zsh` — it will
-> carry over your style, colors, and time format. See the
-> [Powerlevel10k import step in INSTALL.md](./INSTALL.md#step-25--powerlevel10k-import-optional).
+> **Tip:** already a p10k user? Tell the AI installer or the visual wizard to import your
+> `~/.p10k.zsh` — it will carry over your style, colors, and time format after you opt in.
+> See the [AI interview notes in INSTALL.md](./INSTALL.md#ai-interview).
 
 ## Themes
 

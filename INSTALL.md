@@ -89,18 +89,44 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 
 When installing for a user:
 
-1. Run the fast-path installer first with `--install-only`.
-2. If it fails because `jq` is missing, explain the package-manager command and rerun after
+1. Ask the user to choose setup mode before installing. Use the runtime's native choice UI
+   when available; otherwise show the text menu below and wait for a reply.
+2. Run the fast-path installer with `--install-only`.
+3. If it fails because `jq` is missing, explain the package-manager command and rerun after
    the user installs it.
-3. Interview the user with the questions below.
-4. Write `~/.claude/coralline.conf`.
-5. Verify with the bundled sample input.
-6. After success, tell the user to restart Claude Code or open a new session if the statusline
+4. Follow the selected setup mode.
+5. Write `~/.claude/coralline.conf` unless the user chose the visual wizard.
+6. Verify with the bundled sample input.
+7. After success, tell the user to restart Claude Code or open a new session if the statusline
    does not appear immediately, and mention they can rerun
    `bash ~/.claude/coralline/configure.sh` to customize it later.
 
 Do not manually rewrite `~/.claude/settings.json` unless the installer cannot run. The
 installer already performs a merge and creates a backup when a settings file exists.
+
+## Setup Mode
+
+Ask this first:
+
+```text
+How do you want to configure coralline?
+1. Let Claude configure it for me
+2. Import my local ~/.p10k.zsh
+3. Use the coralline default
+4. Open the visual wizard so I can customize manually
+```
+
+Mode behavior:
+
+| Mode | What Claude should do |
+|---|---|
+| Let Claude configure it | Bootstrap with `--install-only`, run the AI interview, write config, verify |
+| Import `~/.p10k.zsh` | Ask for confirmation if the file exists, bootstrap with `--install-only`, translate p10k, write config, verify |
+| Use default | Bootstrap with `--install-only`, write the default config, verify |
+| Visual wizard | Run `curl -fsSL .../install.sh | bash` without `--install-only` and let the user operate the TUI |
+
+If the user says "you decide", choose **Let Claude configure it** and keep the interview short.
+Never import `~/.p10k.zsh` unless the user explicitly chooses or confirms that mode.
 
 ## AI Interview
 
@@ -116,8 +142,9 @@ Ask concise questions. If the user says "you decide", choose the defaults.
 5. **Details**: clock `12h` default, `24h`, or `off`; Nerd Font yes/no; if they use git
    worktrees, suggest enabling `project`.
 
-If `~/.p10k.zsh` exists, offer to import its style, clock, and main colors before asking the
-full questions. Read the file and map these values when present:
+If `~/.p10k.zsh` exists, ask whether the user wants to import its style, clock, and main
+colors. Do not import it by default. If the user agrees, read the file and map these values
+when present:
 
 | p10k setting | coralline config |
 |---|---|

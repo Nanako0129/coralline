@@ -932,10 +932,11 @@ main_menu() {
   printf '\nChoose how to create your theme config:\n'
   printf '  1) Use the coralline default\n'
   if [ -f "$P10K_FILE" ]; then
+    printf '     Found %s. Choose import only if you want to use it.\n' "$P10K_FILE"
     printf '  2) Import local .p10k.zsh colors\n'
     printf '  3) Visual wizard\n'
     max=3
-    default_choice=2
+    default_choice=1
   else
     printf '  2) Visual wizard\n'
     max=2
