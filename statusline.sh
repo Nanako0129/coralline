@@ -379,7 +379,7 @@ seg_duration() {
   push "$VL_BG_DURATION" "${_FG} ⧖ ${_DUR} "
 }
 
-seg_effort() {  # reasoning effort level (low/medium/high/xhigh); glyph ψ is editable
+seg_effort() {  # reasoning effort level (low/medium/high/xhigh/max); glyph ψ is editable
   [ -n "$effort" ] || return 0
   local label="$effort"
   case "$effort" in (medium) label="med" ;; esac
