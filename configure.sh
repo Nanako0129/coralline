@@ -887,11 +887,11 @@ draw_main_menu() {
     printf ' %s [%s] Import p10k\n' "$pointer" "$mark"
     [ "$selected" = "2" ] && pointer="❯" || pointer=" "
     [ "$selected" = "2" ] && mark="✓" || mark=" "
-    printf ' %s [%s] Wizard\n' "$pointer" "$mark"
+    printf ' %s [%s] Configure Wizard\n' "$pointer" "$mark"
   else
     [ "$selected" = "1" ] && pointer="❯" || pointer=" "
     [ "$selected" = "1" ] && mark="✓" || mark=" "
-    printf ' %s [%s] Wizard\n' "$pointer" "$mark"
+    printf ' %s [%s] Configure Wizard\n' "$pointer" "$mark"
   fi
   clear_tail
 }

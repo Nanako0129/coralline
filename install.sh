@@ -11,9 +11,31 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)
 WORK_DIR=""
 TEMP_DIR=""
 
+if [ -t 1 ]; then
+  BOLD=$(printf '\033[1m')
+  DIM=$(printf '\033[2m')
+  GREEN=$(printf '\033[32m')
+  BLUE=$(printf '\033[34m')
+  RESET=$(printf '\033[0m')
+else
+  BOLD=""
+  DIM=""
+  GREEN=""
+  BLUE=""
+  RESET=""
+fi
+
 die() {
   printf 'error: %s\n' "$*" >&2
   exit 1
+}
+
+info() {
+  printf '%s%s%s %s\n' "$BLUE" "$BOLD" "coralline" "$RESET$*"
+}
+
+ok() {
+  printf '%s%s%s %s\n' "$GREEN" "$BOLD" "coralline" "$RESET$*"
 }
 
 need_cmd() {
@@ -34,6 +56,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
+info "installing statusline"
+printf '%s\n' "${DIM}Checking prerequisites...${RESET}"
 need_jq
 
 if [ -f "$SCRIPT_DIR/configure.sh" ] \
@@ -41,11 +65,13 @@ if [ -f "$SCRIPT_DIR/configure.sh" ] \
   && [ -f "$SCRIPT_DIR/test/sample-input.json" ] \
   && [ -d "$SCRIPT_DIR/themes" ]; then
   WORK_DIR="$SCRIPT_DIR"
+  printf '%s\n' "${DIM}Using local checkout: $WORK_DIR${RESET}"
 else
   need_cmd curl
   TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/coralline-install.XXXXXX") || exit 1
   WORK_DIR="$TEMP_DIR"
   mkdir -p "$WORK_DIR/themes" "$WORK_DIR/test"
+  printf '%s\n' "${DIM}Downloading runtime files from $BASE_URL${RESET}"
   download "$BASE_URL/configure.sh" "$WORK_DIR/configure.sh"
   download "$BASE_URL/statusline.sh" "$WORK_DIR/statusline.sh"
   download "$BASE_URL/test/sample-input.json" "$WORK_DIR/test/sample-input.json"
@@ -54,5 +80,8 @@ else
   done
 fi
 
-chmod +x "$WORK_DIR/configure.sh" "$WORK_DIR/statusline.sh"
+ok "starting visual setup"
+if [ -r /dev/tty ] && [ -t 1 ]; then
+  exec bash "$WORK_DIR/configure.sh" --install "$@" < /dev/tty
+fi
 exec bash "$WORK_DIR/configure.sh" --install "$@"
