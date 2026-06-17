@@ -354,7 +354,11 @@ render_preview() {
   tmp=$(mktemp "${TMPDIR:-/tmp}/coralline-config.XXXXXX") || exit 1
   input=$(mktemp "${TMPDIR:-/tmp}/coralline-input.XXXXXX") || exit 1
   write_candidate_config "$tmp"
-  jq --arg cwd "$SCRIPT_DIR" '.cwd = $cwd | .workspace.current_dir = $cwd' "$sample" > "$input" 2>/dev/null || cp "$sample" "$input"
+  if [ -n "$sample" ]; then
+    jq --arg cwd "$SCRIPT_DIR" '.cwd = $cwd | .workspace.current_dir = $cwd' "$sample" > "$input" 2>/dev/null || cp "$sample" "$input"
+  else
+    jq -n --arg cwd "$SCRIPT_DIR" '{cwd: $cwd, workspace: {current_dir: $cwd}}' > "$input"
+  fi
   printf '\nPreview (%s cols):\n' "$cols"
   CORALLINE_CONFIG="$tmp" COLUMNS="$cols" bash "$statusline" < "$input"
   rm -f "$tmp" "$input"
@@ -915,11 +919,14 @@ update_settings() {
   if [ -f "$SETTINGS_FILE" ]; then
     backup="$SETTINGS_FILE.bak.$(date +%Y%m%d%H%M%S)"
     cp "$SETTINGS_FILE" "$backup"
-    jq --arg command "bash $TARGET_DIR/statusline.sh" '.statusLine = {
+    if ! jq --arg command "bash $TARGET_DIR/statusline.sh" '.statusLine = {
       "type": "command",
       "command": $command,
       "refreshInterval": 1
-    }' "$SETTINGS_FILE" > "$tmp"
+    }' "$SETTINGS_FILE" > "$tmp"; then
+      rm -f "$tmp"
+      die "failed to parse $SETTINGS_FILE; original left unchanged, backup written to $backup"
+    fi
   else
     cat > "$tmp" <<EOF
 {
@@ -936,11 +943,19 @@ EOF
 }
 
 verify_render() {
-  local statusline sample
+  local statusline sample input
   statusline=$(runtime_statusline)
   sample=$(runtime_sample)
   printf '\nVerification render:\n'
-  CORALLINE_CONFIG="$CONFIG_FILE" COLUMNS=120 bash "$statusline" < "$sample"
+  if [ -n "$sample" ]; then
+    need_file "$sample"
+    CORALLINE_CONFIG="$CONFIG_FILE" COLUMNS=120 bash "$statusline" < "$sample"
+  else
+    input=$(mktemp "${TMPDIR:-/tmp}/coralline-input.XXXXXX") || exit 1
+    jq -n --arg cwd "$SCRIPT_DIR" '{cwd: $cwd, workspace: {current_dir: $cwd}}' > "$input"
+    CORALLINE_CONFIG="$CONFIG_FILE" COLUMNS=120 bash "$statusline" < "$input"
+    rm -f "$input"
+  fi
 }
 
 main_menu_screen() {

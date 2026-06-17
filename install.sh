@@ -75,7 +75,7 @@ download() {
 }
 
 download_themes() {
-  local paths path dst count=0 local_base default_base
+  local paths path dst count=0 local_base default_base tree_sha
   default_base="https://raw.githubusercontent.com/$REPO/$REF"
   case "$BASE_URL" in
     file://*)
@@ -83,8 +83,14 @@ download_themes() {
       paths=$(cd "$local_base" 2>/dev/null && find themes -type f -name '*.conf' | sort || true)
       ;;
     "$default_base")
-      paths=$(curl -fsSL "https://api.github.com/repos/$REPO/git/trees/$REF?recursive=1" \
-        | jq -r '.tree[]? | select(.type == "blob" and (.path | test("^themes/.+\\.conf$"))) | .path' 2>/dev/null || true)
+      tree_sha=$(curl -fsSL "https://api.github.com/repos/$REPO/commits/$REF" \
+        | jq -r '.commit.tree.sha // empty' 2>/dev/null || true)
+      if [ -n "$tree_sha" ]; then
+        paths=$(curl -fsSL "https://api.github.com/repos/$REPO/git/trees/$tree_sha?recursive=1" \
+          | jq -r '.tree[]? | select(.type == "blob" and (.path | test("^themes/.+\\.conf$"))) | .path' 2>/dev/null || true)
+      else
+        paths=""
+      fi
       ;;
     *)
       paths=""
