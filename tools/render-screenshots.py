@@ -236,6 +236,7 @@ def payload(ctx, tin, tout, cr, cw, fh, fh_s, wd, wd_s, cost,
         "workspace": {"current_dir": str(DEMO)},
         "model": {"display_name": "Claude Fable 5"},
         "output_style": {"name": "Explanatory"},
+        "effort": {"level": "high"},
         "context_window": {
             "used_percentage": ctx,
             "total_input_tokens": tin, "total_output_tokens": tout,
@@ -280,7 +281,7 @@ def theme_blocks(theme):
         ("limits & cost · low", run_bar(theme, "limit5h limit7d cost", LOW)),
         ("context · running hot", run_bar(theme, "ctx", HIGH)),
         ("limits & cost · running hot", run_bar(theme, "limit5h limit7d cost", HIGH)),
-        ("extras",             run_bar(theme, "lines style duration stash", HIGH)),
+        ("extras",             run_bar(theme, "lines style duration effort stash", HIGH)),
     ]
 
 def hero_blocks():
