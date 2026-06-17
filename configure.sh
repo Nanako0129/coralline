@@ -35,6 +35,15 @@ setup_mode=""
 screen_active=0
 old_stty=""
 
+T_RESET=$(printf '\033[0m')
+T_BOLD=$(printf '\033[1m')
+T_DIM=$(printf '\033[2m')
+T_BLUE=$(printf '\033[38;5;81m')
+T_GREEN=$(printf '\033[38;5;114m')
+T_MAUVE=$(printf '\033[38;5;183m')
+T_CORAL=$(printf '\033[38;5;173m')
+T_WARN=$(printf '\033[38;5;179m')
+
 usage() {
   cat <<'EOF'
 coralline configure
@@ -361,13 +370,16 @@ step_header() {
 }
 
 show_current_state() {
-  printf 'Theme: %s · Style: %s · Layout: %s' "$theme" "$style" "$layout"
+  printf '%sTheme%s: %s%s%s · %sStyle%s: %s%s%s · %sLayout%s: %s' \
+    "$T_DIM" "$T_RESET" "$T_BOLD" "$theme" "$T_RESET" \
+    "$T_DIM" "$T_RESET" "$T_BOLD" "$style" "$T_RESET" \
+    "$T_DIM" "$T_RESET" "$layout"
   if [ "$layout" = "auto" ]; then printf ':%s' "$max_lines"; fi
-  printf ' · Clock: %s' "$clock_mode"
+  printf ' · %sClock%s: %s' "$T_DIM" "$T_RESET" "$clock_mode"
   if [ "$clock_mode" != "off" ]; then
     [ "$clock_seconds" = "1" ] && printf '+seconds' || printf '-seconds'
   fi
-  [ "$ascii_mode" = "1" ] && printf ' · ASCII' || printf ' · Nerd Font'
+  [ "$ascii_mode" = "1" ] && printf ' · %sASCII%s' "$T_WARN" "$T_RESET" || printf ' · %sNerd Font%s' "$T_GREEN" "$T_RESET"
   printf '\n'
 }
 
@@ -381,11 +393,29 @@ draw_screen_header() {
   local preview
   preview=$(render_preview "${2:-120}")
   clear_screen
-  printf 'coralline configure  ·  %s\n' "$1"
-  printf '↑/↓ move · Space toggle · Enter accept · q quit\n\n'
+  printf '%s%s%s %s·%s %s%s%s\n\n' "$T_BOLD" "$T_CORAL" "coralline configure" "$T_DIM" "$T_RESET" "$T_BOLD" "$1" "$T_RESET"
   show_current_state
-  printf '%s\n\n' "$preview"
+  printf '\n%s\n\n' "$preview"
   printf '\033[s'
+}
+
+draw_screen_footer() {
+  if [ "${1:-}" = "toggle" ]; then
+    printf '\n%s↑/↓%s move · %sSpace%s toggle · %sEnter%s accept · %sq%s quit%s\n' \
+      "$T_BLUE" "$T_RESET" "$T_BLUE" "$T_RESET" "$T_GREEN" "$T_RESET" "$T_CORAL" "$T_RESET" "$T_RESET"
+  else
+    printf '\n%s↑/↓%s move · %sEnter%s accept · %sq%s quit%s\n' \
+      "$T_BLUE" "$T_RESET" "$T_GREEN" "$T_RESET" "$T_CORAL" "$T_RESET" "$T_RESET"
+  fi
+}
+
+draw_option() {
+  local selected="$1" mark="$2" label="$3"
+  if [ "$selected" = "1" ]; then
+    printf ' %s❯%s %s[%s]%s %s%s%s\n' "$T_CORAL" "$T_RESET" "$T_GREEN" "$mark" "$T_RESET" "$T_BOLD" "$label" "$T_RESET"
+  else
+    printf '   %s[%s]%s %s\n' "$T_DIM" "$mark" "$T_RESET" "$label"
+  fi
 }
 
 theme_by_index() {
@@ -420,11 +450,11 @@ choose_theme_screen() {
     i="$start"
     while [ "$i" -lt "$end" ]; do
       t=$(theme_by_index "$i")
-      [ "$i" = "$selected" ] && pointer="❯" || pointer=" "
       [ "$i" = "$selected" ] && mark="✓" || mark=" "
-      printf ' %s [%s] %s\n' "$pointer" "$mark" "$t"
+      [ "$i" = "$selected" ] && draw_option 1 "$mark" "$t" || draw_option 0 "$mark" "$t"
       i=$((i + 1))
     done
+    draw_screen_footer
     clear_tail
     key=$(read_key) || return 1
     case "$key" in
@@ -441,12 +471,11 @@ choose_style_screen() {
   while :; do
     [ "$selected" = "1" ] && style="lean" || style="pill"
     draw_screen_header "Style" 120
-    [ "$selected" = "0" ] && pointer="❯" || pointer=" "
     [ "$selected" = "0" ] && mark="✓" || mark=" "
-    printf ' %s [%s] pill\n' "$pointer" "$mark"
-    [ "$selected" = "1" ] && pointer="❯" || pointer=" "
+    [ "$selected" = "0" ] && draw_option 1 "$mark" "pill" || draw_option 0 "$mark" "pill"
     [ "$selected" = "1" ] && mark="✓" || mark=" "
-    printf ' %s [%s] lean\n' "$pointer" "$mark"
+    [ "$selected" = "1" ] && draw_option 1 "$mark" "lean" || draw_option 0 "$mark" "lean"
+    draw_screen_footer
     clear_tail
     key=$(read_key) || return 1
     case "$key" in
@@ -506,14 +535,12 @@ draw_segments_menu() {
   printf 'Segments: %s\n\n' "$segments"
   for s in $SEGMENT_CHOICES; do
     has_segment "$s" && enabled=1 || enabled=0
-    [ "$i" = "$selected" ] && pointer="❯" || pointer=" "
-    printf ' %s [%s] %s\n' "$pointer" "$(flag_mark "$enabled")" "$s"
+    [ "$i" = "$selected" ] && draw_option 1 "$(flag_mark "$enabled")" "$s" || draw_option 0 "$(flag_mark "$enabled")" "$s"
     i=$((i + 1))
   done
   reorder_index=$i
-  [ "$selected" = "$reorder_index" ] && pointer="❯" || pointer=" "
-  printf ' %s [ ] reorder\n' "$pointer"
-  printf '\nEnter done · Space toggle\n'
+  [ "$selected" = "$reorder_index" ] && draw_option 1 " " "reorder" || draw_option 0 " " "reorder"
+  draw_screen_footer toggle
   clear_tail
 }
 
@@ -540,14 +567,15 @@ choose_layout_screen() {
     apply_layout_index "$selected"
     draw_screen_header "Layout" 80
     printf '80-column preview\n\n'
-    [ "$selected" = "0" ] && pointer="❯" || pointer=" "; [ "$selected" = "0" ] && mark="✓" || mark=" "
-    printf ' %s [%s] responsive wrap\n' "$pointer" "$mark"
-    [ "$selected" = "1" ] && pointer="❯" || pointer=" "; [ "$selected" = "1" ] && mark="✓" || mark=" "
-    printf ' %s [%s] always single line\n' "$pointer" "$mark"
-    [ "$selected" = "2" ] && pointer="❯" || pointer=" "; [ "$selected" = "2" ] && mark="✓" || mark=" "
-    printf ' %s [%s] fixed two lines\n' "$pointer" "$mark"
-    [ "$selected" = "3" ] && pointer="❯" || pointer=" "; [ "$selected" = "3" ] && mark="✓" || mark=" "
-    printf ' %s [%s] fixed three lines\n' "$pointer" "$mark"
+    [ "$selected" = "0" ] && mark="✓" || mark=" "
+    [ "$selected" = "0" ] && draw_option 1 "$mark" "responsive wrap" || draw_option 0 "$mark" "responsive wrap"
+    [ "$selected" = "1" ] && mark="✓" || mark=" "
+    [ "$selected" = "1" ] && draw_option 1 "$mark" "always single line" || draw_option 0 "$mark" "always single line"
+    [ "$selected" = "2" ] && mark="✓" || mark=" "
+    [ "$selected" = "2" ] && draw_option 1 "$mark" "fixed two lines" || draw_option 0 "$mark" "fixed two lines"
+    [ "$selected" = "3" ] && mark="✓" || mark=" "
+    [ "$selected" = "3" ] && draw_option 1 "$mark" "fixed three lines" || draw_option 0 "$mark" "fixed three lines"
+    draw_screen_footer
     clear_tail
     key=$(read_key) || return 1
     case "$key" in
@@ -593,20 +621,18 @@ draw_details_menu() {
   local selected="$1" pointer mark
   redraw_menu_area
   printf 'Details\n\n'
-  [ "$selected" = "0" ] && pointer="❯" || pointer=" "; [ "$clock_mode" = "12h" ] && mark="✓" || mark=" "
-  printf ' %s [%s] clock: 12h\n' "$pointer" "$mark"
-  [ "$selected" = "1" ] && pointer="❯" || pointer=" "; [ "$clock_mode" = "24h" ] && mark="✓" || mark=" "
-  printf ' %s [%s] clock: 24h\n' "$pointer" "$mark"
-  [ "$selected" = "2" ] && pointer="❯" || pointer=" "; [ "$clock_mode" = "off" ] && mark="✓" || mark=" "
-  printf ' %s [%s] clock: off\n' "$pointer" "$mark"
-  [ "$selected" = "3" ] && pointer="❯" || pointer=" "
-  printf ' %s [%s] seconds\n' "$pointer" "$(flag_mark "$clock_seconds")"
-  [ "$selected" = "4" ] && pointer="❯" || pointer=" "
+  [ "$clock_mode" = "12h" ] && mark="✓" || mark=" "
+  [ "$selected" = "0" ] && draw_option 1 "$mark" "clock: 12h" || draw_option 0 "$mark" "clock: 12h"
+  [ "$clock_mode" = "24h" ] && mark="✓" || mark=" "
+  [ "$selected" = "1" ] && draw_option 1 "$mark" "clock: 24h" || draw_option 0 "$mark" "clock: 24h"
+  [ "$clock_mode" = "off" ] && mark="✓" || mark=" "
+  [ "$selected" = "2" ] && draw_option 1 "$mark" "clock: off" || draw_option 0 "$mark" "clock: off"
+  mark=$(flag_mark "$clock_seconds")
+  [ "$selected" = "3" ] && draw_option 1 "$mark" "seconds" || draw_option 0 "$mark" "seconds"
   [ "$ascii_mode" = "0" ] && mark="✓" || mark=" "
-  printf ' %s [%s] Nerd Font\n' "$pointer" "$mark"
-  [ "$selected" = "5" ] && pointer="❯" || pointer=" "
-  printf ' %s [ ] name max: %s\n' "$pointer" "$name_max"
-  printf '\nEnter done · Space toggle\n'
+  [ "$selected" = "4" ] && draw_option 1 "$mark" "Nerd Font" || draw_option 0 "$mark" "Nerd Font"
+  [ "$selected" = "5" ] && draw_option 1 " " "name max: $name_max" || draw_option 0 " " "name max: $name_max"
+  draw_screen_footer toggle
   clear_tail
 }
 
@@ -929,21 +955,18 @@ draw_main_menu() {
   local selected="$1" pointer mark
   redraw_menu_area
   printf 'Setup\n\n'
-  [ "$selected" = "0" ] && pointer="❯" || pointer=" "
   [ "$selected" = "0" ] && mark="✓" || mark=" "
-  printf ' %s [%s] Default\n' "$pointer" "$mark"
+  [ "$selected" = "0" ] && draw_option 1 "$mark" "Default" || draw_option 0 "$mark" "Default"
   if [ -f "$P10K_FILE" ]; then
-    [ "$selected" = "1" ] && pointer="❯" || pointer=" "
     [ "$selected" = "1" ] && mark="✓" || mark=" "
-    printf ' %s [%s] Import p10k\n' "$pointer" "$mark"
-    [ "$selected" = "2" ] && pointer="❯" || pointer=" "
+    [ "$selected" = "1" ] && draw_option 1 "$mark" "Import p10k" || draw_option 0 "$mark" "Import p10k"
     [ "$selected" = "2" ] && mark="✓" || mark=" "
-    printf ' %s [%s] Configure Wizard\n' "$pointer" "$mark"
+    [ "$selected" = "2" ] && draw_option 1 "$mark" "Configure Wizard" || draw_option 0 "$mark" "Configure Wizard"
   else
-    [ "$selected" = "1" ] && pointer="❯" || pointer=" "
     [ "$selected" = "1" ] && mark="✓" || mark=" "
-    printf ' %s [%s] Configure Wizard\n' "$pointer" "$mark"
+    [ "$selected" = "1" ] && draw_option 1 "$mark" "Configure Wizard" || draw_option 0 "$mark" "Configure Wizard"
   fi
+  draw_screen_footer
   clear_tail
 }
 
