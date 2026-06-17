@@ -98,6 +98,7 @@ lean:   ~/proj  ⎇ main  ◆ Fable 5  ⊙ 14:45     (no backgrounds, colored te
 | `lines` | lines added/removed this session | off |
 | `style` | active output style | off |
 | `duration` | session wall-clock duration | off |
+| `effort` | reasoning effort level (`ψ`) | off |
 | `stash` | git stash count | off |
 | `project` | stable repo name (`⬢`), same across all git worktrees | off |
 
