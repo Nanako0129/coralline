@@ -13,6 +13,8 @@ CONFIG_FILE="${CORALLINE_CONFIG:-$HOME/.claude/coralline.conf}"
 SETTINGS_FILE="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 P10K_FILE="${P10K_CONFIG:-$HOME/.p10k.zsh}"
 
+# Fallback list, used only when the runtime statusline cannot be scanned.
+# The live list is derived from statusline.sh's seg_* functions by load_segment_choices.
 SEGMENT_CHOICES="dir project git model ctx limit5h limit7d cost clock lines style duration effort stash"
 DEFAULT_SEGMENTS="dir git model ctx limit5h limit7d cost clock"
 
@@ -100,6 +102,25 @@ theme_list() {
 
 theme_count() {
   theme_list | wc -l | tr -d ' '
+}
+
+# Derive the segment menu from the runtime's seg_* functions so a new segment in
+# statusline.sh shows up here automatically — mirrors the theme auto-scan above.
+load_segment_choices() {
+  local statusline names
+  statusline=$(runtime_statusline)
+  [ -f "$statusline" ] || return 0
+  names=$(grep -oE '^seg_[A-Za-z0-9_]+' "$statusline" \
+    | sed 's/^seg_//' \
+    | grep -Ev '^(len|limit)$' \
+    | tr '\n' ' ')
+  names="${names% }"
+  [ -n "$names" ] && SEGMENT_CHOICES="$names"
+}
+
+segment_total() {
+  set -- $SEGMENT_CHOICES
+  printf '%s\n' "$#"
 }
 
 runtime_sample() {
@@ -496,7 +517,10 @@ choose_style_screen() {
 }
 
 choose_segments_screen() {
-  local selected=0 key count=15 dirty=1 reorder_index=14
+  local selected=0 key seg_n reorder_index count dirty=1
+  seg_n=$(segment_total)
+  reorder_index=$seg_n          # the reorder row sits right after the segments
+  count=$((seg_n + 1))          # segments + reorder row
   while :; do
     if [ "$dirty" = "1" ]; then
       draw_screen_header "Segments" 120
@@ -508,7 +532,7 @@ choose_segments_screen() {
       up|down) selected=$(menu_move "$selected" "$key" "$count") ;;
       enter) return 0 ;;
       space)
-        if [ "$selected" -lt 14 ]; then
+        if [ "$selected" -lt "$seg_n" ]; then
           local i=0 s
           i=0
           for s in $SEGMENT_CHOICES; do
@@ -742,7 +766,7 @@ choose_segments() {
           if [ "$i" = "$answer" ]; then toggle_segment "$s"; break; fi
           i=$((i + 1))
         done
-        if [ "$i" -gt 14 ]; then printf 'Choose a segment number from 1 to 14.\n' >&2; fi ;;
+        if [ "$i" -gt "$(segment_total)" ]; then printf 'Choose a segment number from 1 to %s.\n' "$(segment_total)" >&2; fi ;;
     esac
   done
 }
@@ -1039,6 +1063,7 @@ trap 'leave_screen; exit 130' INT TERM
 
 [ "$install_only" = "1" ] && exit 0
 
+load_segment_choices
 main_menu
 write_final_config || exit 0
 verify_render
