@@ -1,33 +1,37 @@
 # coralline
 
 > 給 Claude Code 用、向 [Powerlevel10k](https://github.com/romkatv/powerlevel10k) 致敬的
-> statusline，特色是**由 AI 幫你安裝**——貼一句提示詞，回答幾個配色與版面的問題，就裝好了。
+> statusline，特色是人類與 AI 共用同一個 installer 入口：你可以直接跑，也可以交給
+> Claude 幫你跑完設定。
 
 [English README](./README.md)
 
 ![六種 coralline 主題總覽](./assets/hero.png)
 
-## 安裝（有趣的方式）
+## 請 Claude 安裝
 
 把這段貼進 Claude Code：
 
 ```text
 Please install coralline for me:
-fetch https://raw.githubusercontent.com/Nanako0129/coralline/main/INSTALL.md
-and follow the playbook in it.
+curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash
 ```
 
-Claude 會讓你挑主題（附預覽圖）、選擇要顯示哪些區段、決定單行或雙行版面，
-然後自動完成設定並驗證。完全不需要手動編輯設定檔。
+Claude 會執行同一支 installer、協助處理缺少的依賴、幫你選完設定流程，最後提醒你
+如果不滿意可以自己重新開啟視覺化 wizard。
 
-## 直接安裝
+## 自己安裝
+
+在終端機執行：
 
 ```bash
-git clone https://github.com/Nanako0129/coralline ~/.claude/coralline-src
-bash ~/.claude/coralline-src/configure.sh --install
+curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash
 ```
 
-wizard 會安裝 renderer、複製內建主題、更新 `~/.claude/settings.json`，接著讓你選：
+## 設定選項
+
+兩種方式都會執行同一支 installer。它會安裝 renderer、複製內建主題、
+更新 `~/.claude/settings.json`，接著自動開啟設定流程，讓你或 Claude 選：
 
 | 模式 | 適合情境 |
 |---|---|
@@ -35,7 +39,7 @@ wizard 會安裝 renderer、複製內建主題、更新 `~/.claude/settings.json
 | Powerlevel10k import | 已經有 `~/.p10k.zsh`，想帶入 style、時間格式與主要色彩 |
 | 視覺化 wizard | 想先預覽 theme、style、segments、折行、時鐘與字型相容性 |
 
-之後要重新設定可以跑：
+之後要重新調整外觀可以跑：
 
 ```bash
 bash ~/.claude/coralline/configure.sh
@@ -82,6 +86,7 @@ git clone https://github.com/Nanako0129/coralline ~/.claude/coralline-src
 mkdir -p ~/.claude/coralline/themes
 cp ~/.claude/coralline-src/statusline.sh ~/.claude/coralline/
 cp ~/.claude/coralline-src/configure.sh ~/.claude/coralline/
+cp ~/.claude/coralline-src/install.sh ~/.claude/coralline/
 cp ~/.claude/coralline-src/themes/claude-coral.conf ~/.claude/coralline/themes/
 ```
 

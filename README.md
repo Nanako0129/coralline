@@ -1,36 +1,39 @@
 # coralline
 
 > A [Powerlevel10k](https://github.com/romkatv/powerlevel10k)-inspired statusline for Claude
-> Code that **installs itself through your AI** — paste one prompt, answer a few questions
-> about colors and layout, done.
+> Code with one installer entrypoint for humans and AI: run it directly, or ask Claude to run
+> it and handle the setup for you.
 
 [繁體中文說明](./README.zh-TW.md)
 
 ![All six coralline themes rendered side by side](./assets/hero.png)
 
-## Install (the fun way)
+## Ask Claude to Install
 
 Paste this into Claude Code:
 
 ```text
 Please install coralline for me:
-fetch https://raw.githubusercontent.com/Nanako0129/coralline/main/INSTALL.md
-and follow the playbook in it.
+curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash
 ```
 
-Claude will ask you to pick a theme (with previews), choose which segments you want, decide
-between a one-line or two-line layout, then wire everything up and verify it. No manual
-config editing required.
+Claude will run the same installer humans use, help with any missing prerequisites, choose a
+setup path for you, and remind you that you can rerun the visual wizard if the first result
+doesn't match your taste.
 
-## Install (direct)
+## Install Yourself
+
+Run the installer in your terminal:
 
 ```bash
-git clone https://github.com/Nanako0129/coralline ~/.claude/coralline-src
-bash ~/.claude/coralline-src/configure.sh --install
+curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash
 ```
 
-The wizard installs the renderer, copies all bundled themes, updates `~/.claude/settings.json`,
-then lets you choose one of three setup paths:
+## Setup Choices
+
+Both paths run the same installer. It copies the renderer and bundled themes, updates
+`~/.claude/settings.json`, then automatically opens the setup flow and asks you or Claude to
+choose:
 
 | Mode | Use when |
 |---|---|
@@ -38,7 +41,7 @@ then lets you choose one of three setup paths:
 | Powerlevel10k import | You already have `~/.p10k.zsh` and want to carry over its style, time format, and main colors |
 | Visual wizard | You want to preview themes, style, segments, wrapping, clock, and font compatibility before writing config |
 
-Re-run this anytime to restyle:
+Re-run the wizard anytime to restyle:
 
 ```bash
 bash ~/.claude/coralline/configure.sh
@@ -85,6 +88,7 @@ git clone https://github.com/Nanako0129/coralline ~/.claude/coralline-src
 mkdir -p ~/.claude/coralline/themes
 cp ~/.claude/coralline-src/statusline.sh ~/.claude/coralline/
 cp ~/.claude/coralline-src/configure.sh ~/.claude/coralline/
+cp ~/.claude/coralline-src/install.sh ~/.claude/coralline/
 cp ~/.claude/coralline-src/themes/claude-coral.conf ~/.claude/coralline/themes/
 ```
 
