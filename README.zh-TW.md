@@ -58,7 +58,7 @@ curl -fsSL https://raw.githubusercontent.com/miyago9267/coralline/main/install.s
 ## 效果
 
 ```text
-╭ ~/side-project/coralline  ⎇ main+!  ◆ Fable 5  ψ high  ⬡ ▰▰▰▱▱ 62% ↑1.2M ↓45.6k  5h ▰▰▱▱▱ 41% ↺2h44m  $1.23  ⊙ 02:45 pm ╮
+╭ ~/side-project/coralline  ⬢ coralline  ⎇ main+!  ◆ Fable 5  ψ high  ⬡ ▰▰▰▱▱ 62% ↑1.2M ↓45.6k  5h ▰▰▱▱▱ 41% ↺2h44m  7d ▰▰▰▰▱ 79% ↺1d11h  +321 −87  $1.23  ✎ Explanatory  ⧖ 47m  ⚑ 1  ⊙ 02:45 pm ╮
 ```
 
 | 區段 | 顯示內容 |
@@ -67,15 +67,15 @@ curl -fsSL https://raw.githubusercontent.com/miyago9267/coralline/main/install.s
 | `project` | repo 名稱（`⬢`），在所有 worktree 都相同；非 git repo 時隱藏 |
 | `git` | 分支、已暫存 `+` / 已修改 `!` / 未追蹤 `?`、領先 `⇡` 落後 `⇣` |
 | `model` | 目前使用的 Claude 模型 |
+| `effort` | 推理強度（`ψ`）—— `low` / `med` / `high` / `xhigh` / `max` |
 | `ctx` | context window 量表、輸入/輸出/快取 token 數 |
 | `limit5h` / `limit7d` | 用量限額量表與重置倒數 |
-| `cost` | 本次 session 花費（USD） |
-| `clock` | 時鐘，12 或 24 小時制 |
 | `lines` | 本次 session 修改行數 |
+| `cost` | 本次 session 花費（USD） |
 | `style` | 目前的 output style |
 | `duration` | session 經過時間 |
-| `effort` | 推理強度（`ψ`）—— `low` / `med` / `high` / `xhigh` / `max` |
 | `stash` | git stash 數量 |
+| `clock` | 時鐘，12 或 24 小時制 |
 
 量表會隨用量變色：綠色 → 50% 轉黃 → 75% 轉紅（門檻可調）。
 

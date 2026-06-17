@@ -59,7 +59,7 @@ curl -fsSL https://raw.githubusercontent.com/miyago9267/coralline/main/install.s
 ## What you get
 
 ```text
-╭ ~/side-project/coralline  ⎇ main+!  ◆ Fable 5  ψ high  ⬡ ▰▰▰▱▱ 62% ↑1.2M ↓45.6k  5h ▰▰▱▱▱ 41% ↺2h44m  $1.23  ⊙ 02:45 pm ╮
+╭ ~/side-project/coralline  ⬢ coralline  ⎇ main+!  ◆ Fable 5  ψ high  ⬡ ▰▰▰▱▱ 62% ↑1.2M ↓45.6k  5h ▰▰▱▱▱ 41% ↺2h44m  7d ▰▰▰▰▱ 79% ↺1d11h  +321 −87  $1.23  ✎ Explanatory  ⧖ 47m  ⚑ 1  ⊙ 02:45 pm ╮
 ```
 
 | Segment | Shows |
@@ -68,15 +68,15 @@ curl -fsSL https://raw.githubusercontent.com/miyago9267/coralline/main/install.s
 | `project` | repo name (`⬢`), stable across every worktree; hidden outside a git repo |
 | `git` | branch, staged `+` / modified `!` / untracked `?`, ahead `⇡` behind `⇣` |
 | `model` | active Claude model |
+| `effort` | reasoning effort level (`ψ`) — `low` / `med` / `high` / `xhigh` / `max` |
 | `ctx` | context-window gauge, input/output/cache token counts |
 | `limit5h` / `limit7d` | rate-limit gauges with reset countdown |
-| `cost` | session cost in USD |
-| `clock` | time, 12h or 24h |
 | `lines` | lines added/removed this session |
+| `cost` | session cost in USD |
 | `style` | active output style |
 | `duration` | session wall-clock duration |
-| `effort` | reasoning effort level (`ψ`) — `low` / `med` / `high` / `xhigh` / `max` |
 | `stash` | git stash count |
+| `clock` | time, 12h or 24h |
 
 Gauges change color as they fill: green → yellow at 50% → red at 75% (thresholds configurable).
 
