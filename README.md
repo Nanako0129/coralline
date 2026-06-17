@@ -8,54 +8,6 @@
 
 ![All six coralline themes rendered side by side](./assets/hero.png)
 
-## Ask Claude to Install
-
-Paste this into Claude Code:
-
-```text
-Please install coralline for me:
-fetch https://raw.githubusercontent.com/Nanako0129/coralline/main/INSTALL.md
-and follow the playbook in it.
-```
-
-Claude will read the playbook, use the same installer to bootstrap the runtime, interview you
-about the look, write the config, verify it, and remind you that you can rerun the visual
-wizard if the first result doesn't match your taste.
-
-## Install Yourself
-
-Run the installer in your terminal:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash
-```
-
-## Setup Choices
-
-Both paths use the same installer. Humans run it with no mode and get the visual setup. Claude
-uses it with `--install-only`, then follows `INSTALL.md` to interview you and write config.
-
-| Mode | Use when |
-|---|---|
-| Default | You want the coralline default immediately |
-| Powerlevel10k import | You already have `~/.p10k.zsh` and want to carry over its style, time format, and main colors |
-| Visual wizard | You want to preview themes, style, segments, wrapping, clock, and font compatibility before writing config |
-
-Running the installer yourself with no mode opens the interactive setup. Claude should not
-operate that TUI unless you explicitly ask for visual customization.
-
-Re-run the wizard anytime to restyle:
-
-```bash
-bash ~/.claude/coralline/configure.sh
-```
-
-Testing a fork? Point the installer at the same fork:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/YOU/coralline/main/install.sh | bash -s -- --repo YOU/coralline
-```
-
 ## What you get
 
 ```text
@@ -80,17 +32,38 @@ curl -fsSL https://raw.githubusercontent.com/YOU/coralline/main/install.sh | bas
 
 Gauges change color as they fill: green → yellow at 50% → red at 75% (thresholds configurable).
 
-## Why it's fast
+## Install
 
-The statusline is just a local shell script: it makes no network or API calls and uses zero
-tokens. Claude Code pipes the session JSON to it on stdin and renders whatever it prints.
+Three ways to install, all driven by the same `install.sh`. Each one copies the renderer **and
+the setup wizard** into `~/.claude/coralline` and registers the status line in Claude Code, so
+you can re-run the wizard later no matter which way you installed.
 
-It runs every second (`refreshInterval: 1`), so the script is built to be cheap on CPU: one
-`jq` invocation extracts every field at once, and one `git status --porcelain=v2 --branch`
-call provides branch, dirty state, and ahead/behind together. No `bc`, no per-field subprocess
-spam. Works on stock macOS bash 3.2 and any Linux bash.
+> **Requirements:** `jq` and a [Nerd Font](https://www.nerdfonts.com/) terminal. No Nerd Font?
+> Set `VL_ASCII=1` in your config for a glyph-free rendering.
 
-## Manual install
+### Ask Claude (recommended)
+
+Paste this into Claude Code:
+
+```text
+Please install coralline for me:
+fetch https://raw.githubusercontent.com/Nanako0129/coralline/main/INSTALL.md
+and follow the playbook in it.
+```
+
+Claude will read the playbook, use the same installer to bootstrap the runtime, interview you
+about the look, write the config, verify it, and remind you that you can rerun the visual
+wizard if the first result doesn't match your taste.
+
+### Install it yourself
+
+Run the installer in your terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash
+```
+
+### Manual
 
 ```bash
 git clone https://github.com/Nanako0129/coralline ~/.claude/coralline-src
@@ -113,22 +86,42 @@ Then add to `~/.claude/settings.json`:
 }
 ```
 
-> **Note:** requires `jq` and a [Nerd Font](https://www.nerdfonts.com/) terminal.
-> No Nerd Font? Set `VL_ASCII=1` in your config for a glyph-free rendering.
+> **Note:** the commands above copy only the `claude-coral` theme. The Ask-Claude and one-line
+> installers bundle every theme; after a manual install, copy the rest of
+> `~/.claude/coralline-src/themes/*.conf` into `~/.claude/coralline/themes/` to switch themes.
 
-### Platform support
+## Setup
 
-| Platform | Status |
+Both paths use the same installer. Humans run it with no mode and get the visual setup. Claude
+uses it with `--install-only`, then follows `INSTALL.md` to interview you and write config.
+
+### Setup modes
+
+| Mode | Use when |
 |---|---|
-| macOS | ✅ supported (works on the stock bash 3.2) |
-| Linux | ✅ supported |
-| Windows + Git Bash | ✅ supported — Claude Code runs the status line through Git Bash when it's installed |
-| Windows without Git Bash | ❌ not yet — Claude Code falls back to PowerShell, which can't run the bash script ([roadmap](https://github.com/Nanako0129/coralline/issues)) |
+| Default | You want the coralline default immediately |
+| Powerlevel10k import | You already have `~/.p10k.zsh` and want to carry over its style, time format, and main colors |
+| Visual wizard | You want to preview themes, style, segments, wrapping, clock, and font compatibility before writing config |
 
-> **Windows note:** install [Git for Windows](https://git-scm.com/download/win) (which bundles
-> Git Bash) and `jq`, and coralline runs natively. A native PowerShell port for the no-Git-Bash
-> case is on the roadmap. The render path is built to stay cheap under Git Bash's emulated
-> `fork()` — one `jq`, one `git`, and no per-field subprocess spawning.
+Running the installer yourself with no mode opens the interactive setup. Claude should not
+operate that TUI unless you explicitly ask for visual customization.
+
+### Reconfigure
+
+Every install path copies the wizard into `~/.claude/coralline`, so you can rerun it anytime to
+restyle:
+
+```bash
+bash ~/.claude/coralline/configure.sh
+```
+
+### Testing a fork
+
+Point the installer at the same fork:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/YOU/coralline/main/install.sh | bash -s -- --repo YOU/coralline
+```
 
 ## Configuration
 
@@ -210,6 +203,30 @@ The wizard discovers themes automatically from `themes/*.conf` and nested collec
 > [`tools/render-screenshots.py`](./tools/render-screenshots.py), re-run it to generate
 > `assets/theme-<name>.png`, and add a row to the table above. Please **don't regenerate
 > `hero.png`** — it's a fixed sampler of the original six themes, not a full catalog.
+
+## Platform support
+
+| Platform | Status |
+|---|---|
+| macOS | ✅ supported (works on the stock bash 3.2) |
+| Linux | ✅ supported |
+| Windows + Git Bash | ✅ supported — Claude Code runs the status line through Git Bash when it's installed |
+| Windows without Git Bash | ❌ not yet — Claude Code falls back to PowerShell, which can't run the bash script ([roadmap](https://github.com/Nanako0129/coralline/issues)) |
+
+> **Windows note:** install [Git for Windows](https://git-scm.com/download/win) (which bundles
+> Git Bash) and `jq`, and coralline runs natively. A native PowerShell port for the no-Git-Bash
+> case is on the roadmap. The render path is built to stay cheap under Git Bash's emulated
+> `fork()` — one `jq`, one `git`, and no per-field subprocess spawning.
+
+## Why it's fast
+
+The statusline is just a local shell script: it makes no network or API calls and uses zero
+tokens. Claude Code pipes the session JSON to it on stdin and renders whatever it prints.
+
+It runs every second (`refreshInterval: 1`), so the script is built to be cheap on CPU: one
+`jq` invocation extracts every field at once, and one `git status --porcelain=v2 --branch`
+call provides branch, dirty state, and ahead/behind together. No `bc`, no per-field subprocess
+spam. Works on stock macOS bash 3.2 and any Linux bash.
 
 ## Acknowledgements
 

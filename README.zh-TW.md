@@ -8,53 +8,6 @@
 
 ![六種 coralline 主題總覽](./assets/hero.png)
 
-## 請 Claude 安裝
-
-把這段貼進 Claude Code：
-
-```text
-Please install coralline for me:
-fetch https://raw.githubusercontent.com/Nanako0129/coralline/main/INSTALL.md
-and follow the playbook in it.
-```
-
-Claude 會先讀 playbook，再用同一支 installer bootstrap runtime、訪談你的外觀偏好、
-寫入設定並驗證，最後提醒你如果不滿意可以自己重新開啟視覺化 wizard。
-
-## 自己安裝
-
-在終端機執行：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash
-```
-
-## 設定選項
-
-兩種方式都使用同一支 installer。人類不帶模式參數執行時會進入視覺化設定；
-Claude 則使用 `--install-only` bootstrap，接著依照 `INSTALL.md` 訪談並寫入設定。
-
-| 模式 | 適合情境 |
-|---|---|
-| 預設 | 想直接使用 coralline 預設外觀 |
-| Powerlevel10k import | 已經有 `~/.p10k.zsh`，想帶入 style、時間格式與主要色彩 |
-| 視覺化 wizard | 想先預覽 theme、style、segments、折行、時鐘與字型相容性 |
-
-自己直接執行 installer、不帶模式參數時，會開啟互動式設定。除非你明確要求視覺化自訂，
-Claude 不需要操作這個人類 TUI。
-
-之後要重新調整外觀可以跑：
-
-```bash
-bash ~/.claude/coralline/configure.sh
-```
-
-測試 fork 時，可以讓 installer 指向同一個 fork：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/YOU/coralline/main/install.sh | bash -s -- --repo YOU/coralline
-```
-
 ## 效果
 
 ```text
@@ -79,17 +32,36 @@ curl -fsSL https://raw.githubusercontent.com/YOU/coralline/main/install.sh | bas
 
 量表會隨用量變色：綠色 → 50% 轉黃 → 75% 轉紅（門檻可調）。
 
-## 為什麼很快
+## 安裝
 
-statusline 就是一支本地 shell 腳本：完全不打網路、不呼叫任何 API、不消耗任何 token。
-Claude Code 只是把 session 的 JSON 從 stdin 餵給它，再顯示它印出的內容。
+三種安裝方式都由同一支 `install.sh` 驅動，每一種都會把 renderer **與設定 wizard** 複製到
+`~/.claude/coralline`、並把 statusline 註冊進 Claude Code，所以不管你用哪種方式裝，之後都能重跑 wizard。
 
-它每秒執行一次（`refreshInterval: 1`），所以腳本在 CPU 上必須夠便宜：
-單次 `jq` 呼叫一口氣取出所有欄位，單次 `git status --porcelain=v2 --branch`
-同時拿到分支、檔案狀態與領先/落後數。不依賴 `bc`，也沒有逐欄位的子程序開銷。
-macOS 內建的 bash 3.2 和任何 Linux bash 都能跑。
+> **需求：** `jq` 以及 [Nerd Font](https://www.nerdfonts.com/) 終端機字型。
+> 沒有 Nerd Font 的話，在設定檔加上 `VL_ASCII=1` 改用無特殊字符的渲染。
 
-## 手動安裝
+### 請 Claude 安裝（推薦）
+
+把這段貼進 Claude Code：
+
+```text
+Please install coralline for me:
+fetch https://raw.githubusercontent.com/Nanako0129/coralline/main/INSTALL.md
+and follow the playbook in it.
+```
+
+Claude 會先讀 playbook，再用同一支 installer bootstrap runtime、訪談你的外觀偏好、
+寫入設定並驗證，最後提醒你如果不滿意可以自己重新開啟視覺化 wizard。
+
+### 自己安裝
+
+在終端機執行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash
+```
+
+### 手動安裝
 
 ```bash
 git clone https://github.com/Nanako0129/coralline ~/.claude/coralline-src
@@ -112,23 +84,42 @@ cp ~/.claude/coralline-src/themes/claude-coral.conf ~/.claude/coralline/themes/
 }
 ```
 
-> **注意：** 需要 `jq` 以及 [Nerd Font](https://www.nerdfonts.com/) 終端機字型。
-> 沒有 Nerd Font 的話，在設定檔加上 `VL_ASCII=1` 改用無特殊字符的渲染。
-
-### 平台支援
-
-| 平台 | 狀態 |
-|---|---|
-| macOS | ✅ 支援（內建 bash 3.2 即可） |
-| Linux | ✅ 支援 |
-| Windows + Git Bash | ✅ 支援——有裝 Git Bash 時，Claude Code 會用它執行 statusline |
-| Windows 無 Git Bash | ❌ 暫不支援——Claude Code 會退回 PowerShell，跑不了 bash 腳本（[roadmap](https://github.com/Nanako0129/coralline/issues)） |
-
-> **Windows 提醒：** 裝 [Git for Windows](https://git-scm.com/download/win)（內含 Git Bash）和 `jq`，
-> coralline 即可原生運作。給「無 Git Bash」情境的原生 PowerShell 版本列在 roadmap 上。渲染流程
-> 特意設計成在 Git Bash 模擬的 `fork()` 下仍便宜——一個 `jq`、一個 `git`，沒有逐欄位的子程序開銷。
+> **注意：** 上面的指令只複製 `claude-coral` 一個主題。「請 Claude 安裝」與一行安裝會帶上全部主題；
+> 手動安裝後若要換主題，把 `~/.claude/coralline-src/themes/*.conf` 其餘的也複製進 `~/.claude/coralline/themes/`。
 
 ## 設定
+
+兩種方式都使用同一支 installer。人類不帶模式參數執行時會進入視覺化設定；
+Claude 則使用 `--install-only` bootstrap，接著依照 `INSTALL.md` 訪談並寫入設定。
+
+### 設定模式
+
+| 模式 | 適合情境 |
+|---|---|
+| 預設 | 想直接使用 coralline 預設外觀 |
+| Powerlevel10k import | 已經有 `~/.p10k.zsh`，想帶入 style、時間格式與主要色彩 |
+| 視覺化 wizard | 想先預覽 theme、style、segments、折行、時鐘與字型相容性 |
+
+自己直接執行 installer、不帶模式參數時，會開啟互動式設定。除非你明確要求視覺化自訂，
+Claude 不需要操作這個人類 TUI。
+
+### 重新設定
+
+每一種安裝方式都會把 wizard 複製到 `~/.claude/coralline`，所以你隨時可以重跑來重新調整外觀：
+
+```bash
+bash ~/.claude/coralline/configure.sh
+```
+
+### 測試 fork
+
+讓 installer 指向同一個 fork：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/YOU/coralline/main/install.sh | bash -s -- --repo YOU/coralline
+```
+
+## 設定檔
 
 所有設定都在 `~/.claude/coralline.conf`（純 bash，由腳本 source 進來）：
 
@@ -206,6 +197,29 @@ wizard 會自動掃描 `themes/*.conf` 與 `themes/best-themes/*.conf` 這類巢
 > `VL_BG_EFFORT`），把名稱加進 [`tools/render-screenshots.py`](./tools/render-screenshots.py)
 > 的 `THEMES` 清單，重跑產生 `assets/theme-<名稱>.png`，再到上方表格加一列。請**不要重產
 > `hero.png`** —— 它是固定展示最初六個主題的招牌圖、不是完整目錄。
+
+## 平台支援
+
+| 平台 | 狀態 |
+|---|---|
+| macOS | ✅ 支援（內建 bash 3.2 即可） |
+| Linux | ✅ 支援 |
+| Windows + Git Bash | ✅ 支援——有裝 Git Bash 時，Claude Code 會用它執行 statusline |
+| Windows 無 Git Bash | ❌ 暫不支援——Claude Code 會退回 PowerShell，跑不了 bash 腳本（[roadmap](https://github.com/Nanako0129/coralline/issues)） |
+
+> **Windows 提醒：** 裝 [Git for Windows](https://git-scm.com/download/win)（內含 Git Bash）和 `jq`，
+> coralline 即可原生運作。給「無 Git Bash」情境的原生 PowerShell 版本列在 roadmap 上。渲染流程
+> 特意設計成在 Git Bash 模擬的 `fork()` 下仍便宜——一個 `jq`、一個 `git`，沒有逐欄位的子程序開銷。
+
+## 為什麼很快
+
+statusline 就是一支本地 shell 腳本：完全不打網路、不呼叫任何 API、不消耗任何 token。
+Claude Code 只是把 session 的 JSON 從 stdin 餵給它，再顯示它印出的內容。
+
+它每秒執行一次（`refreshInterval: 1`），所以腳本在 CPU 上必須夠便宜：
+單次 `jq` 呼叫一口氣取出所有欄位，單次 `git status --porcelain=v2 --branch`
+同時拿到分支、檔案狀態與領先/落後數。不依賴 `bc`，也沒有逐欄位的子程序開銷。
+macOS 內建的 bash 3.2 和任何 Linux bash 都能跑。
 
 ## 致敬與致謝
 
