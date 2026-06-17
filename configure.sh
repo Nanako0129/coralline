@@ -353,6 +353,27 @@ map_p10k_color() {
   add_extra "$coralline_name" "$color"
 }
 
+shell_quote() {
+  printf '%q' "$1"
+}
+
+write_assign() {
+  printf '%s=%s\n' "$1" "$(shell_quote "$2")"
+}
+
+known_segment() {
+  case " $SEGMENT_CHOICES " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+
+normalize_segments() {
+  local raw="$1" s next=""
+  for s in $raw; do
+    known_segment "$s" || continue
+    next="${next}${next:+ }$s"
+  done
+  printf '%s\n' "$next"
+}
+
 import_p10k() {
   local wizard_options time_fmt
   [ -f "$P10K_FILE" ] || die "cannot import; $P10K_FILE does not exist"
@@ -394,26 +415,25 @@ import_p10k() {
 write_candidate_config() {
   local out="$1" theme_dir
   theme_dir=$(runtime_theme_dir)
-  cat > "$out" <<EOF
-# coralline config
-. "$theme_dir/$theme.conf"
-
-VL_STYLE="$style"
-VL_LAYOUT="$layout"
-VL_MAX_LINES=$max_lines
-VL_WRAP_MARGIN=4
-VL_SEGMENTS="$segments"
-VL_SEGMENTS2="$segments2"
-VL_SEGMENTS3="$segments3"
-VL_CLOCK="$clock_mode"
-VL_CLOCK_SECONDS=$clock_seconds
-VL_BAR_WIDTH=5
-VL_COST_DECIMALS=2
-VL_PATH_DEPTH=4
-VL_NAME_MAX=$name_max
-VL_ASCII=$ascii_mode
-VL_LEAN_SEP="$lean_sep"
-EOF
+  {
+    printf '# coralline config\n'
+    printf '. %s\n\n' "$(shell_quote "$theme_dir/$theme.conf")"
+    write_assign VL_STYLE "$style"
+    write_assign VL_LAYOUT "$layout"
+    printf 'VL_MAX_LINES=%s\n' "$max_lines"
+    printf 'VL_WRAP_MARGIN=4\n'
+    write_assign VL_SEGMENTS "$segments"
+    write_assign VL_SEGMENTS2 "$segments2"
+    write_assign VL_SEGMENTS3 "$segments3"
+    write_assign VL_CLOCK "$clock_mode"
+    printf 'VL_CLOCK_SECONDS=%s\n' "$clock_seconds"
+    printf 'VL_BAR_WIDTH=5\n'
+    printf 'VL_COST_DECIMALS=2\n'
+    printf 'VL_PATH_DEPTH=4\n'
+    printf 'VL_NAME_MAX=%s\n' "$name_max"
+    printf 'VL_ASCII=%s\n' "$ascii_mode"
+    write_assign VL_LEAN_SEP "$lean_sep"
+  } > "$out"
   if [ -n "$extra_config" ]; then
     printf '\n# Imported p10k color hints.\n' >> "$out"
     printf '%s' "$extra_config" >> "$out"
@@ -623,7 +643,7 @@ choose_segments_screen() {
           leave_screen
           local answer
           answer=$(ask "Segments in order" "$segments")
-          [ -n "$answer" ] && segments="$answer"
+          [ -n "$answer" ] && segments=$(normalize_segments "$answer")
           enter_screen
           dirty=1
         fi ;;
@@ -837,7 +857,7 @@ choose_segments() {
       d|D|'') return 0 ;;
       r|R)
         answer=$(ask "Segments in order" "$segments")
-        [ -n "$answer" ] && segments="$answer" ;;
+        [ -n "$answer" ] && segments=$(normalize_segments "$answer") ;;
       ''|*[!0-9]*) printf 'Choose a segment number, r, or d.\n' >&2 ;;
       *)
         i=1
@@ -883,17 +903,17 @@ choose_layout() {
       3)
         layout="fixed"
         max_lines=3
-        segments=$(ask "Line 1 segments" "dir git model")
-        segments2=$(ask "Line 2 segments" "ctx limit5h limit7d cost clock")
+        segments=$(normalize_segments "$(ask "Line 1 segments" "dir git model")")
+        segments2=$(normalize_segments "$(ask "Line 2 segments" "ctx limit5h limit7d cost clock")")
         segments3=""
         show_step "Layout selected" 80
         return 0 ;;
       4)
         layout="fixed"
         max_lines=3
-        segments=$(ask "Line 1 segments" "dir git model")
-        segments2=$(ask "Line 2 segments" "ctx limit5h limit7d")
-        segments3=$(ask "Line 3 segments" "cost clock")
+        segments=$(normalize_segments "$(ask "Line 1 segments" "dir git model")")
+        segments2=$(normalize_segments "$(ask "Line 2 segments" "ctx limit5h limit7d")")
+        segments3=$(normalize_segments "$(ask "Line 3 segments" "cost clock")")
         show_step "Layout selected" 80
         return 0 ;;
       *) printf 'Choose a layout number from 1 to 4.\n' >&2 ;;

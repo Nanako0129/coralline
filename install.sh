@@ -71,16 +71,35 @@ need_jq() {
 
 download() {
   local src="$1" dst="$2"
-  curl -fsSL "$src" -o "$dst" || die "failed to download $src"
+  case "$src" in
+    file://*)
+      cp "${src#file://}" "$dst" || die "failed to copy $src"
+      ;;
+    *)
+      curl -fsSL "$src" -o "$dst" || die "failed to download $src"
+      ;;
+  esac
 }
 
-github_theme_paths() {
-  local tree_sha
-  tree_sha=$(curl -fsSL "https://api.github.com/repos/$REPO/commits/$REF" \
-    | jq -r '.commit.tree.sha // empty' 2>/dev/null || true)
-  [ -n "$tree_sha" ] || return 0
-  curl -fsSL "https://api.github.com/repos/$REPO/git/trees/$tree_sha?recursive=1" \
-    | jq -r '.tree[]? | select(.type == "blob" and (.path | test("^themes/.+\\.conf$"))) | .path' 2>/dev/null || true
+download_theme_archive() {
+  local archive extract src rel dst count=0
+  need_cmd tar
+  archive=$(mktemp "${TMPDIR:-/tmp}/coralline-themes.XXXXXX.tar.gz") || exit 1
+  extract=$(mktemp -d "${TMPDIR:-/tmp}/coralline-themes.XXXXXX") || exit 1
+  download "https://codeload.github.com/$REPO/tar.gz/$REF" "$archive"
+  tar -xzf "$archive" -C "$extract" || die "failed to extract theme archive"
+  while IFS= read -r src; do
+    rel="${src#"$extract"/}"
+    rel="${rel#*/themes/}"
+    dst="$WORK_DIR/themes/$rel"
+    mkdir -p "$(dirname "$dst")"
+    cp "$src" "$dst"
+    count=$((count + 1))
+  done <<THEMES
+$(find "$extract" -type f -path '*/themes/*.conf' | sort)
+THEMES
+  rm -rf "$archive" "$extract"
+  [ "$count" -gt 0 ] || die "no themes found for $REPO@$REF"
 }
 
 download_themes() {
@@ -91,7 +110,8 @@ download_themes() {
       paths=$(cd "$local_base" 2>/dev/null && find themes -type f -name '*.conf' | sort || true)
       ;;
     *)
-      paths=$(github_theme_paths)
+      download_theme_archive
+      return 0
       ;;
   esac
   [ -n "$paths" ] || die "no themes found for $REPO@$REF"
@@ -169,7 +189,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-info "installing statusline"
+info "installing coralline"
 printf '%s\n' "${DIM}Checking prerequisites...${RESET}"
 need_jq
 
