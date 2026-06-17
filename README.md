@@ -167,9 +167,11 @@ Prefer Powerlevel10k's *lean* look — no backgrounds, just colored text? Set
 A theme is just a `.conf` file assigning `VL_BG_*` / `VL_FG_*` — copy one, change the colors,
 and source yours from `coralline.conf` instead. PRs with new themes are welcome.
 
-> **Tip:** the preview images are generated from the real script by
-> [`tools/render-screenshots.py`](./tools/render-screenshots.py) — after adding a theme, add it
-> to the `THEMES` list there and re-run it to get a matching preview.
+> **Adding a theme?** Copy an existing `.conf`, set every `VL_BG_*` / `VL_FG_*`
+> (including `VL_BG_EFFORT`), add its name to the `THEMES` list in
+> [`tools/render-screenshots.py`](./tools/render-screenshots.py), re-run it to generate
+> `assets/theme-<name>.png`, and add a row to the table above. Please **don't regenerate
+> `hero.png`** — it's a fixed sampler of the original six themes, not a full catalog.
 
 ## Acknowledgements
 

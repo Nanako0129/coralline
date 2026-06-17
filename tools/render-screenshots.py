@@ -34,6 +34,11 @@ THEMES = ["claude-coral", "catppuccin-mocha", "nord",
           "gruvbox-dark", "tokyo-night", "mono", "dracula",
           "lunar-pink"]
 
+# hero.png is a curated sampler frozen to the original six themes; new themes go
+# in the per-theme gallery (theme-<name>.png) only, so the banner doesn't grow.
+HERO_THEMES = ["claude-coral", "catppuccin-mocha", "nord",
+               "gruvbox-dark", "tokyo-night", "mono"]
+
 # ── Geometry (S = supersampling factor, downscaled at save time) ─────────────
 S = 2
 FS = 26 * S
@@ -288,7 +293,7 @@ def theme_blocks(theme):
 def hero_blocks():
     return [(theme, run_bar(theme, "dir git model clock", MID)
                     + run_bar(theme, "ctx limit5h cost", MID))
-            for theme in THEMES]
+            for theme in HERO_THEMES]
 
 def lean_blocks():
     lean = 'VL_STYLE="lean"\n'

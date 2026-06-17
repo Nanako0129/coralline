@@ -163,9 +163,10 @@ narrow window:  ~/dev/app  ⎇ main  ◆ Fable 5
 主題就只是一個指定 `VL_BG_*` / `VL_FG_*` 的 `.conf` 檔——複製一份、改顏色、
 在 `coralline.conf` 裡改 source 你的版本即可。歡迎發 PR 貢獻新主題。
 
-> **提示：** 預覽圖是由 [`tools/render-screenshots.py`](./tools/render-screenshots.py)
-> 直接執行真實腳本產生的——新增主題後把名稱加進該檔的 `THEMES` 清單再跑一次，
-> 就會得到一張風格一致的預覽圖。
+> **要貢獻新主題？** 複製一份現有 `.conf`，設好所有 `VL_BG_*` / `VL_FG_*`（含
+> `VL_BG_EFFORT`），把名稱加進 [`tools/render-screenshots.py`](./tools/render-screenshots.py)
+> 的 `THEMES` 清單，重跑產生 `assets/theme-<名稱>.png`，再到上方表格加一列。請**不要重產
+> `hero.png`** —— 它是固定展示最初六個主題的招牌圖、不是完整目錄。
 
 ## 致敬與致謝
 
