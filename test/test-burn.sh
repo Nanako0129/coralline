@@ -42,7 +42,6 @@ run5h() { BURN_FILE="$TMPD/b5.tsv"; printf '%b' "$1" > "$BURN_FILE"; NOW="$2"; b
 # active: 6→7 at +60s, 7→8 at +300s; now=+360s; reset 4h25m out.
 # crossings in window: (60,7),(300,8) → rate=(8-7)/(300-60)=1/240 %/s
 # now pct=8 → ETA=(100-8)/(1/240)=22080s=6h08m
-RST=$(( 1000000 + 18000 ))     # window opened at t=1000000-? use reset far ahead
 run5h "1000000\t6\t1015900\n1000060\t7\t1015900\n1000300\t8\t1015900\n1000360\t8\t1015900\n" 1000360
 eq "5h active state" "$_B5_STATE" "active"
 eq "5h active eta"   "$_B5_ETA"   "22080"
@@ -97,6 +96,7 @@ eval "$(sed -n '/^burn_estimate() {/,/^}/p' "$SCRIPT")"
 eval "$(sed -n '/^seg_burn() {/,/^}/p'      "$SCRIPT")"
 VL_BURN_GLYPH="↗"; VL_BURN_SHOWRATE=0; VL_BG_BURN=""; VL_BG_5H=237; VL_LAYOUT="fixed"
 VL_FG_OK=114; VL_FG_WARN=179; VL_FG_HOT=167; VL_FG_DIM=245
+fh_pct=8 wd_pct=0
 
 # stub the two estimators so binding logic is tested in isolation
 mk5h() { _B5_STATE="$1"; _B5_ETA="$2"; _B5_RATE="$3"; _B5_TTR="$4"; }
@@ -157,5 +157,20 @@ case "${SEG_TXT[0]}" in *"⇢…"*$'\033'*|*$'\033'*"⇢…"*) ok "render warmin
 M5S=active M5E=5000 M5R=0 M5T=9000  M7E=5000 M7R=0 M7T=9000
 burn_estimate
 eq "tie→5h"            "$_BURN_LABEL" "5h"
+
+# VL_BURN_SHOWRATE=1: 5h-binding active case; rate 0.008 %/s × 600 = 4.8%/10m
+VL_BURN_SHOWRATE=1
+SEG_BGS=(); SEG_TXT=(); SEG_LEN=()
+M5S=active M5E=21600 M5R=0.008 M5T=99999  M7E=inf M7R=0 M7T=0
+fh_pct=8 wd_pct=0
+seg_burn
+case "${SEG_TXT[0]}" in *"%/10m"*) ok "showrate %/10m label" ;; *) bad "showrate %/10m label" "got=${SEG_TXT[0]}" ;; esac
+VL_BURN_SHOWRATE=0
+
+# guard: neither limit reported → segment renders nothing
+SEG_BGS=(); SEG_TXT=(); SEG_LEN=()
+fh_pct="" wd_pct=""
+seg_burn
+eq "neither-reported renders nothing" "${#SEG_TXT[@]}" "0"
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME FAILED"; exit 1; }

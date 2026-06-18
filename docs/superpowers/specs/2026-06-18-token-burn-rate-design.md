@@ -203,8 +203,10 @@ ETA_binding = min(ETA_5h, ETA_7d)
 label       = "5h" or "7d", whichever owns ETA_binding
 ```
 
-- If **both** are `∞` (5h idle/warming **and** 7d unused/unreported) → the segment is in
-  `warming`/`idle` and renders `↗ ⇢…` / `↗ ⇢—` with no label.
+- If **both** are `∞` (5h idle/warming **and** 7d unused/unreported), **and at least one
+  limit is reported** → the segment is in `warming`/`idle` and renders `↗ ⇢…` / `↗ ⇢—`
+  with no label. If neither limit is reported (`fh_pct` and `wd_pct` both empty), the
+  segment renders nothing entirely (see Edge cases).
 - Ties (both finite and equal) resolve to **5h** (the tighter, faster-moving window).
 - Colour uses the **binding limit's own** `time_to_reset` (see Colouring).
 

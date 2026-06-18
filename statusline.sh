@@ -300,6 +300,7 @@ burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
 }
 
 seg_burn() {
+  [ -n "$fh_pct" ] || [ -n "$wd_pct" ] || return 0
   burn_estimate
   local bg="${VL_BG_BURN:-$VL_BG_5H}"
   if [ "$_BURN_STATE" != "active" ]; then
