@@ -165,6 +165,11 @@ reaps the companion on exit. Explicit and controllable; no shell-rc auto-magic.
 
 ## Validation spike (implementation step 1, before building anything)
 
+> **Result — PASSED (2026-06-18).** From a second tab, writing a `SetUserVar` OSC
+> to the tty of a tab actively running Claude Code updated the iTerm2 top status
+> bar (showed the `spike-ok` payload) with CC's frame staying clean. The
+> load-bearing assumption holds; no fallback to the iTerm2 Python API needed.
+
 Confirm the load-bearing assumption: an **external** process writing a `SetUserVar` OSC to
 the tty of a session **currently running Claude Code** updates the top status bar
 **without corrupting CC's display**.
