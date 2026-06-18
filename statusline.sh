@@ -38,7 +38,8 @@ VL_WARN_PCT=50                  # percentage thresholds for bar colors
 VL_HOT_PCT=75
 VL_ASCII=0                      # 1 = no Nerd Font glyphs (plain colored blocks)
 VL_FLOAT=0                      # 1 = also emit a plain-text float line (for coralline-float)
-VL_FLOAT_SEGMENTS="ctx limit5h limit7d cost"  # segments rendered into the float line
+VL_FLOAT_SEGMENTS="model ctx cost clock"  # segments rendered into the float line (plain text: keep color-driven limit warnings inline)
+VL_FLOAT_SEP="  ·  "            # separator between float segments (plain text, no color)
 VL_FLOAT_FILE="$HOME/.claude/coralline/float.txt"
 VL_NOCOLOR=0                    # internal: fg()/bg() emit nothing when 1 (plain-text path)
 VL_STATE=0                      # 1 = also emit state.json (raw parsed fields, for Spec B)
@@ -522,7 +523,7 @@ emit_float() {
     strip_ansi "${SEG_TXT[$i]}" ; s="$_PLAIN"
     s="${s#"${s%%[![:space:]]*}"}" ; s="${s%"${s##*[![:space:]]}"}"   # trim
     [ -n "$s" ] || continue
-    line="${line:+$line }$s"
+    line="${line:+$line$VL_FLOAT_SEP}$s"
   done
   VL_NOCOLOR="$_nc" ; BOLD="$_b" ; NORM="$_n" ; R="$_r"
   dir=$(dirname "$VL_FLOAT_FILE")

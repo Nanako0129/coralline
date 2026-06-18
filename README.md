@@ -186,9 +186,15 @@ Prefer Powerlevel10k's *lean* look — no backgrounds, just colored text? Set
 
 ## iTerm2 floating display (optional)
 
-Show a compact readout — `ctx limit5h limit7d cost` by default — floating in
-iTerm2's native **top status bar**, so environment health stays visible without
-glancing at Claude Code's bottom statusline.
+Show a compact readout — `model ctx cost clock` by default — floating in
+iTerm2's native **top status bar**, so a glanceable readout stays visible without
+looking at Claude Code's bottom statusline.
+
+The float line is **plain text** — iTerm2's `Interpolated String` component does
+not interpret ANSI, so it carries no color. The default therefore favors
+stable, glance-friendly segments and leaves the color-driven limit warnings
+(`limit5h` / `limit7d`) in the bottom statusline, where threshold colors work.
+You can still add them to `VL_FLOAT_SEGMENTS` if you want the numbers up top.
 
 Claude Code owns and sanitizes its own statusline output, so the data reaches
 iTerm2 by a side channel: `statusline.sh` writes a plain-text line to
@@ -205,7 +211,7 @@ in your interactive shell pushes it to iTerm2 via a `SetUserVar` escape.
 
    ```bash
    VL_FLOAT=1
-   VL_FLOAT_SEGMENTS="ctx limit5h limit7d cost"
+   VL_FLOAT_SEGMENTS="model ctx cost clock"
    ```
 
    (Or pick "iTerm2 float" in `configure.sh`'s Details menu.)
@@ -223,7 +229,7 @@ in your interactive shell pushes it to iTerm2 via a `SetUserVar` escape.
 | Key | Default | Meaning |
 |---|---|---|
 | `VL_FLOAT` | `0` | `1` = emit `float.txt` each render |
-| `VL_FLOAT_SEGMENTS` | `ctx limit5h limit7d cost` | segments rendered into the float line |
+| `VL_FLOAT_SEGMENTS` | `model ctx cost clock` | segments rendered into the float line (plain text, no color) |
 | `CORALLINE_FLOAT_INTERVAL` | `1` | companion poll seconds |
 | `CORALLINE_FLOAT_STALE` | `5` | seconds before a stale `float.txt` clears the bar |
 
