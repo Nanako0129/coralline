@@ -33,7 +33,7 @@ ascii_mode=0
 name_max=0
 lean_sep=""
 float_enabled=0
-float_segments="model ctx cost clock"
+float_segments="model ctx cost"
 extra_config=""
 installed=0
 install_only=0
@@ -808,7 +808,7 @@ draw_details_menu() {
   [ "$name_max" != "0" ] && mark="✓" || mark=" "
   [ "$selected" = "5" ] && draw_option 1 "$mark" "name max (0=off): $name_max" || draw_option 0 "$mark" "name max (0=off): $name_max"
   mark=$(flag_mark "$float_enabled")
-  [ "$selected" = "6" ] && draw_option 1 "$mark" "iTerm2 float (VL_FLOAT)" || draw_option 0 "$mark" "iTerm2 float (VL_FLOAT)"
+  [ "$selected" = "6" ] && draw_option 1 "$mark" "float readout (VL_FLOAT)" || draw_option 0 "$mark" "float readout (VL_FLOAT)"
   draw_screen_footer toggle
   clear_tail
 }
@@ -1029,14 +1029,11 @@ visual_wizard() {
 print_float_help() {
   cat <<'EOF'
 
-iTerm2 floating display (VL_FLOAT) is enabled. One-time setup:
-  1. iTerm2 -> Settings -> Profiles -> Session -> enable Status bar -> Configure
-     Status Bar -> add an "Interpolated String" component, value:  \(user.coralline)
-  2. iTerm2 -> Settings -> Appearance -> General -> Status bar location -> Top
-  3. Add this to your shell rc (~/.zshrc or ~/.bashrc), then restart your shell:
-       cf() { "$HOME/.claude/coralline/coralline-float" & local p=$!; claude "$@"; kill "$p" 2>/dev/null; }
-  4. Launch Claude Code sessions with:  cf
-     (cf runs the companion that pushes the float to iTerm2's top-right bar)
+Float readout (VL_FLOAT) is enabled. statusline.sh now writes a plain-text
+readout to ~/.claude/coralline/float.txt on every render. coralline does not
+ship a display carrier — bring your own (a terminal status bar, tmux, a
+menu-bar app, ...). A worked iTerm2 carrier lives in the repo under
+example/float-display-iterm2/ — copy it into your dotfiles and adapt.
 EOF
 }
 
@@ -1064,14 +1061,12 @@ install_files() {
   command -v jq >/dev/null 2>&1 || die "jq is required by coralline and by the installer"
   need_file "$SCRIPT_DIR/statusline.sh"
   need_file "$SCRIPT_DIR/test/sample-input.json"
-  need_file "$SCRIPT_DIR/coralline-float"
   [ -d "$SCRIPT_DIR/themes" ] || die "missing themes directory"
 
   mkdir -p "$TARGET_DIR/themes"
   cp "$SCRIPT_DIR/statusline.sh" "$TARGET_DIR/statusline.sh"
   cp "$SCRIPT_DIR/configure.sh" "$TARGET_DIR/configure.sh"
   cp "$SCRIPT_DIR/test/sample-input.json" "$TARGET_DIR/sample-input.json"
-  cp "$SCRIPT_DIR/coralline-float" "$TARGET_DIR/coralline-float"
   theme_dir="$SCRIPT_DIR/themes"
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
@@ -1080,7 +1075,7 @@ install_files() {
   done <<THEMES
 $(cd "$theme_dir" && find . -type f -name '*.conf' | sed 's#^\./##')
 THEMES
-  chmod +x "$TARGET_DIR/statusline.sh" "$TARGET_DIR/configure.sh" "$TARGET_DIR/coralline-float"
+  chmod +x "$TARGET_DIR/statusline.sh" "$TARGET_DIR/configure.sh"
   installed=1
 }
 

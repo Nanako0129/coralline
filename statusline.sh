@@ -37,13 +37,11 @@ VL_COST_DECIMALS=2
 VL_WARN_PCT=50                  # percentage thresholds for bar colors
 VL_HOT_PCT=75
 VL_ASCII=0                      # 1 = no Nerd Font glyphs (plain colored blocks)
-VL_FLOAT=0                      # 1 = also emit a plain-text float line (for coralline-float)
-VL_FLOAT_SEGMENTS="model ctx cost clock"  # segments rendered into the float line (plain text: keep color-driven limit warnings inline)
+VL_FLOAT=0                      # 1 = also write a plain-text readout to VL_FLOAT_FILE (bring your own carrier)
+VL_FLOAT_SEGMENTS="model ctx cost"  # segments rendered into the float line (plain text: keep color-driven limit warnings inline)
 VL_FLOAT_SEP="  ·  "            # separator between float segments (plain text, no color)
 VL_FLOAT_FILE="$HOME/.claude/coralline/float.txt"
 VL_NOCOLOR=0                    # internal: fg()/bg() emit nothing when 1 (plain-text path)
-VL_STATE=0                      # 1 = also emit state.json (raw parsed fields, for Spec B)
-VL_STATE_FILE="$HOME/.claude/coralline/state.json"
 
 # Powerline glyphs (printf -v keeps these fork-free; cleared when VL_ASCII=1)
 printf -v VL_CAP_L '\xee\x82\xb6'   # U+E0B6 left rounded cap
@@ -533,23 +531,7 @@ emit_float() {
   printf '%s\n' "$line" > "$tmp" && mv -f "$tmp" "$VL_FLOAT_FILE" || rm -f "$tmp"
 }
 
-# Write the raw parsed fields as JSON atomically (foundation for Spec B).
-emit_state() {
-  local dir tmp
-  dir=$(dirname "$VL_STATE_FILE")
-  mkdir -p "$dir"
-  tmp="$dir/.state.tmp.$$"
-  jq -n \
-    --arg ctx_pct "$ctx_pct" --arg fh_pct "$fh_pct" --arg fh_rst "$fh_rst" \
-    --arg wd_pct "$wd_pct"   --arg wd_rst "$wd_rst" --arg cost "$cost" \
-    --arg model  "$model" \
-    '{ctx_pct:$ctx_pct, fh_pct:$fh_pct, fh_rst:$fh_rst,
-      wd_pct:$wd_pct, wd_rst:$wd_rst, cost:$cost, model:$model}' \
-    > "$tmp" 2>/dev/null && mv -f "$tmp" "$VL_STATE_FILE" || rm -f "$tmp"
-}
-
 [ "$VL_FLOAT" = "1" ] && emit_float
-[ "$VL_STATE" = "1" ] && emit_state
 
 if [ "$VL_LAYOUT" = "auto" ]; then
   build_segments "$VL_SEGMENTS"

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Verifies coralline-float emits the correct SetUserVar OSC for a fresh float.txt
-# and clears the bar when float.txt is stale.
+# Verifies the example iTerm2 carrier emits the correct SetUserVar OSC for a
+# fresh float.txt and clears the bar when float.txt is stale.
 #   bash test/test-float-companion.sh
 # Needs bash + base64.
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-COMPANION="$HERE/../coralline-float"
+COMPANION="$HERE/../example/float-display-iterm2/coralline-float"
 fail=0
 
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/coralline-companion-test.XXXXXX") || exit 1

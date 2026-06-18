@@ -218,11 +218,3 @@ bash ~/.claude/coralline/statusline.sh < ~/.claude/coralline/sample-input.json
 ```
 
 Success means exit code `0`, a rendered statusline on stdout, and no error text on stderr.
-
-### iTerm2 floating display (optional)
-
-coralline can float `ctx / 5h / 7d / cost` in iTerm2's top status bar. Enable
-`VL_FLOAT=1` (or pick "iTerm2 float" in the Details menu), add an Interpolated
-String status-bar component with value `\(user.coralline)`, set the status bar
-location to Top, and launch sessions with the `cf` shell function. See the
-"iTerm2 floating display" section in the README for the full walkthrough.

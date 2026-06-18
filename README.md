@@ -184,58 +184,35 @@ Prefer Powerlevel10k's *lean* look — no backgrounds, just colored text? Set
 > `~/.p10k.zsh` — it will carry over your style, colors, and time format after you opt in.
 > See the [AI interview notes in INSTALL.md](./INSTALL.md#ai-interview).
 
-## iTerm2 floating display (optional)
+## Float readout (optional)
 
-Show a compact readout — `model ctx cost clock` by default — floating in
-iTerm2's native **top status bar**, so a glanceable readout stays visible without
-looking at Claude Code's bottom statusline.
+`VL_FLOAT=1` makes `statusline.sh` write a one-line **plain-text** readout to
+`~/.claude/coralline/float.txt` on every render (segments from
+`VL_FLOAT_SEGMENTS`, default `model ctx cost`). That's all coralline does —
+it ships **no display carrier**. The file is the seam: pipe it wherever you want
+a glanceable readout that stays visible without looking at Claude Code's bottom
+statusline (a terminal status bar, tmux, a menu-bar app, …).
 
-The float line is **plain text** — iTerm2's `Interpolated String` component does
-not interpret ANSI, so it carries no color. The default therefore favors
-stable, glance-friendly segments and leaves the color-driven limit warnings
+The readout is **plain text** (no ANSI color), so the default favors stable,
+glance-friendly segments and leaves the color-driven limit warnings
 (`limit5h` / `limit7d`) in the bottom statusline, where threshold colors work.
 You can still add them to `VL_FLOAT_SEGMENTS` if you want the numbers up top.
-
-Claude Code owns and sanitizes its own statusline output, so the data reaches
-iTerm2 by a side channel: `statusline.sh` writes a plain-text line to
-`~/.claude/coralline/float.txt`, and a tiny companion (`coralline-float`) running
-in your interactive shell pushes it to iTerm2 via a `SetUserVar` escape.
-
-**One-time setup**
-
-1. iTerm2 → Settings → Profiles → Session → enable **Status bar** → **Configure
-   Status Bar** → add an **Interpolated String** component with value
-   `\(user.coralline)`.
-2. iTerm2 → Settings → Appearance → General → **Status bar location** → **Top**.
-3. Enable the float in `~/.claude/coralline.conf`:
-
-   ```bash
-   VL_FLOAT=1
-   VL_FLOAT_SEGMENTS="model ctx cost clock"
-   ```
-
-   (Or pick "iTerm2 float" in `configure.sh`'s Details menu.)
-4. Add this to your shell rc (`~/.zshrc` or `~/.bashrc`) and restart your shell:
-
-   ```bash
-   cf() { "$HOME/.claude/coralline/coralline-float" & local p=$!; claude "$@"; kill "$p" 2>/dev/null; }
-   ```
-
-**Use:** launch Claude Code with `cf` instead of `claude`. The companion starts,
-`claude` runs, and the companion is reaped on exit (clearing the bar).
 
 **Config keys**
 
 | Key | Default | Meaning |
 |---|---|---|
-| `VL_FLOAT` | `0` | `1` = emit `float.txt` each render |
-| `VL_FLOAT_SEGMENTS` | `model ctx cost clock` | segments rendered into the float line (plain text, no color) |
-| `CORALLINE_FLOAT_INTERVAL` | `1` | companion poll seconds |
-| `CORALLINE_FLOAT_STALE` | `5` | seconds before a stale `float.txt` clears the bar |
+| `VL_FLOAT` | `0` | `1` = write `float.txt` each render |
+| `VL_FLOAT_SEGMENTS` | `model ctx cost` | segments rendered into the readout (plain text, no color) |
+| `VL_FLOAT_SEP` | `  ·  ` | separator between segments |
+| `VL_FLOAT_FILE` | `~/.claude/coralline/float.txt` | where the readout is written |
 
-**Limitations:** iTerm2-only; a single global `float.txt` means concurrent
-sessions are last-writer-wins; requires the one-time status-bar setup and using
-`cf` to launch.
+(Or toggle `VL_FLOAT` via "float readout" in `configure.sh`'s Details menu.)
+
+A worked iTerm2 carrier (the `coralline-float` companion + setup steps) lives in
+[`example/float-display-iterm2/`](example/float-display-iterm2/) — copy it into
+your dotfiles and adapt. Other terminals (tmux, WezTerm, a menu-bar app, …) just
+need to read `float.txt` the same way.
 
 ## Themes
 

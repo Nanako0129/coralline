@@ -67,7 +67,7 @@ if [ "${1:-}" = "--once" ]; then
 fi
 
 # Loop mode: poll, dedupe writes, clear the bar on exit.
-trap 'emit ""; exit 0' INT TERM
+trap 'emit ""; exit 0' INT TERM HUP
 last=$'\001'   # sentinel that no real value equals, so the first push always fires
 while :; do
   val=$(current_value)
