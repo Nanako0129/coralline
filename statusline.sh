@@ -37,6 +37,10 @@ VL_COST_DECIMALS=2
 VL_WARN_PCT=50                  # percentage thresholds for bar colors
 VL_HOT_PCT=75
 VL_ASCII=0                      # 1 = no Nerd Font glyphs (plain colored blocks)
+VL_FLOAT=0                      # 1 = also emit a plain-text float line (for coralline-float)
+VL_FLOAT_SEGMENTS="ctx limit5h limit7d cost"  # segments rendered into the float line
+VL_FLOAT_FILE="$HOME/.claude/coralline/float.txt"
+VL_NOCOLOR=0                    # internal: fg()/bg() emit nothing when 1 (plain-text path)
 
 # Powerline glyphs (printf -v keeps these fork-free; cleared when VL_ASCII=1)
 printf -v VL_CAP_L '\xee\x82\xb6'   # U+E0B6 left rounded cap
@@ -121,12 +125,14 @@ NORM=$'\033[22m'
 # fg/bg set $_FG / $_BG to an ANSI escape (no subshell). Accept a 256-color
 # index, a "R,G,B" true-color triple, or empty (→ empty string, inherit color).
 fg() {
+  if [ "$VL_NOCOLOR" = "1" ]; then _FG=""; return; fi
   if [ -z "$1" ]; then _FG=""; return; fi
   if [ "${1#*,}" != "$1" ]; then
     local IFS=','; set -- $1; printf -v _FG '\033[38;2;%s;%s;%sm' "$1" "$2" "$3"
   else printf -v _FG '\033[38;5;%sm' "$1"; fi
 }
 bg() {
+  if [ "$VL_NOCOLOR" = "1" ]; then _BG=""; return; fi
   if [ -z "$1" ]; then _BG=""; return; fi
   if [ "${1#*,}" != "$1" ]; then
     local IFS=','; set -- $1; printf -v _BG '\033[48;2;%s;%s;%sm' "$1" "$2" "$3"
@@ -490,6 +496,39 @@ term_cols() {  # → _COLS
   case "$c" in (''|*[!0-9]*) c=0 ;; esac
   _COLS="$c"
 }
+
+# Defensive ANSI stripper (the VL_NOCOLOR path should already emit none) → _PLAIN.
+strip_ansi() {
+  local s="$1" out=""
+  while [ "${s#*$ESC}" != "$s" ]; do
+    out+="${s%%$ESC*}" ; s="${s#*$ESC}" ; s="${s#*m}"
+  done
+  _PLAIN="$out$s"
+}
+
+# Build VL_FLOAT_SEGMENTS with color emission neutralized and write a single
+# plain-text line atomically to VL_FLOAT_FILE. Saves/restores the color globals
+# so the normal render that follows is unaffected.
+emit_float() {
+  local _nc="$VL_NOCOLOR" _b="$BOLD" _n="$NORM" _r="$R"
+  local dir line i s tmp
+  VL_NOCOLOR=1 ; BOLD="" ; NORM="" ; R=""
+  build_segments "$VL_FLOAT_SEGMENTS"
+  line=""
+  for ((i=0; i<${#SEG_TXT[@]}; i++)); do
+    strip_ansi "${SEG_TXT[$i]}" ; s="$_PLAIN"
+    s="${s#"${s%%[![:space:]]*}"}" ; s="${s%"${s##*[![:space:]]}"}"   # trim
+    [ -n "$s" ] || continue
+    line="${line:+$line }$s"
+  done
+  VL_NOCOLOR="$_nc" ; BOLD="$_b" ; NORM="$_n" ; R="$_r"
+  dir=$(dirname "$VL_FLOAT_FILE")
+  mkdir -p "$dir"
+  tmp="$dir/.float.tmp.$$"
+  printf '%s\n' "$line" > "$tmp" && mv -f "$tmp" "$VL_FLOAT_FILE"
+}
+
+[ "$VL_FLOAT" = "1" ] && emit_float
 
 if [ "$VL_LAYOUT" = "auto" ]; then
   build_segments "$VL_SEGMENTS"
