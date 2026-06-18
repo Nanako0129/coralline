@@ -32,7 +32,7 @@ DEMO = FAKE_HOME / "dev" / "coralline"
 
 THEMES = ["claude-coral", "catppuccin-mocha", "nord",
           "gruvbox-dark", "tokyo-night", "mono", "dracula",
-          "lunar-pink"]
+          "lunar-pink", "reverie"]
 
 # hero.png is a curated sampler frozen to the original six themes; new themes go
 # in the per-theme gallery (theme-<name>.png) only, so the banner doesn't grow.
@@ -85,7 +85,8 @@ def pick_glyph(candidates, fallback):
 
 GLYPH_FIX = {
     "⎇": pick_glyph([0xE0A0], "Y"),            # ⎇ → powerline branch
-    "⬡": pick_glyph([0x2B22, 0x25C7], "#"),    # ⬡ → hexagon/diamond
+    "⬡": pick_glyph([0x2B22, 0x25C7], "#"),    # ⬡ → hexagon/diamond (ctx)
+    "⬢": pick_glyph([0x2B22, 0x25CF], "#"),    # ⬢ → filled hexagon/circle (project)
     "⧖": pick_glyph([0xF252, 0xF017, 0x231B], "~"),  # ⧖ → hourglass/clock
 }
 

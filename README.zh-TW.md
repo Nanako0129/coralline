@@ -187,6 +187,7 @@ narrow window:  ~/dev/app  ⎇ main  ◆ Fable 5
 | **`nord`** — 北極冷霜<br>![nord 主題預覽](./assets/theme-nord.png) | **`gruvbox-dark`** — 溫暖復古<br>![gruvbox-dark 主題預覽](./assets/theme-gruvbox-dark.png) |
 | **`tokyo-night`** — 深藍霓虹<br>![tokyo-night 主題預覽](./assets/theme-tokyo-night.png) | **`mono`** — 灰階極簡<br>![mono 主題預覽](./assets/theme-mono.png) |
 | **`dracula`** — 青 · 粉 · 紫，Dracula 暗炭底<br>![dracula 主題預覽](./assets/theme-dracula.png) | **`lunar-pink`** — 粉 · 青 · 黃，近黑底<br>![lunar-pink 主題預覽](./assets/theme-lunar-pink.png) |
+| **`reverie`** — 柔粉彩 · 暖深底配梅紫文字<br>![reverie 主題預覽](./assets/theme-reverie.png) | |
 
 主題就只是一個指定 `VL_BG_*` / `VL_FG_*` 的 `.conf` 檔——複製一份、改顏色、
 在 `coralline.conf` 裡改 source 你的版本即可。歡迎發 PR 貢獻新主題。

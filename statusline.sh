@@ -54,6 +54,7 @@ printf -v VL_SEP   '\xee\x82\xb0'   # U+E0B0 segment separator
 VL_BG_DIR="81,166,199"
 VL_BG_PROJECT=""               # optional; falls back to VL_BG_DIR when empty
 VL_BG_GIT_OK=65
+VL_BG_STASH=""                 # optional; falls back to VL_BG_GIT_OK when empty
 VL_BG_GIT_DIRTY=130
 VL_BG_MODEL=173
 VL_BG_CTX=238
@@ -344,7 +345,7 @@ seg_project() {  # repo-root name in a repo; falls back to dir outside one (unle
 
 seg_dir() {
   [ -n "$cwd" ] || return 0
-  local short="${cwd/#$HOME/~}" n last
+  local short="${cwd/#"$HOME"/\~}" n last
   local IFS='/'; set -- $short; n=$#
   if [ "$n" -gt "$VL_PATH_DEPTH" ]; then
     eval "last=\${$n}"
@@ -450,7 +451,7 @@ seg_stash() {
   n=$(git -C "$cwd" rev-list --walk-reflogs --count refs/stash 2>/dev/null) || return 0
   [ "${n:-0}" -gt 0 ] || return 0
   fg "$VL_FG_TEXT"
-  push "$VL_BG_GIT_OK" "${_FG} ⚑ ${n} "
+  push "${VL_BG_STASH:-$VL_BG_GIT_OK}" "${_FG} ⚑ ${n} "
 }
 
 # ── Render ───────────────────────────────────────────────────────────────────
