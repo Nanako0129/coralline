@@ -38,6 +38,15 @@ VL_WARN_PCT=50                  # percentage thresholds for bar colors
 VL_HOT_PCT=75
 VL_ASCII=0                      # 1 = no Nerd Font glyphs (plain colored blocks)
 
+# ── Burn-rate segment (range-to-empty); opt-in, default off ──────────────────
+VL_BURN=0                       # 1 = sample 5h% each render + enable seg_burn
+CORALLINE_BURN_WINDOW=600       # recent-slope lookback for 5h, seconds
+VL_BURN_SHOWRATE=0              # 1 = also show the binding limit's rate
+VL_BURN_GLYPH="↗"               # plain-Unicode, arrow family (kept in VL_ASCII)
+VL_BG_BURN=""                   # empty → inherits VL_BG_5H at the use site
+VL_BURN_TRIM=1500               # max rows kept in the sample file
+BURN_FILE="${CORALLINE_BURN_FILE:-$HOME/.claude/coralline/burn-5h.tsv}"
+
 # Powerline glyphs (printf -v keeps these fork-free; cleared when VL_ASCII=1)
 printf -v VL_CAP_L '\xee\x82\xb6'   # U+E0B6 left rounded cap
 printf -v VL_CAP_R '\xee\x82\xb4'   # U+E0B4 right rounded cap
@@ -187,6 +196,20 @@ fmt_duration() {  # → _DUR ; $1=ms
   if   [ "$h" -gt 0 ]; then printf -v _DUR '%dh%02dm' "$h" "$m"
   elif [ "$m" -gt 0 ]; then printf -v _DUR '%dm' "$m"
   else                      printf -v _DUR '%ds' "$s"; fi
+}
+
+fmt_eta() {  # → _ETA ; $1=seconds (mirrors fmt_countdown's d/h/m formatting)
+  local s="${1:-0}" d h m
+  d=$(( s / 86400 )); h=$(( (s % 86400) / 3600 )); m=$(( (s % 3600) / 60 ))
+  if   [ "$d" -gt 0 ]; then printf -v _ETA '%dd%02dh' "$d" "$h"
+  elif [ "$h" -gt 0 ]; then printf -v _ETA '%dh%02dm' "$h" "$m"
+  else                      printf -v _ETA '%dm' "$m"; fi
+}
+
+burn_sample() {  # append one 5h sample; $1=now $2=pct(raw) $3=resets_at(raw)
+  [ -n "$2" ] || return 0
+  to_epoch "$3" || return 0
+  printf '%s\t%s\t%s\n' "$1" "$2" "$_EP" >> "$BURN_FILE" 2>/dev/null
 }
 
 pct_fg() {  # → _PFG (a color spec) ; $1=pct
@@ -490,6 +513,8 @@ term_cols() {  # → _COLS
   case "$c" in (''|*[!0-9]*) c=0 ;; esac
   _COLS="$c"
 }
+
+[ "$VL_BURN" = "1" ] && burn_sample "$NOW" "$fh_pct" "$fh_rst"
 
 if [ "$VL_LAYOUT" = "auto" ]; then
   build_segments "$VL_SEGMENTS"
