@@ -247,7 +247,7 @@ GIT
   # shared by every linked worktree — so it stays constant whichever worktree
   # you're in. Resolved only when the project segment is enabled, to keep the
   # one-git-call default untouched.
-  case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" project "*)
+  case "$_SEG_SCAN" in *" project "*)
     local cdir
     cdir=$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
     [ -n "$cdir" ] || cdir=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
@@ -263,7 +263,9 @@ GIT
   [ "${b:-0}" -gt 0 ] 2>/dev/null && GIT_AB="${GIT_AB}⇣${b}"
   [ -n "$GIT_MARKS" ] && GIT_DIRTY=1
 }
-case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" git "*|*" stash "*|*" project "*) read_git ;; esac
+_SEG_SCAN=" $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 "
+[ "$VL_FLOAT" = "1" ] && _SEG_SCAN="$_SEG_SCAN$VL_FLOAT_SEGMENTS "
+case "$_SEG_SCAN" in *" git "*|*" stash "*|*" project "*) read_git ;; esac
 
 # ── Segments ─────────────────────────────────────────────────────────────────
 # Each seg_* appends (background, text, visible width) to the segment arrays.
@@ -526,7 +528,7 @@ emit_float() {
   dir=$(dirname "$VL_FLOAT_FILE")
   mkdir -p "$dir"
   tmp="$dir/.float.tmp.$$"
-  printf '%s\n' "$line" > "$tmp" && mv -f "$tmp" "$VL_FLOAT_FILE"
+  printf '%s\n' "$line" > "$tmp" && mv -f "$tmp" "$VL_FLOAT_FILE" || rm -f "$tmp"
 }
 
 # Write the raw parsed fields as JSON atomically (foundation for Spec B).
@@ -541,7 +543,7 @@ emit_state() {
     --arg model  "$model" \
     '{ctx_pct:$ctx_pct, fh_pct:$fh_pct, fh_rst:$fh_rst,
       wd_pct:$wd_pct, wd_rst:$wd_rst, cost:$cost, model:$model}' \
-    > "$tmp" 2>/dev/null && mv -f "$tmp" "$VL_STATE_FILE"
+    > "$tmp" 2>/dev/null && mv -f "$tmp" "$VL_STATE_FILE" || rm -f "$tmp"
 }
 
 [ "$VL_FLOAT" = "1" ] && emit_float

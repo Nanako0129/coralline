@@ -40,4 +40,12 @@ rm -f "$floatf"
 CORALLINE_FLOAT_TTY="$out" CORALLINE_FLOAT_FILE="$floatf" bash "$COMPANION" --once
 if cmp -s "$out" "$tmpdir/expect.clear"; then check "missing clears the bar" 1; else check "missing clears the bar" 0; fi
 
+# --- No controlling tty → exits non-zero and prints hint ---
+# Run with CORALLINE_FLOAT_TTY unset and stdin from /dev/null so there is no tty.
+notty_err="$tmpdir/notty.err"
+unset CORALLINE_FLOAT_TTY 2>/dev/null || true
+bash "$COMPANION" --once < /dev/null 2>"$notty_err"; notty_rc=$?
+check "no-tty exits non-zero"         "$([ "$notty_rc" -ne 0 ]       && echo 1 || echo 0)"
+check "no-tty stderr has hint text"   "$(grep -q 'no controlling tty' "$notty_err" && echo 1 || echo 0)"
+
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi

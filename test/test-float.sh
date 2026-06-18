@@ -43,4 +43,22 @@ grep -qF '$1.23' "$floatf"     && check "cost"     1 || check "cost"     0
 lines=$(wc -l < "$floatf" | tr -d ' ')
 [ "$lines" = "1" ]; check "single line (got $lines)" "$([ "$lines" = "1" ] && echo 1 || echo 0)"
 
+# --- Float git segment populates when VL_FLOAT_SEGMENTS includes git ---
+# Use this repo's own working directory (a real git repo) so git state is available.
+gitfloatf="$tmpdir/float-git.txt"
+gitconf="$tmpdir/git.conf"
+cat > "$gitconf" <<EOF
+VL_FLOAT=1
+VL_FLOAT_FILE="$gitfloatf"
+VL_FLOAT_SEGMENTS="git ctx"
+VL_SEGMENTS="ctx"
+EOF
+# Build input JSON pointing cwd at this real git repo.
+gitinput="$tmpdir/git-input.json"
+reporoot=$(cd "$HERE/.." && pwd)
+jq --arg cwd "$reporoot" '.cwd = $cwd | .workspace.current_dir = $cwd' "$SAMPLE" > "$gitinput"
+CORALLINE_CONFIG="$gitconf" bash "$SCRIPT" < "$gitinput" >/dev/null
+check "float git segment: file created"  "$([ -f "$gitfloatf" ] && echo 1 || echo 0)"
+check "float git segment: contains ⎇"   "$(grep -q '⎇' "$gitfloatf" && echo 1 || echo 0)"
+
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi
