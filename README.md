@@ -184,6 +184,53 @@ Prefer Powerlevel10k's *lean* look — no backgrounds, just colored text? Set
 > `~/.p10k.zsh` — it will carry over your style, colors, and time format after you opt in.
 > See the [AI interview notes in INSTALL.md](./INSTALL.md#ai-interview).
 
+## iTerm2 floating display (optional)
+
+Show a compact readout — `ctx limit5h limit7d cost` by default — floating in
+iTerm2's native **top status bar**, so environment health stays visible without
+glancing at Claude Code's bottom statusline.
+
+Claude Code owns and sanitizes its own statusline output, so the data reaches
+iTerm2 by a side channel: `statusline.sh` writes a plain-text line to
+`~/.claude/coralline/float.txt`, and a tiny companion (`coralline-float`) running
+in your interactive shell pushes it to iTerm2 via a `SetUserVar` escape.
+
+**One-time setup**
+
+1. iTerm2 → Settings → Profiles → Session → enable **Status bar** → **Configure
+   Status Bar** → add an **Interpolated String** component with value
+   `\(user.coralline)`.
+2. iTerm2 → Settings → Appearance → General → **Status bar location** → **Top**.
+3. Enable the float in `~/.claude/coralline.conf`:
+
+   ```bash
+   VL_FLOAT=1
+   VL_FLOAT_SEGMENTS="ctx limit5h limit7d cost"
+   ```
+
+   (Or pick "iTerm2 float" in `configure.sh`'s Details menu.)
+4. Add this to your shell rc (`~/.zshrc` or `~/.bashrc`) and restart your shell:
+
+   ```bash
+   cf() { "$HOME/.claude/coralline/coralline-float" & local p=$!; claude "$@"; kill "$p" 2>/dev/null; }
+   ```
+
+**Use:** launch Claude Code with `cf` instead of `claude`. The companion starts,
+`claude` runs, and the companion is reaped on exit (clearing the bar).
+
+**Config keys**
+
+| Key | Default | Meaning |
+|---|---|---|
+| `VL_FLOAT` | `0` | `1` = emit `float.txt` each render |
+| `VL_FLOAT_SEGMENTS` | `ctx limit5h limit7d cost` | segments rendered into the float line |
+| `CORALLINE_FLOAT_INTERVAL` | `1` | companion poll seconds |
+| `CORALLINE_FLOAT_STALE` | `5` | seconds before a stale `float.txt` clears the bar |
+
+**Limitations:** iTerm2-only; a single global `float.txt` means concurrent
+sessions are last-writer-wins; requires the one-time status-bar setup and using
+`cf` to launch.
+
 ## Themes
 
 | | |

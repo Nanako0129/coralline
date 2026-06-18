@@ -207,6 +207,7 @@ else
   printf '%s\n' "${DIM}Downloading runtime files from $BASE_URL${RESET}"
   download "$BASE_URL/configure.sh" "$WORK_DIR/configure.sh"
   download "$BASE_URL/statusline.sh" "$WORK_DIR/statusline.sh"
+  download "$BASE_URL/coralline-float" "$WORK_DIR/coralline-float"
   download "$BASE_URL/test/sample-input.json" "$WORK_DIR/test/sample-input.json"
   download_themes
 fi
