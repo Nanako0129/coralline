@@ -148,7 +148,7 @@ Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the scrip
 
 **Burn-rate (`burn`) segment.** Off by default. Set `VL_BURN=1` and add `burn` to
 `VL_SEGMENTS` to show a "range to empty" — the projected time until whichever rate
-limit (5h or 7d) binds first, e.g. `↗5h ⇢1h58m`. It colours green/yellow/red by
+limit (5h or 7d) binds first, e.g. `↗5h ⇢ 1h58m`. It colours green/yellow/red by
 whether you'll hit that wall before the window resets. Keys: `CORALLINE_BURN_WINDOW`
 (recent-slope lookback, default 600s), `VL_BURN_SHOWRATE` (also show the rate),
 `VL_BURN_GLYPH` (default `↗`), `VL_BG_BURN` (defaults to the 5h background),

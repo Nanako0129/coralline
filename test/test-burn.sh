@@ -122,11 +122,11 @@ eq "binding idle"      "$_BURN_STATE" "idle"
 eq "binding idle nolabel" "$_BURN_LABEL" ""
 
 # render: active 7d binding, eta 2h, ttr 1h → ratio ttr/eta=0.5 (<0.8) → OK colour;
-# 5h roomy (eta 6h) so 7d wins. Contains ↗7d and ⇢2h00m.
+# 5h roomy (eta 6h) so 7d wins. Contains ↗7d and ⇢ 2h00m.
 SEG_BGS=(); SEG_TXT=(); SEG_LEN=()
 M5S=active M5E=21600 M5R=0 M5T=15000  M7E=7200 M7R=0 M7T=3600
 seg_burn
-case "${SEG_TXT[0]}" in *"↗7d"*"⇢2h00m"*) ok "render active 7d" ;; *) bad "render active 7d" "got=${SEG_TXT[0]}" ;; esac
+case "${SEG_TXT[0]}" in *"↗7d"*"⇢ 2h00m"*) ok "render active 7d" ;; *) bad "render active 7d" "got=${SEG_TXT[0]}" ;; esac
 case "${SEG_TXT[0]}" in *$'\033[38;5;114m'*) ok "render OK colour" ;; *) bad "render OK colour" "no OK fg in ${SEG_TXT[0]}" ;; esac
 
 # render: active 5h binding, eta 5m ≤ ttr 10m → you empty before reset → HOT colour
@@ -135,11 +135,11 @@ M5S=active M5E=300 M5R=0 M5T=600  M7E=inf M7R=0 M7T=0
 seg_burn
 case "${SEG_TXT[0]}" in *$'\033[38;5;167m'*) ok "render HOT colour" ;; *) bad "render HOT colour" "no HOT fg in ${SEG_TXT[0]}" ;; esac
 
-# render: idle → dim, contains ⇢—
+# render: idle → dim, contains ⇢ —
 SEG_BGS=(); SEG_TXT=(); SEG_LEN=()
 M5S=idle M5E=inf M5R=0 M5T=0  M7E=inf M7R=0 M7T=0
 seg_burn
-case "${SEG_TXT[0]}" in *"⇢—"*$'\033'*|*$'\033'*"⇢—"*) ok "render idle dash" ;; *) bad "render idle dash" "got=${SEG_TXT[0]}" ;; esac
+case "${SEG_TXT[0]}" in *"⇢ —"*$'\033'*|*$'\033'*"⇢ —"*) ok "render idle dash" ;; *) bad "render idle dash" "got=${SEG_TXT[0]}" ;; esac
 
 # render: active 5h binding, eta 1000s, ttr 900s → ratio 0.9 ∈ [0.8,1) → WARN colour
 SEG_BGS=(); SEG_TXT=(); SEG_LEN=()
@@ -147,11 +147,11 @@ M5S=active M5E=1000 M5R=0 M5T=900  M7E=inf M7R=0 M7T=0
 seg_burn
 case "${SEG_TXT[0]}" in *$'\033[38;5;179m'*) ok "render WARN colour" ;; *) bad "render WARN colour" "no WARN fg in ${SEG_TXT[0]}" ;; esac
 
-# render: warming state → dim, contains ⇢…
+# render: warming state → dim, contains ⇢ …
 SEG_BGS=(); SEG_TXT=(); SEG_LEN=()
 M5S=warming M5E=inf M5R=0 M5T=0  M7E=inf M7R=0 M7T=0
 seg_burn
-case "${SEG_TXT[0]}" in *"⇢…"*$'\033'*|*$'\033'*"⇢…"*) ok "render warming" ;; *) bad "render warming" "got=${SEG_TXT[0]}" ;; esac
+case "${SEG_TXT[0]}" in *"⇢ …"*$'\033'*|*$'\033'*"⇢ …"*) ok "render warming" ;; *) bad "render warming" "got=${SEG_TXT[0]}" ;; esac
 
 # tie-break: equal ETAs (5000s) → 5h wins via -le comparison
 M5S=active M5E=5000 M5R=0 M5T=9000  M7E=5000 M7R=0 M7T=9000

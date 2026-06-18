@@ -305,8 +305,8 @@ seg_burn() {
   local bg="${VL_BG_BURN:-$VL_BG_5H}"
   if [ "$_BURN_STATE" != "active" ]; then
     fg "$VL_FG_DIM"
-    if [ "$_BURN_STATE" = "idle" ]; then push "$bg" "${_FG} ${VL_BURN_GLYPH} ⇢— "
-    else                                  push "$bg" "${_FG} ${VL_BURN_GLYPH} ⇢… "; fi
+    if [ "$_BURN_STATE" = "idle" ]; then push "$bg" "${_FG} ${VL_BURN_GLYPH} ⇢ — "
+    else                                  push "$bg" "${_FG} ${VL_BURN_GLYPH} ⇢ … "; fi
     return 0
   fi
   local eta="$_BURN_ETA" ttr="$_BURN_TTR" col rate=""
@@ -322,7 +322,7 @@ seg_burn() {
     fi
   fi
   fg "$col"
-  push "$bg" "${_FG} ${VL_BURN_GLYPH}${_BURN_LABEL} ${rate}⇢${_ETA} "
+  push "$bg" "${_FG} ${VL_BURN_GLYPH}${_BURN_LABEL} ${rate}⇢ ${_ETA} "
 }
 
 pct_fg() {  # → _PFG (a color spec) ; $1=pct
