@@ -74,4 +74,21 @@ eq "5h trim rowcount" "$(wc -l < "$TMPD/b5.tsv" | tr -d ' ')" "3"
 eq "5h trim first-kept" "$(head -1 "$TMPD/b5.tsv" | cut -f1)" "3"
 VL_BURN_TRIM=1500
 
+eval "$(sed -n '/^burn_eta_7d() {/,/^}/p' "$SCRIPT")"
+
+# 7d: used 30%, window opened 3 days ago (elapsed=259200s), reset 4 days out.
+# rate=30/259200 %/s; ETA=(100-30)/rate=70*259200/30=604800s=7d00h
+WS=$(( 1000000 - 259200 )); R7=$(( WS + 604800 ))
+wd_pct=30; wd_rst=$R7; NOW=1000000; burn_eta_7d
+eq "7d eta"  "$_B7_ETA" "604800"
+eq "7d ttr"  "$_B7_TTR" "345600"
+
+# 7d unused → inf
+wd_pct=0; wd_rst=$R7; NOW=1000000; burn_eta_7d
+eq "7d unused eta" "$_B7_ETA" "inf"
+
+# 7d not reported → inf
+wd_pct=""; wd_rst=""; NOW=1000000; burn_eta_7d
+eq "7d empty eta" "$_B7_ETA" "inf"
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME FAILED"; exit 1; }

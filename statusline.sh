@@ -266,6 +266,22 @@ $out
 EOF
 }
 
+burn_eta_7d() {  # → _B7_ETA _B7_RATE _B7_TTR (stateless; uses wd_pct/wd_rst)
+  _B7_ETA="inf"; _B7_RATE="0"; _B7_TTR="0"
+  [ -n "$wd_pct" ] || return 0
+  to_epoch "$wd_rst" || return 0
+  read -r _B7_ETA _B7_RATE _B7_TTR <<EOF
+$(awk -v p="$wd_pct" -v r="$_EP" -v now="$NOW" 'BEGIN {
+    ttr = r - now; if (ttr < 0) ttr = 0
+    ws = r - 7 * 86400; el = now - ws
+    if (p + 0 <= 0 || el <= 0) { print "inf 0 " ttr; exit }
+    rate = (p + 0) / el
+    eta = (100 - (p + 0)) / rate; if (eta < 0) eta = 0
+    printf "%.0f %.10f %d\n", eta, rate, ttr
+  }')
+EOF
+}
+
 pct_fg() {  # → _PFG (a color spec) ; $1=pct
   local pct="${1:-0}"
   if   [ "$pct" -ge "$VL_HOT_PCT" ];  then _PFG="$VL_FG_HOT"
