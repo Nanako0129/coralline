@@ -262,8 +262,13 @@ burn_eta_5h() {  # → _B5_STATE _B5_ETA _B5_RATE _B5_TTR ; trims $BURN_FILE
         } else {
           print "warming inf 0 " ttr
         }
-        if (n > trim) {
-          lo = n - trim + 1
+        # Trim on PHYSICAL rows (NR), not distinct seconds (n): sub-second render
+        # bursts (resize storms) append same-second rows that n dedups away, so an
+        # n-based cap would never fire and the file would grow unbounded. The
+        # rewrite emits the deduped last-`trim` seconds, so it also collapses the
+        # burst rows. Fires only when the file actually exceeds the cap.
+        if (NR > trim) {
+          lo = n - trim + 1; if (lo < 1) lo = 1
           for (i = lo; i <= n; i++)
             printf "%d\t%s\t%d\n", ord[i], pct[ord[i]], rst[ord[i]] > tmp
         }

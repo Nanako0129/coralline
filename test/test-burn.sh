@@ -76,6 +76,11 @@ BURN_TRIM=3
 run5h "1\t6\t9\n2\t6\t9\n3\t7\t9\n4\t7\t9\n5\t8\t9\n" 6
 eq "5h trim rowcount" "$(wc -l < "$TMPD/b5.tsv" | tr -d ' ')" "3"
 eq "5h trim first-kept" "$(head -1 "$TMPD/b5.tsv" | cut -f1)" "3"
+# trim on PHYSICAL rows: 6 same-second rows (only 2 distinct seconds) with trim=3
+# must still trim — a distinct-second cap would never fire and the file would grow.
+BURN_TRIM=3
+run5h "1\t6\t9\n1\t6\t9\n1\t6\t9\n2\t7\t9\n2\t7\t9\n2\t7\t9\n" 3
+eq "5h trim same-second rows" "$(wc -l < "$TMPD/b5.tsv" | tr -d ' ')" "2"
 BURN_TRIM=1500
 
 eval "$(sed -n '/^burn_eta_7d() {/,/^}/p' "$SCRIPT")"
