@@ -647,8 +647,10 @@ term_cols() {  # → _COLS
 }
 
 # Sample only when the burn segment is actually shown — the segment list is the
-# single source of truth, so enabling burn in configure.sh just works.
-case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in
+# single source of truth, so enabling burn in configure.sh just works. _SEG_SCAN
+# also covers VL_FLOAT_SEGMENTS, so burn samples even when it's only in the float
+# readout (mirrors how read_git is gated above).
+case "$_SEG_SCAN" in
   *" burn "*) burn_sample "$NOW" "$fh_pct" "$fh_rst" ;;
 esac
 
