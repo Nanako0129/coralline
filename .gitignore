@@ -1,4 +1,5 @@
 __pycache__/
 *.pyc
 .DS_Store
+.claude/worktrees/
 docs/superpowers/

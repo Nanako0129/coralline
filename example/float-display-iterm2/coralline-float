@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# coralline-float — transports ~/.claude/coralline/float.txt to iTerm2's top
+# status bar via a SetUserVar OSC written to the real session tty.
+#
+# This exists because Claude Code sanitizes control sequences out of the output
+# it captures from statusline.sh, and CC-spawned subprocesses have no usable tty.
+# Launch this from your interactive shell (it inherits that shell's tty), e.g.:
+#   cf() { "$HOME/.claude/coralline/coralline-float" & local p=$!; claude "$@"; kill "$p" 2>/dev/null; }
+#
+# It is deliberately dumb: NO formatting logic. statusline.sh is the single
+# source of visual truth; this only carries the bytes.
+#
+# Pure bash + base64. Works on macOS (BSD) and Linux/Git Bash (GNU).
+set -u
+
+FLOAT_FILE="${CORALLINE_FLOAT_FILE:-$HOME/.claude/coralline/float.txt}"
+INTERVAL="${CORALLINE_FLOAT_INTERVAL:-1}"
+STALE="${CORALLINE_FLOAT_STALE:-5}"
+
+# Resolve the target tty. CORALLINE_FLOAT_TTY overrides (used by tests / advanced
+# setups); otherwise capture the controlling tty once and require a real device.
+if [ -n "${CORALLINE_FLOAT_TTY:-}" ]; then
+  TTY="$CORALLINE_FLOAT_TTY"
+else
+  TTY=$(tty 2>/dev/null) || TTY=""
+  case "$TTY" in
+    /dev/*) : ;;
+    *) printf 'coralline-float: no controlling tty (launch from an interactive shell, not detached)\n' >&2
+       exit 1 ;;
+  esac
+fi
+
+# Write a SetUserVar OSC. $1 = plain value; empty clears the bar. Truncate-write
+# so a regular file (tests) holds exactly one OSC; on a tty this is a plain write.
+emit() {
+  local b64
+  b64=$(printf '%s' "$1" | base64 | tr -d '\n')
+  printf '\033]1337;SetUserVar=coralline=%s\007' "$b64" > "$TTY"
+}
+
+# Portable mtime in epoch seconds (BSD then GNU).
+file_mtime() {
+  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
+}
+
+# Compute the value to push: contents if fresh, empty if stale/missing.
+current_value() {
+  local now mt
+  [ -f "$FLOAT_FILE" ] || { printf '%s' ""; return; }
+  now=$(date +%s)
+  mt=$(file_mtime "$FLOAT_FILE")
+  if [ -n "$mt" ] && [ "$((now - mt))" -le "$STALE" ]; then
+    cat "$FLOAT_FILE"
+  else
+    printf '%s' ""
+  fi
+}
+
+run_once() {
+  emit "$(current_value)"
+}
+
+# --once: single iteration (for tests / scripted use), always emits.
+if [ "${1:-}" = "--once" ]; then
+  run_once
+  exit 0
+fi
+
+# Loop mode: poll, dedupe writes, clear the bar on exit.
+trap 'emit ""; exit 0' INT TERM HUP
+last=$'\001'   # sentinel that no real value equals, so the first push always fires
+while :; do
+  val=$(current_value)
+  if [ "$val" != "$last" ]; then emit "$val"; last="$val"; fi
+  sleep "$INTERVAL"
+done

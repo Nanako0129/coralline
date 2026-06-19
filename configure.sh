@@ -32,6 +32,8 @@ clock_seconds=1
 ascii_mode=0
 name_max=0
 lean_sep=""
+float_enabled=0
+float_segments="model ctx cost"
 extra_config=""
 installed=0
 install_only=0
@@ -452,6 +454,8 @@ write_candidate_config() {
     printf 'VL_NAME_MAX=%s\n' "$name_max"
     printf 'VL_ASCII=%s\n' "$ascii_mode"
     write_assign VL_LEAN_SEP "$lean_sep"
+    write_assign VL_FLOAT "$float_enabled"
+    write_assign VL_FLOAT_SEGMENTS "$float_segments"
   } > "$out"
   if [ -n "$extra_config" ]; then
     printf '\n# Imported p10k color hints.\n' >> "$out"
@@ -753,7 +757,7 @@ choose_layout_screen() {
 }
 
 choose_details_screen() {
-  local selected=0 key count=6 dirty=1
+  local selected=0 key count=7 dirty=1
   while :; do
     if [ "$dirty" = "1" ]; then
       draw_screen_header "Details" 120
@@ -780,6 +784,7 @@ choose_details_screen() {
             case "$name_max" in ''|*[!0-9]*) name_max=0 ;; esac
             enter_screen
             dirty=1 ;;
+          6) [ "$float_enabled" = "1" ] && float_enabled=0 || float_enabled=1; dirty=1 ;;
         esac ;;
       quit) leave_screen; exit 69 ;;
     esac
@@ -802,6 +807,8 @@ draw_details_menu() {
   [ "$selected" = "4" ] && draw_option 1 "$mark" "Nerd Font" || draw_option 0 "$mark" "Nerd Font"
   [ "$name_max" != "0" ] && mark="✓" || mark=" "
   [ "$selected" = "5" ] && draw_option 1 "$mark" "name max (0=off): $name_max" || draw_option 0 "$mark" "name max (0=off): $name_max"
+  mark=$(flag_mark "$float_enabled")
+  [ "$selected" = "6" ] && draw_option 1 "$mark" "float readout (VL_FLOAT)" || draw_option 0 "$mark" "float readout (VL_FLOAT)"
   draw_screen_footer toggle
   clear_tail
 }
@@ -1019,6 +1026,17 @@ visual_wizard() {
   leave_screen
 }
 
+print_float_help() {
+  cat <<'EOF'
+
+Float readout (VL_FLOAT) is enabled. statusline.sh now writes a plain-text
+readout to ~/.claude/coralline/float.txt on every render. coralline does not
+ship a display carrier — bring your own (a terminal status bar, tmux, a
+menu-bar app, ...). A worked iTerm2 carrier lives in the repo under
+example/float-display-iterm2/ — copy it into your dotfiles and adapt.
+EOF
+}
+
 write_final_config() {
   local tmp
   tmp=$(mktemp "${TMPDIR:-/tmp}/coralline-config.XXXXXX") || exit 1
@@ -1035,6 +1053,7 @@ write_final_config() {
   mkdir -p "$(dirname "$CONFIG_FILE")"
   mv "$tmp" "$CONFIG_FILE"
   printf '%sWrote%s %s\n' "$T_GREEN" "$T_RESET" "$CONFIG_FILE"
+  [ "$float_enabled" = "1" ] && print_float_help
 }
 
 install_files() {

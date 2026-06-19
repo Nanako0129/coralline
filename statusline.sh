@@ -37,6 +37,11 @@ VL_COST_DECIMALS=2
 VL_WARN_PCT=50                  # percentage thresholds for bar colors
 VL_HOT_PCT=75
 VL_ASCII=0                      # 1 = no Nerd Font glyphs (plain colored blocks)
+VL_FLOAT=0                      # 1 = also write a plain-text readout to VL_FLOAT_FILE (bring your own carrier)
+VL_FLOAT_SEGMENTS="model ctx cost"  # segments rendered into the float line (plain text: keep color-driven limit warnings inline)
+VL_FLOAT_SEP="  ·  "            # separator between float segments (plain text, no color)
+VL_FLOAT_FILE="$HOME/.claude/coralline/float.txt"
+VL_NOCOLOR=0                    # internal: fg()/bg() emit nothing when 1 (plain-text path)
 
 # ── Burn-rate segment (range-to-empty) ───────────────────────────────────────
 # Opt in by adding `burn` to VL_SEGMENTS*; the sampler below runs only then.
@@ -129,12 +134,14 @@ NORM=$'\033[22m'
 # fg/bg set $_FG / $_BG to an ANSI escape (no subshell). Accept a 256-color
 # index, a "R,G,B" true-color triple, or empty (→ empty string, inherit color).
 fg() {
+  if [ "$VL_NOCOLOR" = "1" ]; then _FG=""; return; fi
   if [ -z "$1" ]; then _FG=""; return; fi
   if [ "${1#*,}" != "$1" ]; then
     local IFS=','; set -- $1; printf -v _FG '\033[38;2;%s;%s;%sm' "$1" "$2" "$3"
   else printf -v _FG '\033[38;5;%sm' "$1"; fi
 }
 bg() {
+  if [ "$VL_NOCOLOR" = "1" ]; then _BG=""; return; fi
   if [ -z "$1" ]; then _BG=""; return; fi
   if [ "${1#*,}" != "$1" ]; then
     local IFS=','; set -- $1; printf -v _BG '\033[48;2;%s;%s;%sm' "$1" "$2" "$3"
@@ -386,7 +393,7 @@ GIT
   # shared by every linked worktree — so it stays constant whichever worktree
   # you're in. Resolved only when the project segment is enabled, to keep the
   # one-git-call default untouched.
-  case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" project "*)
+  case "$_SEG_SCAN" in *" project "*)
     local cdir
     cdir=$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
     [ -n "$cdir" ] || cdir=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
@@ -402,7 +409,9 @@ GIT
   [ "${b:-0}" -gt 0 ] 2>/dev/null && GIT_AB="${GIT_AB}⇣${b}"
   [ -n "$GIT_MARKS" ] && GIT_DIRTY=1
 }
-case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" git "*|*" stash "*|*" project "*) read_git ;; esac
+_SEG_SCAN=" $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 "
+[ "$VL_FLOAT" = "1" ] && _SEG_SCAN="$_SEG_SCAN$VL_FLOAT_SEGMENTS "
+case "$_SEG_SCAN" in *" git "*|*" stash "*|*" project "*) read_git ;; esac
 
 # ── Segments ─────────────────────────────────────────────────────────────────
 # Each seg_* appends (background, text, visible width) to the segment arrays.
@@ -642,6 +651,39 @@ term_cols() {  # → _COLS
 case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in
   *" burn "*) burn_sample "$NOW" "$fh_pct" "$fh_rst" ;;
 esac
+
+# Defensive ANSI stripper (the VL_NOCOLOR path should already emit none) → _PLAIN.
+strip_ansi() {
+  local s="$1" out=""
+  while [ "${s#*$ESC}" != "$s" ]; do
+    out+="${s%%$ESC*}" ; s="${s#*$ESC}" ; s="${s#*m}"
+  done
+  _PLAIN="$out$s"
+}
+
+# Build VL_FLOAT_SEGMENTS with color emission neutralized and write a single
+# plain-text line atomically to VL_FLOAT_FILE. Saves/restores the color globals
+# so the normal render that follows is unaffected.
+emit_float() {
+  local _nc="$VL_NOCOLOR" _b="$BOLD" _n="$NORM" _r="$R"
+  local dir line i s tmp
+  VL_NOCOLOR=1 ; BOLD="" ; NORM="" ; R=""
+  build_segments "$VL_FLOAT_SEGMENTS"
+  line=""
+  for ((i=0; i<${#SEG_TXT[@]}; i++)); do
+    strip_ansi "${SEG_TXT[$i]}" ; s="$_PLAIN"
+    s="${s#"${s%%[![:space:]]*}"}" ; s="${s%"${s##*[![:space:]]}"}"   # trim
+    [ -n "$s" ] || continue
+    line="${line:+$line$VL_FLOAT_SEP}$s"
+  done
+  VL_NOCOLOR="$_nc" ; BOLD="$_b" ; NORM="$_n" ; R="$_r"
+  dir=$(dirname "$VL_FLOAT_FILE")
+  mkdir -p "$dir"
+  tmp="$dir/.float.tmp.$$"
+  printf '%s\n' "$line" > "$tmp" && mv -f "$tmp" "$VL_FLOAT_FILE" || rm -f "$tmp"
+}
+
+[ "$VL_FLOAT" = "1" ] && emit_float
 
 if [ "$VL_LAYOUT" = "auto" ]; then
   build_segments "$VL_SEGMENTS"

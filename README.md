@@ -207,6 +207,36 @@ Prefer Powerlevel10k's *lean* look — no backgrounds, just colored text? Set
 > `~/.p10k.zsh` — it will carry over your style, colors, and time format after you opt in.
 > See the [AI interview notes in INSTALL.md](./INSTALL.md#ai-interview).
 
+## Float readout (optional)
+
+`VL_FLOAT=1` makes `statusline.sh` write a one-line **plain-text** readout to
+`~/.claude/coralline/float.txt` on every render (segments from
+`VL_FLOAT_SEGMENTS`, default `model ctx cost`). That's all coralline does —
+it ships **no display carrier**. The file is the seam: pipe it wherever you want
+a glanceable readout that stays visible without looking at Claude Code's bottom
+statusline (a terminal status bar, tmux, a menu-bar app, …).
+
+The readout is **plain text** (no ANSI color), so the default favors stable,
+glance-friendly segments and leaves the color-driven limit warnings
+(`limit5h` / `limit7d`) in the bottom statusline, where threshold colors work.
+You can still add them to `VL_FLOAT_SEGMENTS` if you want the numbers up top.
+
+**Config keys**
+
+| Key | Default | Meaning |
+|---|---|---|
+| `VL_FLOAT` | `0` | `1` = write `float.txt` each render |
+| `VL_FLOAT_SEGMENTS` | `model ctx cost` | segments rendered into the readout (plain text, no color) |
+| `VL_FLOAT_SEP` | `  ·  ` | separator between segments |
+| `VL_FLOAT_FILE` | `~/.claude/coralline/float.txt` | where the readout is written |
+
+(Or toggle `VL_FLOAT` via "float readout" in `configure.sh`'s Details menu.)
+
+A worked iTerm2 carrier (the `coralline-float` companion + setup steps) lives in
+[`example/float-display-iterm2/`](example/float-display-iterm2/) — copy it into
+your dotfiles and adapt. Other terminals (tmux, WezTerm, a menu-bar app, …) just
+need to read `float.txt` the same way.
+
 ## Themes
 
 | | |

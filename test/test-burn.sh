@@ -101,6 +101,7 @@ eval "$(sed -n '/^burn_estimate() {/,/^}/p' "$SCRIPT")"
 eval "$(sed -n '/^seg_burn() {/,/^}/p'      "$SCRIPT")"
 VL_BURN_GLYPH="↗"; VL_BG_BURN=""; VL_BG_5H=237; VL_LAYOUT="fixed"
 VL_FG_OK=114; VL_FG_WARN=179; VL_FG_HOT=167; VL_FG_DIM=245
+VL_NOCOLOR=0   # fg()/push() reference it (statusline default); set under `set -u`
 fh_pct=8 wd_pct=0
 
 # stub the two estimators so binding logic is tested in isolation
