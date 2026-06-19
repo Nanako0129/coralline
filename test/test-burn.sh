@@ -185,12 +185,14 @@ seg_burn
 case "${SEG_TXT[0]}" in *$'\033[38;5;179m'*) ok "render WARN colour" ;; *) bad "render WARN colour" "no WARN fg in ${SEG_TXT[0]}" ;; esac
 case "${SEG_TXT[0]}" in *"⇢ "*) ok "WARN keeps countdown" ;; *) bad "WARN keeps countdown" "got=${SEG_TXT[0]}" ;; esac
 
-# render: warming (cold start, no data) → dim all-good ✓, no … placeholder
+# render: warming (cold start, no data) → dim ↗ … — a distinct "no data yet" mark,
+# NOT the ✓ that idle/all-good use, so a fresh install doesn't look healthy-green.
 SEG_BGS=(); SEG_TXT=(); SEG_LEN=()
 M5S=warming M5E=inf M5R=0 M5T=0  M7E=inf M7R=0 M7T=0
 burn_estimate
 seg_burn
-case "${SEG_TXT[0]}" in *"↗ ✓"*) ok "render warming check" ;; *) bad "render warming check" "got=${SEG_TXT[0]}" ;; esac
+case "${SEG_TXT[0]}" in *"↗ …"*) ok "render warming check" ;; *) bad "render warming check" "got=${SEG_TXT[0]}" ;; esac
+case "${SEG_TXT[0]}" in *"✓"*) bad "warming is not ✓" "got=${SEG_TXT[0]}" ;; *) ok "warming is not ✓" ;; esac
 case "${SEG_TXT[0]}" in *$'\033[38;5;245m'*) ok "render warming dim" ;; *) bad "render warming dim" "no DIM fg in ${SEG_TXT[0]}" ;; esac
 
 # contract: seg_burn renders a PRECOMPUTED estimate and must NOT recompute. The

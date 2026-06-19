@@ -323,11 +323,16 @@ seg_burn() {
   # _BURN_* is precomputed once per render (see the burn_estimate call beside the
   # sampler below), so the visible and float passes share one computation.
   local bg="${VL_BG_BURN:-$VL_BG_5H}"
-  # Warming (no data yet) and idle (stopped burning) both have nothing to
-  # project — show a dim all-good ✓ rather than a placeholder.
+  # Nothing to project yet. Idle (stopped burning) is genuinely all-good → dim ✓.
+  # Warming (no samples yet, e.g. a fresh install) is "unknown", not healthy → a
+  # distinct dim … so a cold start doesn't read as a reassuring green check.
   if [ "$_BURN_STATE" != "active" ]; then
     fg "$VL_FG_DIM"
-    push "$bg" "${_FG} ${VL_BURN_GLYPH} ✓ "
+    if [ "$_BURN_STATE" = "warming" ]; then
+      push "$bg" "${_FG} ${VL_BURN_GLYPH} … "
+    else
+      push "$bg" "${_FG} ${VL_BURN_GLYPH} ✓ "
+    fi
     return 0
   fi
   local eta="$_BURN_ETA" ttr="$_BURN_TTR" col win

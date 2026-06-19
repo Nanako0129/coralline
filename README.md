@@ -160,8 +160,9 @@ the window resets, yellow for a close call, green once you'll comfortably reset 
 The number disappears — replaced by a bright-green `↗ ✓` — only when the projected
 range-to-empty is longer than the limit's whole window (5h or 7d): at that pace you
 couldn't run it dry even starting from a fresh window, so a figure like `24d15h` would
-just be noise. A dim `↗ ✓` means there's nothing to project yet: a cold start with no
-samples, or you've stopped burning.
+just be noise. A dim `↗ …` is the warming state — a cold start with no samples yet, so
+there's nothing to project (deliberately not a green check, so a fresh install doesn't
+read as healthy). A dim `↗ ✓` means you've simply stopped burning: nothing in flight.
 
 The label tells you which limit binds — whichever of `5h`/`7d` will hit 100% soonest.
 `5h` only appears once you're burning hard enough to register at least two integer-%
