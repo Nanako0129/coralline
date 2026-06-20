@@ -82,6 +82,21 @@ eq "5h cross-window state" "$_B5_STATE" "active"
 eq "5h cross-window eta"   "$_B5_ETA"   "16560"
 eq "5h cross-window ttr"   "$_B5_TTR"   "999640"
 
+# same-window jitter: concurrent sessions' caches disagree by a point or two, so
+# pct dips mid-window (13→12) though usage only ever rises. A decrease used to
+# reset `start` to the tail and fit the slope over the last 1-2 samples (1s apart)
+# → bogus ~1m ETA. Now the fit is anchored at the window start and spans the
+# first→last crossing: (1000150,11)→(1000400,16) = 5%/250s, lp=16 → ETA=84/0.02=4200.
+run5h "1000050\t10\t2000000\n1000150\t11\t2000000\n1000380\t13\t2000000\n1000398\t12\t2000000\n1000399\t14\t2000000\n1000400\t16\t2000000\n" 1000400
+eq "5h jitter state" "$_B5_STATE" "active"
+eq "5h jitter eta"   "$_B5_ETA"   "4200"
+eq "5h jitter ttr"   "$_B5_TTR"   "999600"
+
+# min-span guard: a tiny late burst (two crossings 2s apart, nothing earlier in
+# window) is too short to trust → warming, not a wild fast ETA.
+run5h "1000000\t9\t2000000\n1000398\t10\t2000000\n1000400\t11\t2000000\n" 1000400
+eq "5h short-span guard" "$_B5_STATE" "warming"
+
 # trim: 5 rows, trim=3 → file keeps last 3
 BURN_TRIM=3
 run5h "1\t6\t9\n2\t6\t9\n3\t7\t9\n4\t7\t9\n5\t8\t9\n" 6

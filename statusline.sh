@@ -247,12 +247,18 @@ burn_eta_5h() {  # → _B5_STATE _B5_ETA _B5_RATE _B5_TTR ; trims $BURN_FILE
         for (i = 1; i <= n; i++) if (rst[ord[i]] > cur) cur = rst[ord[i]]
         m = 0
         for (i = 1; i <= n; i++) if (rst[ord[i]] == cur) cord[++m] = ord[i]
+        # Within the current window usage only ever rises until the window
+        # resets, so any decrease here is cache-lag jitter between concurrent
+        # sessions (their rate-limit caches refresh at different moments), NOT a
+        # reset — a real reset lands in a new window and was filtered out above.
+        # Anchoring the fit at the window start keeps a few jitter down-blips
+        # from collapsing it onto the last 1-2 samples and exploding the slope
+        # into a bogus ~1m ETA.
         start = 1
-        for (i = 2; i <= m; i++)
-          if (int(pct[cord[i]]) < int(pct[cord[i-1]])) start = i
         le = cord[m]; lp = pct[le]
         ttr = cur - now; if (ttr < 0) ttr = 0
         cwin = now - win
+        minspan = int(win / 4)   # crossings must span this long to trust a slope
         fc_t = 0; fc_p = -1; lc_t = 0; lc_p = -1; ncross = 0; anycross = 0
         for (i = start + 1; i <= m; i++) {
           a = int(pct[cord[i-1]]); b = int(pct[cord[i]])
@@ -264,7 +270,7 @@ burn_eta_5h() {  # → _B5_STATE _B5_ETA _B5_RATE _B5_TTR ; trims $BURN_FILE
             }
           }
         }
-        if (ncross >= 2 && lc_t > fc_t && lc_p > fc_p) {
+        if (ncross >= 2 && lc_t > fc_t && lc_p > fc_p && (lc_t - fc_t) >= minspan) {
           rate = (lc_p - fc_p) / (lc_t - fc_t)
           eta = (100 - lp) / rate; if (eta < 0) eta = 0
           printf "active %.0f %.10f %d\n", eta, rate, ttr
