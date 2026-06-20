@@ -236,17 +236,28 @@ burn_eta_5h() {  # → _B5_STATE _B5_ETA _B5_RATE _B5_TTR ; trims $BURN_FILE
     END {
       if (n == 0) { print "warming inf 0 0"; next_done = 1 }
       if (!next_done) {
+        # Fit the slope over the CURRENT window only. The sample file is shared
+        # by every concurrent session writing to this host; idle ones keep
+        # appending stale snapshots from earlier windows (a different reset).
+        # Mixing windows lets the fit pair two samples seconds apart but tens of
+        # percent apart, giving a near-vertical rate and a bogus ~1m ETA. The
+        # current window is the one with the latest reset; keep only its samples
+        # (cord[1..m]) in file order, then run the recent-slope fit over them.
+        cur = 0
+        for (i = 1; i <= n; i++) if (rst[ord[i]] > cur) cur = rst[ord[i]]
+        m = 0
+        for (i = 1; i <= n; i++) if (rst[ord[i]] == cur) cord[++m] = ord[i]
         start = 1
-        for (i = 2; i <= n; i++)
-          if (int(pct[ord[i]]) < int(pct[ord[i-1]])) start = i
-        le = ord[n]; lp = pct[le]
-        ttr = rst[le] - now; if (ttr < 0) ttr = 0
+        for (i = 2; i <= m; i++)
+          if (int(pct[cord[i]]) < int(pct[cord[i-1]])) start = i
+        le = cord[m]; lp = pct[le]
+        ttr = cur - now; if (ttr < 0) ttr = 0
         cwin = now - win
         fc_t = 0; fc_p = -1; lc_t = 0; lc_p = -1; ncross = 0; anycross = 0
-        for (i = start + 1; i <= n; i++) {
-          a = int(pct[ord[i-1]]); b = int(pct[ord[i]])
+        for (i = start + 1; i <= m; i++) {
+          a = int(pct[cord[i-1]]); b = int(pct[cord[i]])
           if (b > a) {
-            anycross = 1; ct = ord[i]
+            anycross = 1; ct = cord[i]
             if (ct >= cwin && ct <= now) {
               if (fc_p < 0) { fc_t = ct; fc_p = b }
               lc_t = ct; lc_p = b; ncross++

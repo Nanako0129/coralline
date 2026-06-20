@@ -71,6 +71,17 @@ run5h "" 1000000
 eq "5h empty state" "$_B5_STATE" "warming"
 eq "5h empty eta"   "$_B5_ETA"   "inf"
 
+# cross-window isolation: a shared file where an idle session's stale snapshots
+# (50,51 / older reset 1500000) are interleaved with the current window
+# (6,7,8 / later reset 2000000). The estimate must use ONLY the current window —
+# pre-fix the mixed series mis-fit; now it fits the real 6→7→8 slope.
+# crossings (current window): (1000120,7),(1000300,8) → rate=1/180 %/s
+# now pct=8 → ETA=(100-8)*180=16560s
+run5h "1000000\t6\t2000000\n1000060\t50\t1500000\n1000120\t7\t2000000\n1000180\t51\t1500000\n1000300\t8\t2000000\n1000360\t8\t2000000\n" 1000360
+eq "5h cross-window state" "$_B5_STATE" "active"
+eq "5h cross-window eta"   "$_B5_ETA"   "16560"
+eq "5h cross-window ttr"   "$_B5_TTR"   "999640"
+
 # trim: 5 rows, trim=3 → file keeps last 3
 BURN_TRIM=3
 run5h "1\t6\t9\n2\t6\t9\n3\t7\t9\n4\t7\t9\n5\t8\t9\n" 6
