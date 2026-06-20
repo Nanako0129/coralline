@@ -263,7 +263,7 @@ MID  = payload(62, 891234, 45600, 623000, 12800, 41, 9840, 79, 86400 + 11 * 3600
 HIGH = payload(87, 1934000, 98400, 1620000, 45200, 91, 2820, 68, 3 * 86400 + 11 * 3600 + 300, 4.52,
                ladd=321, ldel=87, dur_ms=2820000)
 
-def run_bar(theme, segments, payload_json, extra_conf="", cols=None):
+def run_bar(theme, segments, payload_json, extra_conf="", cols=None, env_extra=None):
     conf = FAKE_HOME / "render.conf"
     conf.write_text(
         f'. {REPO}/themes/{theme}.conf\n'
@@ -275,10 +275,102 @@ def run_bar(theme, segments, payload_json, extra_conf="", cols=None):
         env["COLUMNS"] = str(cols)
     else:
         env.pop("COLUMNS", None)
+    if env_extra:
+        env.update(env_extra)
     out = subprocess.run(["bash", str(REPO / "statusline.sh")],
                          input=payload_json, env=env, check=True,
                          capture_output=True, text=True)
     return [parse_ansi(l) for l in out.stdout.splitlines() if l.strip()]
+
+
+# ── Authoring custom statusline demos ─────────────────────────────────────────
+# The whole tool is built from three reusable primitives, so a new demo is just
+# a *_blocks() function plus one line in main():
+#
+#   run_bar(theme, segments, payload_json, extra_conf="", cols=None, env_extra=None)
+#       Runs the real statusline.sh and returns parsed rows. Everything is
+#       overridable: any theme, any space-separated segment list, any Claude
+#       payload JSON, extra conf lines (e.g. 'VL_STYLE="lean"\n'), a fixed
+#       COLUMNS for wrap demos, and extra env vars.
+#   make_payload(**over)   Build a Claude statusline payload; pass nested dicts
+#                          to override just the fields a scene cares about.
+#   render_image(title, blocks, out_path)
+#       blocks = [(label, rows), ...]; rows = one or more parsed statuslines.
+#
+# Scenes that need a rolling sample file (like burn) seed it and point
+# statusline.sh at it via env_extra — see run_burn below as the template.
+
+def make_payload(**over):
+    """A Claude statusline payload with sensible demo defaults. Override any
+    top-level key; dict values are shallow-merged so a scene can set just
+    e.g. rate_limits without restating the rest."""
+    base = {
+        "cwd": str(DEMO), "workspace": {"current_dir": str(DEMO)},
+        "model": {"display_name": "Claude Fable 5"},
+        "context_window": {"used_percentage": 47,
+                           "total_input_tokens": 234500, "total_output_tokens": 12300,
+                           "current_usage": {"cache_read_input_tokens": 198000,
+                                             "cache_creation_input_tokens": 8400}},
+        "cost": {"total_cost_usd": 1.23},
+    }
+    for k, v in over.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            base[k] = {**base[k], **v}
+        else:
+            base[k] = v
+    return json.dumps(base)
+
+# ── Burn scene ────────────────────────────────────────────────────────────────
+# The 5h estimator is crossing-based: it needs >=2 integer-percent crossings
+# within CORALLINE_BURN_WINDOW (600s). We seed a sample file so the live
+# statusline.sh produces a real recent-slope ETA — no faked output.
+def run_burn(theme, segments, climb, fh_pct, fh_reset_s,
+             wd_pct=40, wd_reset_s=6 * 86400):
+    """climb: list of (seconds_ago, integer_pct) seeding the recent slope, or
+    None for the cold-start 'warming' state. wd_pct=None omits the 7d limit
+    entirely (so a no-samples render shows the true '↗ …', not a 7d fallback)."""
+    now = int(time.time())
+    burn_file = FAKE_HOME / "burn-demo.tsv"
+    burn_file.write_text(
+        "".join(f"{now - ago}\t{pct}\t{now + fh_reset_s}\n" for ago, pct in climb)
+        if climb else ""
+    )
+    rl = {"five_hour": {"used_percentage": fh_pct, "resets_at": now + fh_reset_s}}
+    if wd_pct is not None:
+        rl["seven_day"] = {"used_percentage": wd_pct, "resets_at": now + wd_reset_s}
+    return run_bar(theme, segments, make_payload(rate_limits=rl),
+                   env_extra={"CORALLINE_BURN_FILE": str(burn_file),
+                              "CORALLINE_BURN_WINDOW": "600"})
+
+# A medium recent slope → eta ~2h23m; the colour is set by how soon the 5h
+# window resets relative to that eta (shown by the ↺ countdown beside it).
+CLIMB_MED = [(500, 27), (375, 28), (250, 29), (125, 30)]
+# Two crossings spread far apart → eta beyond the whole 5h window → bright ✓.
+CLIMB_SLOW = [(560, 29), (500, 30)]
+# Crossings exist but all older than the 600s window → idle → dim ✓.
+CLIMB_IDLE = [(1400, 30), (1300, 31)]
+
+# The complete canonical layout, with burn in its documented slot (after
+# limit7d) — i.e. what a fully-configured coralline looks like in Claude Code.
+FULL = "dir git model effort ctx limit5h limit7d burn cost clock"
+
+def burn_blocks():
+    return [
+        ("the full statusline, burn included",     run_burn("claude-coral",
+            FULL, CLIMB_MED, 31, 7800)),
+        ("empties before the 5h window resets",    run_burn("claude-coral",
+            "limit5h burn", CLIMB_MED, 31, 10800)),
+        ("reset and empty are neck-and-neck",      run_burn("claude-coral",
+            "limit5h burn", CLIMB_MED, 31, 7800)),
+        ("window resets with room to spare",       run_burn("claude-coral",
+            "limit5h burn", CLIMB_MED, 31, 3600)),
+        ("✓  slow enough to never run dry",        run_burn("claude-coral",
+            "burn", CLIMB_SLOW, 31, 10800)),
+        ("✓  idle · nothing in flight",            run_burn("claude-coral",
+            "burn", CLIMB_IDLE, 31, 10800, wd_pct=None)),
+        ("…  warming up · no samples yet",         run_burn("claude-coral",
+            "burn", None, 31, 10800, wd_pct=None)),
+    ]
 
 # ── Scenes ───────────────────────────────────────────────────────────────────
 def theme_blocks(theme):
@@ -316,8 +408,15 @@ def wrap_blocks():
     ]
 
 def main():
+    import sys
     ASSETS.mkdir(exist_ok=True)
     setup_demo_repo()
+    only = sys.argv[1] if len(sys.argv) > 1 else None
+    if only in (None, "burn"):
+        render_image("coralline · burn-rate segment", burn_blocks(),
+                     ASSETS / "burn-segment.png")
+    if only == "burn":
+        return
     render_image("coralline — pick your vibe", hero_blocks(), ASSETS / "hero.png")
     render_image("coralline · lean style", lean_blocks(), ASSETS / "style-lean.png")
     render_image("coralline · responsive wrap", wrap_blocks(), ASSETS / "wrap-demo.png")
