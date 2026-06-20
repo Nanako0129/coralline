@@ -97,6 +97,13 @@ eq "5h jitter ttr"   "$_B5_TTR"   "999600"
 run5h "1000000\t9\t2000000\n1000398\t10\t2000000\n1000400\t11\t2000000\n" 1000400
 eq "5h short-span guard" "$_B5_STATE" "warming"
 
+# but a genuine fast burn that spans more than the guard (win/10=60s) must show,
+# not be hidden as warming: 1→5→9→10 over 90s. fc=(1000010,5) lc=(1000100,10),
+# span=90s ≥ 60s → rate=5/90, lp=10 → ETA=90/(5/90)=1620.
+run5h "1000000\t1\t2000000\n1000010\t5\t2000000\n1000070\t9\t2000000\n1000100\t10\t2000000\n" 1000100
+eq "5h fast-burn shows state" "$_B5_STATE" "active"
+eq "5h fast-burn shows eta"   "$_B5_ETA"   "1620"
+
 # trim: 5 rows, trim=3 → file keeps last 3
 BURN_TRIM=3
 run5h "1\t6\t9\n2\t6\t9\n3\t7\t9\n4\t7\t9\n5\t8\t9\n" 6

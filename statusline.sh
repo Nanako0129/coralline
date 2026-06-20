@@ -258,7 +258,11 @@ burn_eta_5h() {  # → _B5_STATE _B5_ETA _B5_RATE _B5_TTR ; trims $BURN_FILE
         le = cord[m]; lp = pct[le]
         ttr = cur - now; if (ttr < 0) ttr = 0
         cwin = now - win
-        minspan = int(win / 4)   # crossings must span this long to trust a slope
+        # Crossings must span at least this long to trust a slope. Cache-lag
+        # jitter between sessions is second-scale, so a sub-minute span is noise;
+        # a genuine fast burn still rises over many seconds and clears this, so
+        # the guard rejects only second-scale noise, not real fast consumption.
+        minspan = int(win / 10)
         fc_t = 0; fc_p = -1; lc_t = 0; lc_p = -1; ncross = 0; anycross = 0
         for (i = start + 1; i <= m; i++) {
           a = int(pct[cord[i-1]]); b = int(pct[cord[i]])
