@@ -51,6 +51,18 @@ VL_BG_BURN=""                   # empty → inherits VL_BG_5H at the use site
 BURN_FILE="${CORALLINE_BURN_FILE:-$HOME/.claude/coralline/burn-5h.tsv}"
 BURN_TRIM=1500                  # internal: max rows kept in the sample file
 
+# Cross-session limit sync (opt-in). Claude Code only re-renders a session's
+# statusline on activity, and the rate-limit % in each render's JSON is that
+# session's last-seen snapshot, so idle sessions show stale/divergent numbers.
+# With this on, every render records its 5h/7d (reset, pct) to a small per-host
+# high-water store, and limit5h/limit7d show the highest pct any session has seen
+# for the current window — so sessions converge whenever they redraw. It cannot
+# refresh a session that is not redrawing at all (that is a Claude Code limit).
+# The store is a directory-set (see rl_sample/rl_latest), race-free by design.
+VL_LIMIT_SYNC=0
+RL5H_FILE="${CORALLINE_RL5H_FILE:-$HOME/.claude/coralline/limit-5h.tsv}"
+RL7D_FILE="${CORALLINE_RL7D_FILE:-$HOME/.claude/coralline/limit-7d.tsv}"
+
 # Powerline glyphs (printf -v keeps these fork-free; cleared when VL_ASCII=1)
 printf -v VL_CAP_L '\xee\x82\xb6'   # U+E0B6 left rounded cap
 printf -v VL_CAP_R '\xee\x82\xb4'   # U+E0B4 right rounded cap
@@ -222,6 +234,54 @@ burn_sample() {  # append one 5h sample; $1=now $2=pct(raw) $3=resets_at(raw)
   printf '%s\t%s\t%s\n' "$1" "$2" "$_EP" >> "$BURN_FILE" 2>/dev/null
 }
 
+# The store is a SET of atomically-created directory entries under <file>.d, each
+# named "<reset:%010d>_<pct:%07.3f>". Fixed widths make lexical order == numeric
+# order (reset dominates, pct tie-breaks), so the last entry is the current
+# window's high-water. Three race-free primitives, with no shared append and no
+# whole-file rewrite (so the rename-unlinks-the-inode hazard of a single mutable
+# file cannot occur):
+#   add  = one mkdir (atomic; concurrent adds make distinct names; idempotent)
+#   read = ls | sort | tail -1
+#   gc   = rmdir every snapshot entry below the snapshot max. Removing a non-max
+#          element cannot change the max, and entries added after the snapshot are
+#          untouched, so a concurrent higher add is never lost (no lock needed).
+rl_dir() { _RLD="${1%.tsv}.d"; }
+
+rl_sample() {  # $1=file $2=pct(raw int/float) $3=resets_at(raw)
+  [ -n "$2" ] || return 0
+  to_epoch "$3" || return 0
+  rl_dir "$1"
+  if [ ! -d "$_RLD" ]; then
+    mkdir -p "$_RLD" 2>/dev/null
+    # One-shot migration: a pre-dir-set build kept a flat <file>.tsv (+ tmp); the
+    # dir-set never touches it, so drop it once when the dir is first created.
+    rm -f "$1" "$1".*.tmp 2>/dev/null
+  fi
+  local r p
+  printf -v r '%010d' "$_EP" 2>/dev/null || return 0
+  printf -v p '%07.3f' "$2"  2>/dev/null || return 0
+  mkdir "$_RLD/${r}_${p}" 2>/dev/null
+  return 0
+}
+
+rl_latest() {  # $1=file → _LL_PCT _LL_RST (epoch)
+  _LL_PCT=""; _LL_RST=""
+  rl_dir "$1"; [ -d "$_RLD" ] || return 0
+  # ONE snapshot for both the max and the GC. A second listing could include an
+  # entry added after `hi` was chosen, and the loop would rmdir that fresher (and
+  # possibly higher) entry. Iterating the same snapshot means post-snapshot adds
+  # are never deletion candidates, so a concurrent higher add is never lost.
+  local snap hi d
+  snap=$(ls -1 "$_RLD" 2>/dev/null | grep '^[0-9]' | sort)
+  [ -n "$snap" ] || return 0
+  hi=$(printf '%s\n' "$snap" | tail -n1)
+  _LL_RST=$(( 10#${hi%_*} ))   # 10# avoids the leading-zero octal trap on the reset
+  _LL_PCT="${hi#*_}"           # keep as string so a fractional pct is preserved
+  for d in $snap; do
+    [ "$d" = "$hi" ] || rmdir "$_RLD/$d" 2>/dev/null
+  done
+}
+
 burn_eta_5h() {  # → _B5_STATE _B5_ETA _B5_RATE _B5_TTR ; trims $BURN_FILE
   _B5_STATE="warming"; _B5_ETA="inf"; _B5_RATE="0"; _B5_TTR="0"
   [ -f "$BURN_FILE" ] || return 0
@@ -306,12 +366,13 @@ $out
 EOF
 }
 
-burn_eta_7d() {  # → _B7_ETA _B7_RATE _B7_TTR (stateless; uses wd_pct/wd_rst)
+burn_eta_7d() {  # → _B7_* (stateless); $1=pct(=wd_pct) $2=resets_at(=wd_rst)
+  local p7="${1:-$wd_pct}" r7="${2:-$wd_rst}"
   _B7_ETA="inf"; _B7_RATE="0"; _B7_TTR="0"
-  [ -n "$wd_pct" ] || return 0
-  to_epoch "$wd_rst" || return 0
+  [ -n "$p7" ] || return 0
+  to_epoch "$r7" || return 0
   read -r _B7_ETA _B7_RATE _B7_TTR <<EOF
-$(awk -v p="$wd_pct" -v r="$_EP" -v now="$NOW" 'BEGIN {
+$(awk -v p="$p7" -v r="$_EP" -v now="$NOW" 'BEGIN {
     ttr = r - now; if (ttr < 0) ttr = 0
     ws = r - 7 * 86400; el = now - ws
     if (p + 0 <= 0 || el <= 0) { print "inf 0 " ttr; exit }
@@ -323,7 +384,16 @@ EOF
 }
 
 burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
-  burn_eta_5h; burn_eta_7d
+  burn_eta_5h
+  # 5h already reads the shared sample file, so it is cross-session. For 7d, when
+  # limit-sync is on, project from the same synced value the limit7d segment shows
+  # so burn and limit7d cannot contradict each other on a stale local snapshot.
+  if [ "$VL_LIMIT_SYNC" = "1" ]; then
+    rl_latest "$RL7D_FILE"
+    if [ -n "$_LL_PCT" ]; then burn_eta_7d "$_LL_PCT" "$_LL_RST"; else burn_eta_7d; fi
+  else
+    burn_eta_7d
+  fi
   local f5=0 f7=0
   [ "$_B5_ETA" != "inf" ] && f5=1
   [ "$_B7_ETA" != "inf" ] && f7=1
@@ -569,8 +639,22 @@ seg_limit() {  # $1=label $2=pct $3=resets_at $4=bg
   if [ -n "$_CD" ]; then fg "$VL_FG_DIM"; rst="${_FG}↺${_CD}"; fi
   push "$4" "${fgc} $1 ${_BAR} ${v}% ${rst} "
 }
-seg_limit5h() { seg_limit "5h" "$fh_pct" "$fh_rst" "$VL_BG_5H"; }
-seg_limit7d() { seg_limit "7d" "$wd_pct" "$wd_rst" "$VL_BG_7D"; }
+# With VL_LIMIT_SYNC, show the freshest cross-session value for the current
+# window (falling back to this session's own snapshot when none is recorded).
+seg_limit5h() {
+  local p="$fh_pct" r="$fh_rst"
+  if [ "$VL_LIMIT_SYNC" = "1" ]; then
+    rl_latest "$RL5H_FILE"; [ -n "$_LL_PCT" ] && { p="$_LL_PCT"; r="$_LL_RST"; }
+  fi
+  seg_limit "5h" "$p" "$r" "$VL_BG_5H"
+}
+seg_limit7d() {
+  local p="$wd_pct" r="$wd_rst"
+  if [ "$VL_LIMIT_SYNC" = "1" ]; then
+    rl_latest "$RL7D_FILE"; [ -n "$_LL_PCT" ] && { p="$_LL_PCT"; r="$_LL_RST"; }
+  fi
+  seg_limit "7d" "$p" "$r" "$VL_BG_7D"
+}
 
 seg_cost() {
   [ -n "$cost" ] && [ "$cost" != "0" ] || return 0
@@ -682,9 +766,16 @@ term_cols() {  # → _COLS
 # single source of truth, so enabling burn in configure.sh just works. _SEG_SCAN
 # also covers VL_FLOAT_SEGMENTS, so burn samples even when it's only in the float
 # readout (mirrors how read_git is gated above).
-case "$_SEG_SCAN" in
-  *" burn "*) burn_sample "$NOW" "$fh_pct" "$fh_rst"; burn_estimate ;;
-esac
+case "$_SEG_SCAN" in *" burn "*) burn_sample "$NOW" "$fh_pct" "$fh_rst" ;; esac
+# limit-sync records to its own high-water store (separate from the burn file),
+# only for the limit segment that is actually shown.
+if [ "$VL_LIMIT_SYNC" = "1" ]; then
+  case "$_SEG_SCAN" in *" limit5h "*) rl_sample "$RL5H_FILE" "$fh_pct" "$fh_rst" ;; esac
+  # burn also consumes the synced 7d (below), so sample it whenever burn shows too,
+  # otherwise burn would read a stale/older synced 7d instead of this render's value.
+  case "$_SEG_SCAN" in *" limit7d "*|*" burn "*) rl_sample "$RL7D_FILE" "$wd_pct" "$wd_rst" ;; esac
+fi
+case "$_SEG_SCAN" in *" burn "*) burn_estimate ;; esac
 
 # Defensive ANSI stripper (the VL_NOCOLOR path should already emit none) → _PLAIN.
 strip_ansi() {

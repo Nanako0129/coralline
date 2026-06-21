@@ -41,6 +41,50 @@ eval "$(sed -n '/^burn_eta_5h() {/,/^}/p' "$SCRIPT")"
 CORALLINE_BURN_WINDOW=600
 BURN_TRIM=1500
 
+# rl_sample / rl_latest: directory-as-set high-water store (cross-session limit sync).
+# Entry = <reset:%010d>_<pct:%07.3f> dir; read = max; gc = drop below-max. So pct
+# reads back fixed-width (e.g. 034.000), which display (%.0f) and burn (awk +0) parse.
+eval "$(sed -n '/^rl_dir() {/,/^}/p'    "$SCRIPT")"
+eval "$(sed -n '/^rl_sample() {/,/^}/p' "$SCRIPT")"
+eval "$(sed -n '/^rl_latest() {/,/^}/p' "$SCRIPT")"
+RLF="$TMPD/limit.tsv"
+# mixed windows: current window = latest reset (2000), its max pct = 34. pct 51
+# belongs to an OLDER window (reset 1500) and must not win.
+rl_sample "$RLF" 10 1000; rl_sample "$RLF" 34 2000; rl_sample "$RLF" 31 2000
+rl_sample "$RLF" 9 2000;  rl_sample "$RLF" 51 1500
+rl_latest "$RLF"
+eq "rl_latest pct" "$_LL_PCT" "034.000"
+eq "rl_latest rst" "$_LL_RST" "2000"
+# same-window cache-lag: highest pct wins regardless of insertion order
+rm -rf "$TMPD/limit.d"
+rl_sample "$RLF" 40 2000; rl_sample "$RLF" 44 2000; rl_sample "$RLF" 41 2000
+rl_latest "$RLF"; eq "rl_latest same-window max" "$_LL_PCT" "044.000"
+# fractional pct preserved (not quantized to an integer)
+rm -rf "$TMPD/limit.d"
+rl_sample "$RLF" 41.2 2000
+rl_latest "$RLF"; eq "rl_latest float pct" "$_LL_PCT" "041.200"
+# missing store → empty (caller falls back to the session's own snapshot)
+rl_latest "$TMPD/none.tsv"; eq "rl_latest missing" "$_LL_PCT" ""
+# a brand-new window (later reset, lower pct) supersedes the old high-water
+rm -rf "$TMPD/limit.d"
+rl_sample "$RLF" 80 2000; rl_sample "$RLF" 3 9000
+rl_latest "$RLF"; eq "rl_latest new window pct" "$_LL_PCT" "003.000"
+eq "rl_latest new window rst" "$_LL_RST" "9000"
+# leading-zero reset must decode as decimal, not octal (10# guard)
+rm -rf "$TMPD/limit.d"
+rl_sample "$RLF" 5 8; rl_latest "$RLF"; eq "rl_latest octal-safe rst" "$_LL_RST" "8"
+# gc keeps only the current-window high-water entry after a read
+rm -rf "$TMPD/limit.d"
+rl_sample "$RLF" 50 2000; rl_sample "$RLF" 48 2000; rl_sample "$RLF" 47 2000
+rl_latest "$RLF"
+eq "rl_latest gc keeps one" "$(ls -1 "$TMPD/limit.d" | wc -l | tr -d ' ')" "1"
+rl_latest "$RLF"; eq "rl_latest gc keeps max" "$_LL_PCT" "050.000"
+# migration: a legacy flat-file store is removed when the dir-set is first created
+rm -rf "$TMPD/limit.d"; printf 'x' > "$TMPD/limit.tsv"
+rl_sample "$RLF" 12 2000
+eq "rl legacy flat-file removed" "$([ -e "$TMPD/limit.tsv" ] && echo present || echo gone)" "gone"
+eq "rl dir-set created"          "$([ -d "$TMPD/limit.d" ]  && echo yes || echo no)" "yes"
+
 # helper: write a fixture and run the estimator at a given "now"
 run5h() { BURN_FILE="$TMPD/b5.tsv"; printf '%b' "$1" > "$BURN_FILE"; NOW="$2"; burn_eta_5h; }
 
@@ -140,6 +184,7 @@ eval "$(sed -n '/^seg_burn() {/,/^}/p'      "$SCRIPT")"
 VL_BURN_GLYPH="↗"; VL_BG_BURN=""; VL_BG_5H=237; VL_LAYOUT="fixed"
 VL_FG_OK=114; VL_FG_WARN=179; VL_FG_HOT=167; VL_FG_DIM=245
 VL_NOCOLOR=0   # fg()/push() reference it (statusline default); set under `set -u`
+VL_LIMIT_SYNC=0   # burn_estimate branches on it (statusline default); set under `set -u`
 fh_pct=8 wd_pct=0
 
 # stub the two estimators so binding logic is tested in isolation
