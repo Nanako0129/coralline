@@ -57,6 +57,14 @@ eq "limit_latest rst" "$_LL_RST" "2000"
 limit_latest "$TMPD/none.tsv"; eq "limit_latest missing" "$_LL_PCT" ""
 runll ""; eq "limit_latest empty" "$_LL_PCT" ""
 
+# trim must keep each second's MAX, not the last write: a same-second lower late
+# write (epoch 20: 44 then 41) over the cap must not regress the synced value.
+BURN_TRIM=2
+printf '%b' "10\t40\t2000\n20\t44\t2000\n20\t41\t2000\n" > "$TMPD/tr.tsv"
+limit_latest "$TMPD/tr.tsv"; eq "limit_latest trim read"      "$_LL_PCT" "44"
+limit_latest "$TMPD/tr.tsv"; eq "limit_latest trim keeps max" "$_LL_PCT" "44"
+BURN_TRIM=1500
+
 # helper: write a fixture and run the estimator at a given "now"
 run5h() { BURN_FILE="$TMPD/b5.tsv"; printf '%b' "$1" > "$BURN_FILE"; NOW="$2"; burn_eta_5h; }
 
@@ -130,6 +138,10 @@ eq "5h trim first-kept" "$(head -1 "$TMPD/b5.tsv" | cut -f1)" "3"
 BURN_TRIM=3
 run5h "1\t6\t9\n1\t6\t9\n1\t6\t9\n2\t7\t9\n2\t7\t9\n2\t7\t9\n" 3
 eq "5h trim same-second rows" "$(wc -l < "$TMPD/b5.tsv" | tr -d ' ')" "2"
+# trim keeps each second's MAX (epoch 2: 7 then 5) so the persisted row isn't the lower late write
+BURN_TRIM=2
+run5h "1\t6\t9\n2\t7\t9\n2\t5\t9\n" 3
+eq "5h trim keeps same-second max" "$(awk -F'\t' '$1==2{print $2}' "$TMPD/b5.tsv")" "7"
 BURN_TRIM=1500
 
 eval "$(sed -n '/^burn_eta_7d() {/,/^}/p' "$SCRIPT")"

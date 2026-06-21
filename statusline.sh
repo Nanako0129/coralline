@@ -249,7 +249,8 @@ limit_latest() {  # $1=file
                                                      # so same-second writes do not
                                                      # last-writer-wins away a higher %)
       if (!(e in seen)) { ord[++n] = e; seen[e] = 1 }  # dedup is for trimming only
-      pct[e] = $2; rst[e] = r
+      if (!(e in mxe) || p > mxe[e]) mxe[e] = p          # max %/second, persisted by trim
+      rst[e] = r
     }
     END {
       if (n == 0) exit
@@ -257,7 +258,7 @@ limit_latest() {  # $1=file
       if (NR > trim) {
         lo = n - trim + 1; if (lo < 1) lo = 1
         for (i = lo; i <= n; i++)
-          printf "%d\t%s\t%d\n", ord[i], pct[ord[i]], rst[ord[i]] > tmp
+          printf "%d\t%s\t%d\n", ord[i], mxe[ord[i]], rst[ord[i]] > tmp
       }
     }
   ' "$1")
@@ -276,9 +277,10 @@ burn_eta_5h() {  # → _B5_STATE _B5_ETA _B5_RATE _B5_TTR ; trims $BURN_FILE
   out=$(awk -F'\t' -v now="$NOW" -v win="$CORALLINE_BURN_WINDOW" \
             -v trim="$BURN_TRIM" -v tmp="$tmp" '
     $2 != "" {
-      e = $1 + 0
+      e = $1 + 0; p = $2 + 0
       if (!(e in seen)) { ord[++n] = e; seen[e] = 1 }
-      pct[e] = $2 + 0; rst[e] = $3 + 0
+      pct[e] = p; rst[e] = $3 + 0
+      if (!(e in mxe) || p > mxe[e]) mxe[e] = p   # max %/second, persisted by trim
     }
     END {
       if (n == 0) { print "warming inf 0 0"; next_done = 1 }
@@ -333,12 +335,12 @@ burn_eta_5h() {  # → _B5_STATE _B5_ETA _B5_RATE _B5_TTR ; trims $BURN_FILE
         # Trim on PHYSICAL rows (NR), not distinct seconds (n): sub-second render
         # bursts (resize storms) append same-second rows that n dedups away, so an
         # n-based cap would never fire and the file would grow unbounded. The
-        # rewrite emits the deduped last-`trim` seconds, so it also collapses the
-        # burst rows. Fires only when the file actually exceeds the cap.
+        # rewrite emits the last-`trim` seconds, keeping the per-second MAX (mxe)
+        # so a same-second lower late write does not persist over a higher reading.
         if (NR > trim) {
           lo = n - trim + 1; if (lo < 1) lo = 1
           for (i = lo; i <= n; i++)
-            printf "%d\t%s\t%d\n", ord[i], pct[ord[i]], rst[ord[i]] > tmp
+            printf "%d\t%s\t%d\n", ord[i], mxe[ord[i]], rst[ord[i]] > tmp
         }
       }
     }
