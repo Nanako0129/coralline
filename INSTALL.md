@@ -153,7 +153,7 @@ Ask concise questions. If the user says "you decide", choose the defaults.
    worktrees, suggest enabling `project`. If the user runs many concurrent Claude sessions
    and is bothered by `limit5h` / `limit7d` showing different percentages per session,
    mention `VL_LIMIT_SYNC=1`: it makes those segments show the freshest reading any session
-   has recorded for the current window (writing `limit-5h.tsv` / `limit-7d.tsv`). Off by
+   has recorded for the current window (in a `limit-5h.d` / `limit-7d.d` store). Off by
    default; it only converges sessions when they redraw and cannot refresh a fully idle one.
 
 If `~/.p10k.zsh` exists, ask whether the user wants to import its style, clock, and main

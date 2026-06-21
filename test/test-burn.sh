@@ -41,35 +41,44 @@ eval "$(sed -n '/^burn_eta_5h() {/,/^}/p' "$SCRIPT")"
 CORALLINE_BURN_WINDOW=600
 BURN_TRIM=1500
 
-# rl_sample / rl_latest: high-water store keyed by reset (cross-session limit sync)
+# rl_sample / rl_latest: directory-as-set high-water store (cross-session limit sync).
+# Entry = <reset:%010d>_<pct:%07.3f> dir; read = max; gc = drop below-max. So pct
+# reads back fixed-width (e.g. 034.000), which display (%.0f) and burn (awk +0) parse.
+eval "$(sed -n '/^rl_dir() {/,/^}/p'    "$SCRIPT")"
 eval "$(sed -n '/^rl_sample() {/,/^}/p' "$SCRIPT")"
 eval "$(sed -n '/^rl_latest() {/,/^}/p' "$SCRIPT")"
-RL_CAP=200
-runrl() { printf '%b' "$1" > "$TMPD/rl.tsv"; rl_latest "$TMPD/rl.tsv"; }
-# format is "<reset>\t<pct>". current window = latest reset (2000); its max pct = 34,
-# even though an earlier same-window row (44) belongs to a DIFFERENT reset (1500).
-runrl "1000\t10\n2000\t34\n2000\t31\n2000\t9\n1500\t51\n"
-eq "rl_latest pct" "$_LL_PCT" "34"
+RLF="$TMPD/limit.tsv"
+# mixed windows: current window = latest reset (2000), its max pct = 34. pct 51
+# belongs to an OLDER window (reset 1500) and must not win.
+rl_sample "$RLF" 10 1000; rl_sample "$RLF" 34 2000; rl_sample "$RLF" 31 2000
+rl_sample "$RLF" 9 2000;  rl_sample "$RLF" 51 1500
+rl_latest "$RLF"
+eq "rl_latest pct" "$_LL_PCT" "034.000"
 eq "rl_latest rst" "$_LL_RST" "2000"
-# same-window cache-lag: highest pct wins regardless of write order (no epoch)
-runrl "2000\t40\n2000\t44\n2000\t41\n"
-eq "rl_latest same-window max" "$_LL_PCT" "44"
-# no file / empty → empty (caller falls back to the session's own snapshot)
+# same-window cache-lag: highest pct wins regardless of insertion order
+rm -rf "$TMPD/limit.d"
+rl_sample "$RLF" 40 2000; rl_sample "$RLF" 44 2000; rl_sample "$RLF" 41 2000
+rl_latest "$RLF"; eq "rl_latest same-window max" "$_LL_PCT" "044.000"
+# fractional pct preserved (not quantized to an integer)
+rm -rf "$TMPD/limit.d"
+rl_sample "$RLF" 41.2 2000
+rl_latest "$RLF"; eq "rl_latest float pct" "$_LL_PCT" "041.200"
+# missing store → empty (caller falls back to the session's own snapshot)
 rl_latest "$TMPD/none.tsv"; eq "rl_latest missing" "$_LL_PCT" ""
-runrl ""; eq "rl_latest empty" "$_LL_PCT" ""
-
-# collapse keeps the current window's high-water mark even when later rows are
-# lower and the file passes the cap (no time-based eviction of the max).
-RL_CAP=3
-printf '%b' "2000\t50\n2000\t48\n2000\t47\n2000\t46\n" > "$TMPD/hw.tsv"
-rl_latest "$TMPD/hw.tsv"; eq "rl_latest collapse read"      "$_LL_PCT" "50"
-rl_latest "$TMPD/hw.tsv"; eq "rl_latest collapse keeps max" "$_LL_PCT" "50"
-eq "rl_latest collapsed rowcount" "$(wc -l < "$TMPD/hw.tsv" | tr -d ' ')" "1"
 # a brand-new window (later reset, lower pct) supersedes the old high-water
-printf '%b' "2000\t50\n9000\t3\n" > "$TMPD/nw.tsv"
-rl_latest "$TMPD/nw.tsv"; eq "rl_latest new window pct" "$_LL_PCT" "3"
+rm -rf "$TMPD/limit.d"
+rl_sample "$RLF" 80 2000; rl_sample "$RLF" 3 9000
+rl_latest "$RLF"; eq "rl_latest new window pct" "$_LL_PCT" "003.000"
 eq "rl_latest new window rst" "$_LL_RST" "9000"
-RL_CAP=200
+# leading-zero reset must decode as decimal, not octal (10# guard)
+rm -rf "$TMPD/limit.d"
+rl_sample "$RLF" 5 8; rl_latest "$RLF"; eq "rl_latest octal-safe rst" "$_LL_RST" "8"
+# gc keeps only the current-window high-water entry after a read
+rm -rf "$TMPD/limit.d"
+rl_sample "$RLF" 50 2000; rl_sample "$RLF" 48 2000; rl_sample "$RLF" 47 2000
+rl_latest "$RLF"
+eq "rl_latest gc keeps one" "$(ls -1 "$TMPD/limit.d" | wc -l | tr -d ' ')" "1"
+rl_latest "$RLF"; eq "rl_latest gc keeps max" "$_LL_PCT" "050.000"
 
 # helper: write a fixture and run the estimator at a given "now"
 run5h() { BURN_FILE="$TMPD/b5.tsv"; printf '%b' "$1" > "$BURN_FILE"; NOW="$2"; burn_eta_5h; }

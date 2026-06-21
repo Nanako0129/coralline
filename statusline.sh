@@ -55,13 +55,13 @@ BURN_TRIM=1500                  # internal: max rows kept in the sample file
 # statusline on activity, and the rate-limit % in each render's JSON is that
 # session's last-seen snapshot, so idle sessions show stale/divergent numbers.
 # With this on, every render records its 5h/7d (reset, pct) to a small per-host
-# high-water file, and limit5h/limit7d show the highest pct any session has seen
+# high-water store, and limit5h/limit7d show the highest pct any session has seen
 # for the current window — so sessions converge whenever they redraw. It cannot
 # refresh a session that is not redrawing at all (that is a Claude Code limit).
+# The store is a directory-set (see rl_sample/rl_latest), race-free by design.
 VL_LIMIT_SYNC=0
 RL5H_FILE="${CORALLINE_RL5H_FILE:-$HOME/.claude/coralline/limit-5h.tsv}"
 RL7D_FILE="${CORALLINE_RL7D_FILE:-$HOME/.claude/coralline/limit-7d.tsv}"
-RL_CAP=200                      # internal: collapse the high-water file past this many rows
 
 # Powerline glyphs (printf -v keeps these fork-free; cleared when VL_ASCII=1)
 printf -v VL_CAP_L '\xee\x82\xb6'   # U+E0B6 left rounded cap
@@ -234,44 +234,42 @@ burn_sample() {  # append one 5h sample; $1=now $2=pct(raw) $3=resets_at(raw)
   printf '%s\t%s\t%s\n' "$1" "$2" "$_EP" >> "$BURN_FILE" 2>/dev/null
 }
 
-# Cross-session limit sync uses a tiny high-water store, one append per render of
-# "<reset-epoch>\t<pct>", kept separate from the burn slope file so their trims
-# never conflict. rl_sample records; rl_latest returns the highest pct for the
-# latest reset (usage only rises within a window, so that is the truest current
-# figure any session has recorded). It is keyed by reset, not epoch, so there is
-# no same-second or cross-reset coalescing; and the collapse keeps the current
-# window's max, so the high-water mark is never aged out.
-rl_sample() {  # $1=file $2=pct(raw) $3=resets_at(raw)
+# The store is a SET of atomically-created directory entries under <file>.d, each
+# named "<reset:%010d>_<pct:%07.3f>". Fixed widths make lexical order == numeric
+# order (reset dominates, pct tie-breaks), so the last entry is the current
+# window's high-water. Three race-free primitives, with no shared append and no
+# whole-file rewrite (so the rename-unlinks-the-inode hazard of a single mutable
+# file cannot occur):
+#   add  = one mkdir (atomic; concurrent adds make distinct names; idempotent)
+#   read = ls | sort | tail -1
+#   gc   = rmdir every snapshot entry below the snapshot max. Removing a non-max
+#          element cannot change the max, and entries added after the snapshot are
+#          untouched, so a concurrent higher add is never lost (no lock needed).
+rl_dir() { _RLD="${1%.tsv}.d"; }
+
+rl_sample() {  # $1=file $2=pct(raw int/float) $3=resets_at(raw)
   [ -n "$2" ] || return 0
   to_epoch "$3" || return 0
-  [ -d "${1%/*}" ] || mkdir -p "${1%/*}" 2>/dev/null
-  printf '%s\t%s\n' "$_EP" "$2" >> "$1" 2>/dev/null
+  rl_dir "$1"
+  [ -d "$_RLD" ] || mkdir -p "$_RLD" 2>/dev/null
+  local r p
+  printf -v r '%010d' "$_EP" 2>/dev/null || return 0
+  printf -v p '%07.3f' "$2"  2>/dev/null || return 0
+  mkdir "$_RLD/${r}_${p}" 2>/dev/null
+  return 0
 }
 
-rl_latest() {  # $1=file → _LL_PCT _LL_RST (epoch) ; collapses the file when large
+rl_latest() {  # $1=file → _LL_PCT _LL_RST (epoch)
   _LL_PCT=""; _LL_RST=""
-  [ -f "$1" ] || return 0
-  local tmp="$1.$$.tmp" out
-  out=$(awk -F'\t' -v cap="$RL_CAP" -v tmp="$tmp" '
-    $2 != "" {
-      r = $1 + 0; p = $2 + 0
-      if (!(r in mxp) || p > mxp[r]) mxp[r] = p   # max pct per reset (window)
-      if (r > cur) cur = r                        # current window = latest reset
-      n++
-    }
-    END {
-      if (cur == "" || !(cur in mxp)) exit
-      printf "%s %d\n", mxp[cur], cur
-      if (n > cap)                                 # we only ever read the latest reset,
-        printf "%d\t%s\n", cur, mxp[cur] > tmp     # so collapse to its high-water row
-    }
-  ' "$1")
-  [ -f "$tmp" ] && mv "$tmp" "$1" 2>/dev/null
-  for _f in "$1".*.tmp; do        # sweep tmps orphaned by dead sessions
-    [ -e "$_f" ] || break
-    [ "$_f" = "$tmp" ] || rm -f "$_f" 2>/dev/null
+  rl_dir "$1"; [ -d "$_RLD" ] || return 0
+  local hi d
+  hi=$(ls -1 "$_RLD" 2>/dev/null | grep '^[0-9]' | sort | tail -n1)
+  [ -n "$hi" ] || return 0
+  _LL_RST=$(( 10#${hi%_*} ))   # 10# avoids the leading-zero octal trap on the reset
+  _LL_PCT="${hi#*_}"           # keep as string so a fractional pct is preserved
+  for d in $(ls -1 "$_RLD" 2>/dev/null | grep '^[0-9]' | sort); do
+    [ "$d" = "$hi" ] || rmdir "$_RLD/$d" 2>/dev/null
   done
-  [ -n "$out" ] && { _LL_PCT="${out% *}"; _LL_RST="${out#* }"; }
 }
 
 burn_eta_5h() {  # → _B5_STATE _B5_ETA _B5_RATE _B5_TTR ; trims $BURN_FILE
@@ -763,7 +761,9 @@ case "$_SEG_SCAN" in *" burn "*) burn_sample "$NOW" "$fh_pct" "$fh_rst" ;; esac
 # only for the limit segment that is actually shown.
 if [ "$VL_LIMIT_SYNC" = "1" ]; then
   case "$_SEG_SCAN" in *" limit5h "*) rl_sample "$RL5H_FILE" "$fh_pct" "$fh_rst" ;; esac
-  case "$_SEG_SCAN" in *" limit7d "*) rl_sample "$RL7D_FILE" "$wd_pct" "$wd_rst" ;; esac
+  # burn also consumes the synced 7d (below), so sample it whenever burn shows too,
+  # otherwise burn would read a stale/older synced 7d instead of this render's value.
+  case "$_SEG_SCAN" in *" limit7d "*|*" burn "*) rl_sample "$RL7D_FILE" "$wd_pct" "$wd_rst" ;; esac
 fi
 case "$_SEG_SCAN" in *" burn "*) burn_estimate ;; esac
 
