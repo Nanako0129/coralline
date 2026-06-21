@@ -54,12 +54,14 @@ BURN_TRIM=1500                  # internal: max rows kept in the sample file
 # Cross-session limit sync (opt-in). Claude Code only re-renders a session's
 # statusline on activity, and the rate-limit % in each render's JSON is that
 # session's last-seen snapshot, so idle sessions show stale/divergent numbers.
-# With this on, every render records its 5h/7d (pct, reset) to a per-host file,
-# and limit5h/limit7d display the freshest value any session has seen for the
-# current window — so sessions converge whenever they redraw. It cannot refresh
-# a session that is not redrawing at all (that is a Claude Code limitation).
+# With this on, every render records its 5h/7d (reset, pct) to a small per-host
+# high-water file, and limit5h/limit7d show the highest pct any session has seen
+# for the current window — so sessions converge whenever they redraw. It cannot
+# refresh a session that is not redrawing at all (that is a Claude Code limit).
 VL_LIMIT_SYNC=0
+RL5H_FILE="${CORALLINE_RL5H_FILE:-$HOME/.claude/coralline/limit-5h.tsv}"
 RL7D_FILE="${CORALLINE_RL7D_FILE:-$HOME/.claude/coralline/limit-7d.tsv}"
+RL_CAP=200                      # internal: collapse the high-water file past this many rows
 
 # Powerline glyphs (printf -v keeps these fork-free; cleared when VL_ASCII=1)
 printf -v VL_CAP_L '\xee\x82\xb6'   # U+E0B6 left rounded cap
@@ -223,43 +225,45 @@ fmt_eta() {  # → _ETA ; $1=seconds (mirrors fmt_countdown's d/h/m formatting)
   else                      printf -v _ETA '%dm' "$m"; fi
 }
 
-burn_sample() {  # append one sample; $1=now $2=pct(raw) $3=resets_at(raw) $4=file(=BURN_FILE)
-  local f="${4:-$BURN_FILE}"
+burn_sample() {  # append one 5h sample; $1=now $2=pct(raw) $3=resets_at(raw)
   [ -n "$2" ] || return 0
   to_epoch "$3" || return 0
   # [ -d ] is a builtin (steady state stays fork-free); mkdir forks only on the
   # first render after a fresh install, when ~/.claude/coralline/ doesn't exist.
-  [ -d "${f%/*}" ] || mkdir -p "${f%/*}" 2>/dev/null
-  printf '%s\t%s\t%s\n' "$1" "$2" "$_EP" >> "$f" 2>/dev/null
+  [ -d "${BURN_FILE%/*}" ] || mkdir -p "${BURN_FILE%/*}" 2>/dev/null
+  printf '%s\t%s\t%s\n' "$1" "$2" "$_EP" >> "$BURN_FILE" 2>/dev/null
 }
 
-# Freshest cross-session value for the current window from a shared sample file:
-# the highest pct among rows sharing the latest reset (usage only rises within a
-# window, so that is the truest account-wide figure any session has recorded).
-# → _LL_PCT _LL_RST (both empty if there is no usable data). Also bounds the file.
-limit_latest() {  # $1=file
+# Cross-session limit sync uses a tiny high-water store, one append per render of
+# "<reset-epoch>\t<pct>", kept separate from the burn slope file so their trims
+# never conflict. rl_sample records; rl_latest returns the highest pct for the
+# latest reset (usage only rises within a window, so that is the truest current
+# figure any session has recorded). It is keyed by reset, not epoch, so there is
+# no same-second or cross-reset coalescing; and the collapse keeps the current
+# window's max, so the high-water mark is never aged out.
+rl_sample() {  # $1=file $2=pct(raw) $3=resets_at(raw)
+  [ -n "$2" ] || return 0
+  to_epoch "$3" || return 0
+  [ -d "${1%/*}" ] || mkdir -p "${1%/*}" 2>/dev/null
+  printf '%s\t%s\n' "$_EP" "$2" >> "$1" 2>/dev/null
+}
+
+rl_latest() {  # $1=file → _LL_PCT _LL_RST (epoch) ; collapses the file when large
   _LL_PCT=""; _LL_RST=""
   [ -f "$1" ] || return 0
   local tmp="$1.$$.tmp" out
-  out=$(awk -F'\t' -v trim="$BURN_TRIM" -v tmp="$tmp" '
+  out=$(awk -F'\t' -v cap="$RL_CAP" -v tmp="$tmp" '
     $2 != "" {
-      e = $1 + 0; r = $3 + 0; p = $2 + 0
-      if (r > cur) cur = r                          # latest window = max reset
-      if (!(r in mxp) || p > mxp[r]) mxp[r] = p      # max pct per window (raw rows,
-                                                     # so same-second writes do not
-                                                     # last-writer-wins away a higher %)
-      if (!(e in seen)) { ord[++n] = e; seen[e] = 1 }  # dedup is for trimming only
-      if (!(e in mxe) || p > mxe[e]) mxe[e] = p          # max %/second, persisted by trim
-      rst[e] = r
+      r = $1 + 0; p = $2 + 0
+      if (!(r in mxp) || p > mxp[r]) mxp[r] = p   # max pct per reset (window)
+      if (r > cur) cur = r                        # current window = latest reset
+      n++
     }
     END {
-      if (n == 0) exit
+      if (cur == "" || !(cur in mxp)) exit
       printf "%s %d\n", mxp[cur], cur
-      if (NR > trim) {
-        lo = n - trim + 1; if (lo < 1) lo = 1
-        for (i = lo; i <= n; i++)
-          printf "%d\t%s\t%d\n", ord[i], mxe[ord[i]], rst[ord[i]] > tmp
-      }
+      if (n > cap)                                 # we only ever read the latest reset,
+        printf "%d\t%s\n", cur, mxp[cur] > tmp     # so collapse to its high-water row
     }
   ' "$1")
   [ -f "$tmp" ] && mv "$tmp" "$1" 2>/dev/null
@@ -277,10 +281,9 @@ burn_eta_5h() {  # → _B5_STATE _B5_ETA _B5_RATE _B5_TTR ; trims $BURN_FILE
   out=$(awk -F'\t' -v now="$NOW" -v win="$CORALLINE_BURN_WINDOW" \
             -v trim="$BURN_TRIM" -v tmp="$tmp" '
     $2 != "" {
-      e = $1 + 0; p = $2 + 0
+      e = $1 + 0
       if (!(e in seen)) { ord[++n] = e; seen[e] = 1 }
-      pct[e] = p; rst[e] = $3 + 0
-      if (!(e in mxe) || p > mxe[e]) mxe[e] = p   # max %/second, persisted by trim
+      pct[e] = $2 + 0; rst[e] = $3 + 0
     }
     END {
       if (n == 0) { print "warming inf 0 0"; next_done = 1 }
@@ -335,12 +338,12 @@ burn_eta_5h() {  # → _B5_STATE _B5_ETA _B5_RATE _B5_TTR ; trims $BURN_FILE
         # Trim on PHYSICAL rows (NR), not distinct seconds (n): sub-second render
         # bursts (resize storms) append same-second rows that n dedups away, so an
         # n-based cap would never fire and the file would grow unbounded. The
-        # rewrite emits the last-`trim` seconds, keeping the per-second MAX (mxe)
-        # so a same-second lower late write does not persist over a higher reading.
+        # rewrite emits the deduped last-`trim` seconds, so it also collapses the
+        # burst rows. Fires only when the file actually exceeds the cap.
         if (NR > trim) {
           lo = n - trim + 1; if (lo < 1) lo = 1
           for (i = lo; i <= n; i++)
-            printf "%d\t%s\t%d\n", ord[i], mxe[ord[i]], rst[ord[i]] > tmp
+            printf "%d\t%s\t%d\n", ord[i], pct[ord[i]], rst[ord[i]] > tmp
         }
       }
     }
@@ -355,12 +358,13 @@ $out
 EOF
 }
 
-burn_eta_7d() {  # → _B7_ETA _B7_RATE _B7_TTR (stateless; uses wd_pct/wd_rst)
+burn_eta_7d() {  # → _B7_* (stateless); $1=pct(=wd_pct) $2=resets_at(=wd_rst)
+  local p7="${1:-$wd_pct}" r7="${2:-$wd_rst}"
   _B7_ETA="inf"; _B7_RATE="0"; _B7_TTR="0"
-  [ -n "$wd_pct" ] || return 0
-  to_epoch "$wd_rst" || return 0
+  [ -n "$p7" ] || return 0
+  to_epoch "$r7" || return 0
   read -r _B7_ETA _B7_RATE _B7_TTR <<EOF
-$(awk -v p="$wd_pct" -v r="$_EP" -v now="$NOW" 'BEGIN {
+$(awk -v p="$p7" -v r="$_EP" -v now="$NOW" 'BEGIN {
     ttr = r - now; if (ttr < 0) ttr = 0
     ws = r - 7 * 86400; el = now - ws
     if (p + 0 <= 0 || el <= 0) { print "inf 0 " ttr; exit }
@@ -372,7 +376,16 @@ EOF
 }
 
 burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
-  burn_eta_5h; burn_eta_7d
+  burn_eta_5h
+  # 5h already reads the shared sample file, so it is cross-session. For 7d, when
+  # limit-sync is on, project from the same synced value the limit7d segment shows
+  # so burn and limit7d cannot contradict each other on a stale local snapshot.
+  if [ "$VL_LIMIT_SYNC" = "1" ]; then
+    rl_latest "$RL7D_FILE"
+    if [ -n "$_LL_PCT" ]; then burn_eta_7d "$_LL_PCT" "$_LL_RST"; else burn_eta_7d; fi
+  else
+    burn_eta_7d
+  fi
   local f5=0 f7=0
   [ "$_B5_ETA" != "inf" ] && f5=1
   [ "$_B7_ETA" != "inf" ] && f7=1
@@ -623,14 +636,14 @@ seg_limit() {  # $1=label $2=pct $3=resets_at $4=bg
 seg_limit5h() {
   local p="$fh_pct" r="$fh_rst"
   if [ "$VL_LIMIT_SYNC" = "1" ]; then
-    limit_latest "$BURN_FILE"; [ -n "$_LL_PCT" ] && { p="$_LL_PCT"; r="$_LL_RST"; }
+    rl_latest "$RL5H_FILE"; [ -n "$_LL_PCT" ] && { p="$_LL_PCT"; r="$_LL_RST"; }
   fi
   seg_limit "5h" "$p" "$r" "$VL_BG_5H"
 }
 seg_limit7d() {
   local p="$wd_pct" r="$wd_rst"
   if [ "$VL_LIMIT_SYNC" = "1" ]; then
-    limit_latest "$RL7D_FILE"; [ -n "$_LL_PCT" ] && { p="$_LL_PCT"; r="$_LL_RST"; }
+    rl_latest "$RL7D_FILE"; [ -n "$_LL_PCT" ] && { p="$_LL_PCT"; r="$_LL_RST"; }
   fi
   seg_limit "7d" "$p" "$r" "$VL_BG_7D"
 }
@@ -745,16 +758,13 @@ term_cols() {  # → _COLS
 # single source of truth, so enabling burn in configure.sh just works. _SEG_SCAN
 # also covers VL_FLOAT_SEGMENTS, so burn samples even when it's only in the float
 # readout (mirrors how read_git is gated above).
-# 5h sampling feeds both burn (slope history) and limit-sync; sample once if
-# either needs it. 7d sampling is only for limit-sync.
-_need5h=0; _need7d=0
-case "$_SEG_SCAN" in *" burn "*) _need5h=1 ;; esac
+case "$_SEG_SCAN" in *" burn "*) burn_sample "$NOW" "$fh_pct" "$fh_rst" ;; esac
+# limit-sync records to its own high-water store (separate from the burn file),
+# only for the limit segment that is actually shown.
 if [ "$VL_LIMIT_SYNC" = "1" ]; then
-  case "$_SEG_SCAN" in *" limit5h "*) _need5h=1 ;; esac
-  case "$_SEG_SCAN" in *" limit7d "*) _need7d=1 ;; esac
+  case "$_SEG_SCAN" in *" limit5h "*) rl_sample "$RL5H_FILE" "$fh_pct" "$fh_rst" ;; esac
+  case "$_SEG_SCAN" in *" limit7d "*) rl_sample "$RL7D_FILE" "$wd_pct" "$wd_rst" ;; esac
 fi
-[ "$_need5h" = "1" ] && burn_sample "$NOW" "$fh_pct" "$fh_rst"
-[ "$_need7d" = "1" ] && burn_sample "$NOW" "$wd_pct" "$wd_rst" "$RL7D_FILE"
 case "$_SEG_SCAN" in *" burn "*) burn_estimate ;; esac
 
 # Defensive ANSI stripper (the VL_NOCOLOR path should already emit none) → _PLAIN.

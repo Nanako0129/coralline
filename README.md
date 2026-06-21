@@ -180,7 +180,7 @@ fit, so the 7d projection binds and you see `↗ 7d`.
 
 ### Cross-session limit sync (optional)
 
-`VL_LIMIT_SYNC=1` makes `limit5h` / `limit7d` show the freshest rate-limit reading any of your sessions has seen, instead of just this session's own snapshot. Each render records its `5h` / `7d` value to a per-host file (`burn-5h.tsv`, `limit-7d.tsv`), and the segments display the highest percentage recorded for the current window. Off by default.
+`VL_LIMIT_SYNC=1` makes `limit5h` / `limit7d` show the freshest rate-limit reading any of your sessions has seen, instead of just this session's own snapshot. Each render records its `5h` / `7d` value to a per-host file (`limit-5h.tsv`, `limit-7d.tsv`), and the segments display the highest percentage recorded for the current window. Off by default.
 
 This exists because Claude Code re-renders a session's statusline only when that session is active, and the rate-limit numbers it passes are that session's last-seen values. So idle sessions show stale, divergent percentages. With sync on, every session converges to the latest known value the next time it redraws.
 

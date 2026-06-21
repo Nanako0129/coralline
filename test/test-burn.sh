@@ -41,29 +41,35 @@ eval "$(sed -n '/^burn_eta_5h() {/,/^}/p' "$SCRIPT")"
 CORALLINE_BURN_WINDOW=600
 BURN_TRIM=1500
 
-# burn_sample with an explicit file arg (used by 7d limit-sync sampling)
-BURN_FILE="$TMPD/burn.tsv"
-burn_sample 100 7 200 "$TMPD/alt.tsv"
-eq "sample to explicit file" "$(cat "$TMPD/alt.tsv")" "$(printf '100\t7\t200')"
-
-# limit_latest: freshest value = max pct among rows with the latest reset.
-eval "$(sed -n '/^limit_latest() {/,/^}/p' "$SCRIPT")"
-runll() { printf '%b' "$1" > "$TMPD/ll.tsv"; limit_latest "$TMPD/ll.tsv"; }
-# mixed windows + same-window cache-lag jitter; current window reset=2000, max pct 34
-runll "50\t10\t1000\n60\t34\t2000\n70\t31\t2000\n80\t9\t2000\n90\t51\t1500\n"
-eq "limit_latest pct" "$_LL_PCT" "34"
-eq "limit_latest rst" "$_LL_RST" "2000"
+# rl_sample / rl_latest: high-water store keyed by reset (cross-session limit sync)
+eval "$(sed -n '/^rl_sample() {/,/^}/p' "$SCRIPT")"
+eval "$(sed -n '/^rl_latest() {/,/^}/p' "$SCRIPT")"
+RL_CAP=200
+runrl() { printf '%b' "$1" > "$TMPD/rl.tsv"; rl_latest "$TMPD/rl.tsv"; }
+# format is "<reset>\t<pct>". current window = latest reset (2000); its max pct = 34,
+# even though an earlier same-window row (44) belongs to a DIFFERENT reset (1500).
+runrl "1000\t10\n2000\t34\n2000\t31\n2000\t9\n1500\t51\n"
+eq "rl_latest pct" "$_LL_PCT" "34"
+eq "rl_latest rst" "$_LL_RST" "2000"
+# same-window cache-lag: highest pct wins regardless of write order (no epoch)
+runrl "2000\t40\n2000\t44\n2000\t41\n"
+eq "rl_latest same-window max" "$_LL_PCT" "44"
 # no file / empty → empty (caller falls back to the session's own snapshot)
-limit_latest "$TMPD/none.tsv"; eq "limit_latest missing" "$_LL_PCT" ""
-runll ""; eq "limit_latest empty" "$_LL_PCT" ""
+rl_latest "$TMPD/none.tsv"; eq "rl_latest missing" "$_LL_PCT" ""
+runrl ""; eq "rl_latest empty" "$_LL_PCT" ""
 
-# trim must keep each second's MAX, not the last write: a same-second lower late
-# write (epoch 20: 44 then 41) over the cap must not regress the synced value.
-BURN_TRIM=2
-printf '%b' "10\t40\t2000\n20\t44\t2000\n20\t41\t2000\n" > "$TMPD/tr.tsv"
-limit_latest "$TMPD/tr.tsv"; eq "limit_latest trim read"      "$_LL_PCT" "44"
-limit_latest "$TMPD/tr.tsv"; eq "limit_latest trim keeps max" "$_LL_PCT" "44"
-BURN_TRIM=1500
+# collapse keeps the current window's high-water mark even when later rows are
+# lower and the file passes the cap (no time-based eviction of the max).
+RL_CAP=3
+printf '%b' "2000\t50\n2000\t48\n2000\t47\n2000\t46\n" > "$TMPD/hw.tsv"
+rl_latest "$TMPD/hw.tsv"; eq "rl_latest collapse read"      "$_LL_PCT" "50"
+rl_latest "$TMPD/hw.tsv"; eq "rl_latest collapse keeps max" "$_LL_PCT" "50"
+eq "rl_latest collapsed rowcount" "$(wc -l < "$TMPD/hw.tsv" | tr -d ' ')" "1"
+# a brand-new window (later reset, lower pct) supersedes the old high-water
+printf '%b' "2000\t50\n9000\t3\n" > "$TMPD/nw.tsv"
+rl_latest "$TMPD/nw.tsv"; eq "rl_latest new window pct" "$_LL_PCT" "3"
+eq "rl_latest new window rst" "$_LL_RST" "9000"
+RL_CAP=200
 
 # helper: write a fixture and run the estimator at a given "now"
 run5h() { BURN_FILE="$TMPD/b5.tsv"; printf '%b' "$1" > "$BURN_FILE"; NOW="$2"; burn_eta_5h; }
@@ -138,10 +144,6 @@ eq "5h trim first-kept" "$(head -1 "$TMPD/b5.tsv" | cut -f1)" "3"
 BURN_TRIM=3
 run5h "1\t6\t9\n1\t6\t9\n1\t6\t9\n2\t7\t9\n2\t7\t9\n2\t7\t9\n" 3
 eq "5h trim same-second rows" "$(wc -l < "$TMPD/b5.tsv" | tr -d ' ')" "2"
-# trim keeps each second's MAX (epoch 2: 7 then 5) so the persisted row isn't the lower late write
-BURN_TRIM=2
-run5h "1\t6\t9\n2\t7\t9\n2\t5\t9\n" 3
-eq "5h trim keeps same-second max" "$(awk -F'\t' '$1==2{print $2}' "$TMPD/b5.tsv")" "7"
 BURN_TRIM=1500
 
 eval "$(sed -n '/^burn_eta_7d() {/,/^}/p' "$SCRIPT")"
@@ -168,6 +170,7 @@ eval "$(sed -n '/^seg_burn() {/,/^}/p'      "$SCRIPT")"
 VL_BURN_GLYPH="↗"; VL_BG_BURN=""; VL_BG_5H=237; VL_LAYOUT="fixed"
 VL_FG_OK=114; VL_FG_WARN=179; VL_FG_HOT=167; VL_FG_DIM=245
 VL_NOCOLOR=0   # fg()/push() reference it (statusline default); set under `set -u`
+VL_LIMIT_SYNC=0   # burn_estimate branches on it (statusline default); set under `set -u`
 fh_pct=8 wd_pct=0
 
 # stub the two estimators so binding logic is tested in isolation
