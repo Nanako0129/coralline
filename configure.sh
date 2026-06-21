@@ -42,6 +42,7 @@ screen_active=0
 old_stty=""
 resized=0          # set by the SIGWINCH trap; consumed by read_key
 KEY=""             # read_key writes the decoded key here (avoids a $() subshell)
+last_size=""       # last seen "rows cols"; read_key's 1s poll redraws on a change
 preview_input_file=""
 preview_cache_dir=""
 
@@ -285,26 +286,8 @@ redraw_menu_area() {
   printf '\033[u'
 }
 
-read_key() {  # sets global KEY; returns 1 on EOF. Resize is delivered via the
-              # SIGWINCH trap (the `resized` flag), NOT a `read -t` poll: bash 3.2
-              # returns 1 from `read -t` on timeout, indistinguishable from EOF,
-              # so every idle second looked like EOF and raced the wizard through
-              # every step (issue #23). A plain blocking read has no timeout to
-              # misread; SIGWINCH still interrupts it and the flag says a resize
-              # (not a key or EOF) woke us.
-  local k k2 k3 rc
-  [ "$resized" = "1" ] && { resized=0; KEY="resize"; return 0; }
-  IFS= read -rsn1 k; rc=$?
-  if [ "$rc" != 0 ]; then
-    [ "$resized" = "1" ] && { resized=0; KEY="resize"; return 0; }
-    return 1   # genuine EOF (Ctrl-D / closed stdin), no resize pending
-  fi
-  if [ "$k" = $'\033' ]; then
-    IFS= read -rsn1 -t 1 k2 2>/dev/null || k2=""
-    IFS= read -rsn1 -t 1 k3 2>/dev/null || k3=""
-    k="$k$k2$k3"
-  fi
-  case "$k" in
+decode_key() {  # $1 = raw byte(s) → sets global KEY
+  case "$1" in
     $'\033[A') KEY=up ;;
     $'\033[B') KEY=down ;;
     $'\033[C') KEY=right ;;
@@ -314,8 +297,38 @@ read_key() {  # sets global KEY; returns 1 on EOF. Resize is delivered via the
     q|Q) KEY=quit ;;
     k|K) KEY=up ;;
     j|J) KEY=down ;;
-    *) KEY="$k" ;;
+    *) KEY="$1" ;;
   esac
+}
+
+read_key() {  # sets global KEY; returns 1 only when there is no interactive input.
+              # Polls with a 1s timeout so an idle terminal resize is still caught
+              # (SIGWINCH may not interrupt a blocking read). bash 3.2 returns 1
+              # from `read -t` on BOTH timeout and EOF (bash 4+ returns >128 on
+              # timeout), so the old code misread every idle-second timeout as EOF
+              # and raced the wizard forward (issue #23). The fix: a stdin that is
+              # not a tty is rejected up front; after that, stdin is a tty in raw
+              # mode where EOF cannot occur, so any non-key read result is a
+              # timeout (or signal) — never EOF — and we just keep polling.
+  local k k2 k3 rc now
+  [ -t 0 ] || return 1
+  while :; do
+    IFS= read -rsn1 -t 1 k; rc=$?
+    [ "$rc" = 0 ] && break                 # got a key
+    if [ "$resized" = "1" ]; then resized=0; KEY="resize"; return 0; fi
+    now=$(stty size 2>/dev/null || true)   # catch a resize SIGWINCH may have missed
+    if [ -n "$now" ] && [ -n "$last_size" ] && [ "$now" != "$last_size" ]; then
+      last_size="$now"; KEY="resize"; return 0
+    fi
+    [ -n "$now" ] && last_size="$now"
+    # rc != 0 with no resize is the 1s poll timeout (tty raw mode has no EOF) → loop.
+  done
+  if [ "$k" = $'\033' ]; then
+    IFS= read -rsn1 -t 1 k2 2>/dev/null || k2=""
+    IFS= read -rsn1 -t 1 k3 2>/dev/null || k3=""
+    k="$k$k2$k3"
+  fi
+  decode_key "$k"
 }
 
 menu_move() {
