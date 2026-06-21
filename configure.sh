@@ -42,7 +42,6 @@ screen_active=0
 old_stty=""
 resized=0          # set by the SIGWINCH trap; consumed by read_key
 KEY=""             # read_key writes the decoded key here (avoids a $() subshell)
-last_size=""       # last seen "rows cols" — polled so resize is caught reliably
 preview_input_file=""
 preview_cache_dir=""
 
@@ -286,22 +285,20 @@ redraw_menu_area() {
   printf '\033[u'
 }
 
-read_key() {  # sets global KEY; returns 1 on EOF. Polls with a 1s timeout so a
-              # window resize is always caught — even when SIGWINCH does not
-              # interrupt the blocking read — by comparing the terminal size.
-  local k k2 k3 now rc
-  while :; do
-    IFS= read -rsn1 -t 1 k; rc=$?
-    [ "$rc" = 0 ] && break        # got a key
-    [ "$rc" = 1 ] && return 1      # EOF
-    # timeout or signal: detect resize via the trap flag or a size change
-    if [ "$resized" = "1" ]; then resized=0; KEY="resize"; return 0; fi
-    now=$(stty size 2>/dev/null || true)
-    if [ -n "$now" ] && [ -n "$last_size" ] && [ "$now" != "$last_size" ]; then
-      last_size="$now"; KEY="resize"; return 0
-    fi
-    [ -n "$now" ] && last_size="$now"
-  done
+read_key() {  # sets global KEY; returns 1 on EOF. Resize is delivered via the
+              # SIGWINCH trap (the `resized` flag), NOT a `read -t` poll: bash 3.2
+              # returns 1 from `read -t` on timeout, indistinguishable from EOF,
+              # so every idle second looked like EOF and raced the wizard through
+              # every step (issue #23). A plain blocking read has no timeout to
+              # misread; SIGWINCH still interrupts it and the flag says a resize
+              # (not a key or EOF) woke us.
+  local k k2 k3 rc
+  [ "$resized" = "1" ] && { resized=0; KEY="resize"; return 0; }
+  IFS= read -rsn1 k; rc=$?
+  if [ "$rc" != 0 ]; then
+    [ "$resized" = "1" ] && { resized=0; KEY="resize"; return 0; }
+    return 1   # genuine EOF (Ctrl-D / closed stdin), no resize pending
+  fi
   if [ "$k" = $'\033' ]; then
     IFS= read -rsn1 -t 1 k2 2>/dev/null || k2=""
     IFS= read -rsn1 -t 1 k3 2>/dev/null || k3=""
