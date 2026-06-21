@@ -251,7 +251,12 @@ rl_sample() {  # $1=file $2=pct(raw int/float) $3=resets_at(raw)
   [ -n "$2" ] || return 0
   to_epoch "$3" || return 0
   rl_dir "$1"
-  [ -d "$_RLD" ] || mkdir -p "$_RLD" 2>/dev/null
+  if [ ! -d "$_RLD" ]; then
+    mkdir -p "$_RLD" 2>/dev/null
+    # One-shot migration: a pre-dir-set build kept a flat <file>.tsv (+ tmp); the
+    # dir-set never touches it, so drop it once when the dir is first created.
+    rm -f "$1" "$1".*.tmp 2>/dev/null
+  fi
   local r p
   printf -v r '%010d' "$_EP" 2>/dev/null || return 0
   printf -v p '%07.3f' "$2"  2>/dev/null || return 0
@@ -262,12 +267,17 @@ rl_sample() {  # $1=file $2=pct(raw int/float) $3=resets_at(raw)
 rl_latest() {  # $1=file → _LL_PCT _LL_RST (epoch)
   _LL_PCT=""; _LL_RST=""
   rl_dir "$1"; [ -d "$_RLD" ] || return 0
-  local hi d
-  hi=$(ls -1 "$_RLD" 2>/dev/null | grep '^[0-9]' | sort | tail -n1)
-  [ -n "$hi" ] || return 0
+  # ONE snapshot for both the max and the GC. A second listing could include an
+  # entry added after `hi` was chosen, and the loop would rmdir that fresher (and
+  # possibly higher) entry. Iterating the same snapshot means post-snapshot adds
+  # are never deletion candidates, so a concurrent higher add is never lost.
+  local snap hi d
+  snap=$(ls -1 "$_RLD" 2>/dev/null | grep '^[0-9]' | sort)
+  [ -n "$snap" ] || return 0
+  hi=$(printf '%s\n' "$snap" | tail -n1)
   _LL_RST=$(( 10#${hi%_*} ))   # 10# avoids the leading-zero octal trap on the reset
   _LL_PCT="${hi#*_}"           # keep as string so a fractional pct is preserved
-  for d in $(ls -1 "$_RLD" 2>/dev/null | grep '^[0-9]' | sort); do
+  for d in $snap; do
     [ "$d" = "$hi" ] || rmdir "$_RLD/$d" 2>/dev/null
   done
 }

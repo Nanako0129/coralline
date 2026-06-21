@@ -79,6 +79,11 @@ rl_sample "$RLF" 50 2000; rl_sample "$RLF" 48 2000; rl_sample "$RLF" 47 2000
 rl_latest "$RLF"
 eq "rl_latest gc keeps one" "$(ls -1 "$TMPD/limit.d" | wc -l | tr -d ' ')" "1"
 rl_latest "$RLF"; eq "rl_latest gc keeps max" "$_LL_PCT" "050.000"
+# migration: a legacy flat-file store is removed when the dir-set is first created
+rm -rf "$TMPD/limit.d"; printf 'x' > "$TMPD/limit.tsv"
+rl_sample "$RLF" 12 2000
+eq "rl legacy flat-file removed" "$([ -e "$TMPD/limit.tsv" ] && echo present || echo gone)" "gone"
+eq "rl dir-set created"          "$([ -d "$TMPD/limit.d" ]  && echo yes || echo no)" "yes"
 
 # helper: write a fixture and run the estimator at a given "now"
 run5h() { BURN_FILE="$TMPD/b5.tsv"; printf '%b' "$1" > "$BURN_FILE"; NOW="$2"; burn_eta_5h; }
