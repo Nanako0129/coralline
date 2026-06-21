@@ -178,6 +178,16 @@ The label tells you which limit binds — whichever of `5h`/`7d` will hit 100% s
 steps within the recent window; at a light or steady pace there's no short-term slope to
 fit, so the 7d projection binds and you see `↗ 7d`.
 
+### Cross-session limit sync (optional)
+
+`VL_LIMIT_SYNC=1` makes `limit5h` / `limit7d` show the freshest rate-limit reading any of your sessions has seen, instead of just this session's own snapshot. Each render records its `5h` / `7d` value to a per-host file (`burn-5h.tsv`, `limit-7d.tsv`), and the segments display the highest percentage recorded for the current window. Off by default.
+
+This exists because Claude Code re-renders a session's statusline only when that session is active, and the rate-limit numbers it passes are that session's last-seen values. So idle sessions show stale, divergent percentages. With sync on, every session converges to the latest known value the next time it redraws.
+
+> **It only updates on redraw.** It cannot refresh a session that is not redrawing at all, and "latest known" is only as fresh as your most recently active session. coralline has no API access. So this narrows the gap between sessions, it does not make a fully idle bar live.
+
+Single-session users gain nothing from it (there is only one snapshot), so it stays opt-in.
+
 ### Responsive layout
 
 With `VL_LAYOUT="auto"` the bar stays on a single line while it fits, and greedily wraps into

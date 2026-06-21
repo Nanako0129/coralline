@@ -41,6 +41,22 @@ eval "$(sed -n '/^burn_eta_5h() {/,/^}/p' "$SCRIPT")"
 CORALLINE_BURN_WINDOW=600
 BURN_TRIM=1500
 
+# burn_sample with an explicit file arg (used by 7d limit-sync sampling)
+BURN_FILE="$TMPD/burn.tsv"
+burn_sample 100 7 200 "$TMPD/alt.tsv"
+eq "sample to explicit file" "$(cat "$TMPD/alt.tsv")" "$(printf '100\t7\t200')"
+
+# limit_latest: freshest value = max pct among rows with the latest reset.
+eval "$(sed -n '/^limit_latest() {/,/^}/p' "$SCRIPT")"
+runll() { printf '%b' "$1" > "$TMPD/ll.tsv"; limit_latest "$TMPD/ll.tsv"; }
+# mixed windows + same-window cache-lag jitter; current window reset=2000, max pct 34
+runll "50\t10\t1000\n60\t34\t2000\n70\t31\t2000\n80\t9\t2000\n90\t51\t1500\n"
+eq "limit_latest pct" "$_LL_PCT" "34"
+eq "limit_latest rst" "$_LL_RST" "2000"
+# no file / empty → empty (caller falls back to the session's own snapshot)
+limit_latest "$TMPD/none.tsv"; eq "limit_latest missing" "$_LL_PCT" ""
+runll ""; eq "limit_latest empty" "$_LL_PCT" ""
+
 # helper: write a fixture and run the estimator at a given "now"
 run5h() { BURN_FILE="$TMPD/b5.tsv"; printf '%b' "$1" > "$BURN_FILE"; NOW="$2"; burn_eta_5h; }
 

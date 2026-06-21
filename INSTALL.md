@@ -150,7 +150,11 @@ Ask concise questions. If the user says "you decide", choose the defaults.
 4. **Layout**: responsive default (`VL_LAYOUT="auto"`, `VL_MAX_LINES=3`), single line,
    fixed two lines, or fixed three lines.
 5. **Details**: clock `12h` default, `24h`, or `off`; Nerd Font yes/no; if they use git
-   worktrees, suggest enabling `project`.
+   worktrees, suggest enabling `project`. If the user runs many concurrent Claude sessions
+   and is bothered by `limit5h` / `limit7d` showing different percentages per session,
+   mention `VL_LIMIT_SYNC=1`: it makes those segments show the freshest reading any session
+   has recorded for the current window (writing `burn-5h.tsv` / `limit-7d.tsv`). Off by
+   default; it only converges sessions when they redraw and cannot refresh a fully idle one.
 
 If `~/.p10k.zsh` exists, ask whether the user wants to import its style, clock, and main
 colors. Do not import it by default. If the user agrees, read the file and map these values
