@@ -30,6 +30,7 @@ VL_CLOCK="12h"                  # 12h | 24h | off
 VL_CLOCK_SECONDS=1
 VL_PATH_DEPTH=4                 # collapse paths deeper than this
 VL_NAME_MAX=0                   # max chars for project/git names before … truncation (0 = off)
+VL_GIT_TIMEOUT=2                # seconds; keep statusline git probes bounded
 VL_COST_DECIMALS=2
 VL_WARN_PCT=50                  # percentage thresholds for bar colors
 VL_HOT_PCT=75
@@ -185,6 +186,21 @@ pct_fg() {
 
 # ── Git state (single subprocess, parsed once, used by git/stash segments) ──
 GIT_BRANCH="" GIT_MARKS="" GIT_AB="" GIT_DIRTY=0 GIT_ROOT=""
+git_probe() {
+  local t="${VL_GIT_TIMEOUT:-2}" timeout_bin=""
+  [ -n "$cwd" ] || return 1
+  case "$t" in (''|*[!0-9.]*) t=2 ;; esac
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  fi
+  if [ -n "$timeout_bin" ]; then
+    GIT_OPTIONAL_LOCKS=0 "$timeout_bin" "${t}s" git -C "$cwd" "$@"
+  else
+    GIT_OPTIONAL_LOCKS=0 git -C "$cwd" "$@"
+  fi
+}
 read_git() {
   local line oid="" head="" a="" b="" staged=0 unstaged=0 untracked=0
   [ -n "$cwd" ] || return
@@ -200,7 +216,7 @@ read_git() {
       "u "*)                 unstaged=1 ;;
     esac
   done <<GIT
-$(git -C "$cwd" status --porcelain=v2 --branch 2>/dev/null)
+$(git_probe status --porcelain=v2 --branch 2>/dev/null)
 GIT
   [ -z "$oid" ] && return                     # not a repo
   if [ "$head" = "(detached)" ] || [ -z "$head" ]; then
@@ -214,8 +230,8 @@ GIT
   # one-git-call default untouched.
   case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" project "*)
     local cdir
-    cdir=$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
-    [ -n "$cdir" ] || cdir=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
+    cdir=$(git_probe rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+    [ -n "$cdir" ] || cdir=$(git_probe rev-parse --show-toplevel 2>/dev/null)
     if [ -n "$cdir" ]; then
       cdir="${cdir%/}" ; cdir="${cdir%/.git}"
       GIT_ROOT="${cdir##*/}"
@@ -344,7 +360,7 @@ seg_duration() {
 seg_stash() {
   [ -n "$GIT_BRANCH" ] || return 0
   local n
-  n=$(git -C "$cwd" rev-list --walk-reflogs --count refs/stash 2>/dev/null) || return 0
+  n=$(git_probe rev-list --walk-reflogs --count refs/stash 2>/dev/null) || return 0
   [ "${n:-0}" -gt 0 ] || return 0
   push "$VL_BG_GIT_OK" "$(fg $VL_FG_TEXT) ⚑ ${n} "
 }
