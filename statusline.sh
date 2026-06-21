@@ -467,6 +467,11 @@ now_strftime() {  # → _T ; $1=strftime fmt. Fork-free on bash 4.2+, one date c
 }
 
 # ── Git state (single subprocess, parsed once, used by git/stash segments) ──
+# All git below is read-only probing. Disable git's optional index lock so a
+# frequently-refreshed statusline never rewrites the index or contends for
+# index.lock with a real git operation (notably on Windows). Set once, inherited
+# by every git call here.
+export GIT_OPTIONAL_LOCKS=0
 GIT_BRANCH="" GIT_MARKS="" GIT_AB="" GIT_DIRTY=0 GIT_ROOT=""
 read_git() {
   local line oid="" head="" a="" b="" staged=0 unstaged=0 untracked=0
