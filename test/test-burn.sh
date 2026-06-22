@@ -17,6 +17,9 @@ eval "$(sed -n '/^to_epoch() {/,/^}/p'     "$SCRIPT")"
 eval "$(sed -n '/^fmt_eta() {/,/^}/p'       "$SCRIPT")"
 eval "$(sed -n '/^burn_sample() {/,/^}/p'   "$SCRIPT")"
 
+# Per-window sentinel ceilings the samplers reference (mirrors statusline.sh; #32).
+RL_MAX_5H=$(( 6 * 3600 )); RL_MAX_7D=$(( 8 * 86400 ))
+
 # fmt_eta
 fmt_eta 0;       eq "fmt_eta 0m"     "$_ETA" "0m"
 fmt_eta 2820;    eq "fmt_eta 47m"    "$_ETA" "47m"
@@ -88,22 +91,29 @@ eq "rl dir-set created"          "$([ -d "$TMPD/limit.d" ]  && echo yes || echo 
 # sentinel guard (#32): a far-future reset (e.g. sample-input.json's year-2030
 # preview value) must be dropped when NOW is known, so a preview render can never
 # win the high-water and prune the real window. NOW is set for these cases only.
-RLS="$TMPD/limit-sentinel.tsv"; NOW=1781794590        # cutoff = NOW + 8d
-rl_sample "$RLS" 30 1781811000                        # real ~4.5h window: kept
-rl_sample "$RLS" 99 1893490200                        # 2030 sentinel: dropped
-rl_latest "$RLS"
+RLS="$TMPD/limit-sentinel.tsv"; NOW=1781794590
+rl_sample "$RLS" 30 1781811000 "$RL_MAX_5H"           # real ~4.5h window: kept
+rl_sample "$RLS" 99 1893490200 "$RL_MAX_5H"           # 2030 sentinel: dropped
+rl_latest "$RLS" "$RL_MAX_5H"
 eq "rl_sample drops sentinel pct" "$_LL_PCT" "030.000"
 eq "rl_sample drops sentinel rst" "$_LL_RST" "1781811000"
+# per-window ceiling: a 5h reset days out is corrupt (a 5h window resets within
+# hours), but the same offset is valid for the 7d window. The ceiling is the caller's.
+RLW="$TMPD/limit-window.tsv"; twodays=$(( NOW + 2*86400 ))
+rl_sample "$RLW" 20 "$twodays" "$RL_MAX_5H"           # 2d out under 5h ceiling: dropped
+rl_latest "$RLW" "$RL_MAX_5H"; eq "rl 5h ceiling drops 2d reset" "$_LL_PCT" ""
+rl_sample "$RLW" 20 "$twodays" "$RL_MAX_7D"           # 2d out under 7d ceiling: kept
+rl_latest "$RLW" "$RL_MAX_7D"; eq "rl 7d ceiling keeps 2d reset" "$_LL_PCT" "020.000"
 # read-side heal: a store poisoned BEFORE this fix already holds the sentinel entry.
 # On read rl_latest must ignore it for the high-water AND rmdir it, so the next real
 # render recovers instead of staying pinned.
 RLH="$TMPD/limit-heal.tsv"; rl_dir "$RLH"; mkdir -p "$_RLD"
 mkdir "$_RLD/1781811000_030.000" "$_RLD/1893490200_099.000"   # real entry + 2030 sentinel
-rl_latest "$RLH"
+rl_latest "$RLH" "$RL_MAX_5H"
 eq "rl_latest heals poisoned pct"  "$_LL_PCT" "030.000"
 eq "rl_latest heals poisoned rst"  "$_LL_RST" "1781811000"
 eq "rl_latest prunes sentinel dir" "$([ -d "$_RLD/1893490200_099.000" ] && echo present || echo gone)" "gone"
-# burn_sample applies the same bound, keyed off its own now ($1)
+# burn_sample applies the 5h bound, keyed off its own now ($1)
 BURN_FILE="$TMPD/burn-sentinel.tsv"
 burn_sample 1781794590 50 1781811000                  # real window: appended
 burn_sample 1781794590 99 1893490200                  # 2030 sentinel: dropped
