@@ -170,4 +170,14 @@ rc6=$?; chmod 700 "$home6/coralline" 2>/dev/null
 [ "$rc6" = "0" ] && check "E6 unwritable backup: install succeeds" 1 || check "E6 unwritable backup: install succeeds" 0
 printf '%s\n' "$out6" | grep -q 'backup at' && check "E6 unwritable backup: no backup line" 0 || check "E6 unwritable backup: no backup line" 1
 
+# ---- Section F: UPGRADE.md structure -------------------------------------
+UP="$REPO/UPGRADE.md"
+[ -f "$UP" ] && check "UPGRADE.md exists" 1 || check "UPGRADE.md exists" 0
+for h in '## Overview' '## Fast Path' '## Read the delta' '## Enable interview' '## Write Config' '## Verification' '## Manual fallback'; do
+  grep -qF "$h" "$UP" 2>/dev/null && check "UPGRADE.md has '$h'" 1 || check "UPGRADE.md has '$h'" 0
+done
+grep -q -- '--install-only' "$UP" 2>/dev/null && check "UPGRADE.md drives --install-only" 1 || check "UPGRADE.md drives --install-only" 0
+grep -q 'VL_SEGMENTS2' "$UP" 2>/dev/null && check "UPGRADE.md handles VL_SEGMENTS2/3" 1 || check "UPGRADE.md handles VL_SEGMENTS2/3" 0
+grep -qi 'AI coding assistant' "$UP" 2>/dev/null && check "UPGRADE.md has AI callout" 1 || check "UPGRADE.md has AI callout" 0
+
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi
