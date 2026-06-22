@@ -116,4 +116,58 @@ nbak=$(ls -1 "$tmp/inst/coralline"/statusline.sh.bak.* 2>/dev/null | wc -l | tr 
 mkdir -p "$tmp/inst/empty"
 [ -z "$(backup_statusline "$tmp/inst/empty")" ] && check "absent statusline → empty path" 1 || check "absent statusline → empty path" 0
 
+# ---- Section E: install_files integration (sandboxed) --------------------
+mk_old_install() {  # $1=home/.claude dir ; creates an OLD install missing seg_burn
+  mkdir -p "$1/coralline"
+  printf 'seg_dir() { :; }\nVL_ASCII=0\n' > "$1/coralline/statusline.sh"
+  printf 'VL_THEME="claude-coral"\n'       > "$1/coralline.conf"
+}
+
+# (E1) upgrade with new content → report + backup, conf preserved
+home="$tmp/h1/.claude"; mk_old_install "$home"
+conf_before=$(cat "$home/coralline.conf")
+out=$(CORALLINE_HOME="$home/coralline" CLAUDE_SETTINGS="$home/settings.json" \
+      bash "$CONF" --install-only 2>&1)
+printf '%s\n' "$out" | grep -q 'new since your installed copy' && check "E1 install-only prints report" 1 || check "E1 install-only prints report" 0
+printf '%s\n' "$out" | grep -qE 'segment +burn' && check "E1 report includes burn" 1 || check "E1 report includes burn" 0
+bak=$(ls -1 "$home"/coralline/statusline.sh.bak.* 2>/dev/null | head -1)
+[ -n "$bak" ] && [ "$(head -1 "$bak" 2>/dev/null)" = "seg_dir() { :; }" ] \
+  && check "E1 backup holds OLD statusline" 1 || check "E1 backup holds OLD statusline" 0
+[ "$(cat "$home/coralline.conf")" = "$conf_before" ] && check "E1 coralline.conf untouched" 1 || check "E1 coralline.conf untouched" 0
+grep -q 'seg_burn' "$home/coralline/statusline.sh" && check "E1 new runtime installed" 1 || check "E1 new runtime installed" 0
+
+# (E2) fresh install (no prior) → no report, no backup
+home2="$tmp/h2/.claude"; mkdir -p "$home2"
+out2=$(CORALLINE_HOME="$home2/coralline" CLAUDE_SETTINGS="$home2/settings.json" bash "$CONF" --install-only 2>&1)
+printf '%s\n' "$out2" | grep -q 'new since your installed copy' && check "E2 fresh: no report" 0 || check "E2 fresh: no report" 1
+ls "$home2"/coralline/statusline.sh.bak.* >/dev/null 2>&1 && check "E2 fresh: no backup" 0 || check "E2 fresh: no backup" 1
+
+# (E3) identical re-run → no backup, no report
+home3="$tmp/h3/.claude"; mkdir -p "$home3/coralline"
+cp "$REPO/statusline.sh" "$home3/coralline/statusline.sh"
+out3=$(CORALLINE_HOME="$home3/coralline" CLAUDE_SETTINGS="$home3/settings.json" bash "$CONF" --install-only 2>&1)
+printf '%s\n' "$out3" | grep -q 'new since your installed copy' && check "E3 identical: no report" 0 || check "E3 identical: no report" 1
+ls "$home3"/coralline/statusline.sh.bak.* >/dev/null 2>&1 && check "E3 identical: no backup" 0 || check "E3 identical: no backup" 1
+
+# (E4) bugfix-only overwrite (differs, but exposes no new seg/knob) → backup, NO report
+home4="$tmp/h4/.claude"; mkdir -p "$home4/coralline"
+sed '1s/^/# bugfix comment\n/' "$REPO/statusline.sh" > "$home4/coralline/statusline.sh"
+out4=$(CORALLINE_HOME="$home4/coralline" CLAUDE_SETTINGS="$home4/settings.json" bash "$CONF" --install-only 2>&1)
+printf '%s\n' "$out4" | grep -q 'new since your installed copy' && check "E4 bugfix-only: no report" 0 || check "E4 bugfix-only: no report" 1
+ls "$home4"/coralline/statusline.sh.bak.* >/dev/null 2>&1 && check "E4 bugfix-only: backup taken" 1 || check "E4 bugfix-only: backup taken" 0
+
+# (E5) unreadable old statusline → install still succeeds (fail-open)
+home5="$tmp/h5/.claude"; mk_old_install "$home5"; chmod 000 "$home5/coralline/statusline.sh"
+CORALLINE_HOME="$home5/coralline" CLAUDE_SETTINGS="$home5/settings.json" bash "$CONF" --install-only >/dev/null 2>&1
+rc=$?; chmod 644 "$home5/coralline/statusline.sh" 2>/dev/null
+[ "$rc" = "0" ] && check "E5 unreadable old: install succeeds" 1 || check "E5 unreadable old: install succeeds" 0
+
+# (E6) unwritable backup target → install still succeeds, no backup line (fail-open)
+home6="$tmp/h6/.claude"; mk_old_install "$home6"
+chmod 500 "$home6/coralline"   # dir read+exec only → cp of new bak fails
+out6=$(CORALLINE_HOME="$home6/coralline" CLAUDE_SETTINGS="$home6/settings.json" bash "$CONF" --install-only 2>&1)
+rc6=$?; chmod 700 "$home6/coralline" 2>/dev/null
+[ "$rc6" = "0" ] && check "E6 unwritable backup: install succeeds" 1 || check "E6 unwritable backup: install succeeds" 0
+printf '%s\n' "$out6" | grep -q 'backup at' && check "E6 unwritable backup: no backup line" 0 || check "E6 unwritable backup: no backup line" 1
+
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi

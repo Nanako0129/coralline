@@ -1179,6 +1179,18 @@ install_files() {
   need_file "$SCRIPT_DIR/test/sample-input.json"
   [ -d "$SCRIPT_DIR/themes" ] || die "missing themes directory"
 
+  # Upgrade path: on a real overwrite, back up the old statusline.sh, and (only
+  # in install-only/agent mode, so the interactive wizard's alt-screen isn't
+  # clobbered) report what is new. Gated on a real change so identical re-runs
+  # leave no backup.
+  local _bak=""
+  if [ -f "$TARGET_DIR/statusline.sh" ] \
+    && ! cmp -s "$TARGET_DIR/statusline.sh" "$SCRIPT_DIR/statusline.sh"; then
+    _bak=$(backup_statusline "$TARGET_DIR")
+    if [ "$install_only" = "1" ]; then
+      report_upgrade_delta "$TARGET_DIR/statusline.sh" "$SCRIPT_DIR/statusline.sh" "$_bak"
+    fi
+  fi
   mkdir -p "$TARGET_DIR/themes"
   cp "$SCRIPT_DIR/statusline.sh" "$TARGET_DIR/statusline.sh"
   cp "$SCRIPT_DIR/configure.sh" "$TARGET_DIR/configure.sh"
@@ -1349,7 +1361,7 @@ main_menu() {
 for arg in "$@"; do
   case "$arg" in
     --install) install_files; update_settings ;;
-    --install-only) install_files; update_settings; install_only=1 ;;
+    --install-only) install_only=1; install_files; update_settings ;;
     --default) setup_mode="default" ;;
     --import-p10k) setup_mode="import-p10k" ;;
     --wizard) setup_mode="wizard" ;;
