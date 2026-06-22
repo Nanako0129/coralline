@@ -85,6 +85,22 @@ rl_sample "$RLF" 12 2000
 eq "rl legacy flat-file removed" "$([ -e "$TMPD/limit.tsv" ] && echo present || echo gone)" "gone"
 eq "rl dir-set created"          "$([ -d "$TMPD/limit.d" ]  && echo yes || echo no)" "yes"
 
+# sentinel guard (#32): a far-future reset (e.g. sample-input.json's year-2030
+# preview value) must be dropped when NOW is known, so a preview render can never
+# win the high-water and prune the real window. NOW is set for these cases only.
+RLS="$TMPD/limit-sentinel.tsv"; NOW=1781794590        # cutoff = NOW + 8d
+rl_sample "$RLS" 30 1781811000                        # real ~4.5h window: kept
+rl_sample "$RLS" 99 1893490200                        # 2030 sentinel: dropped
+rl_latest "$RLS"
+eq "rl_sample drops sentinel pct" "$_LL_PCT" "030.000"
+eq "rl_sample drops sentinel rst" "$_LL_RST" "1781811000"
+# burn_sample applies the same bound, keyed off its own now ($1)
+BURN_FILE="$TMPD/burn-sentinel.tsv"
+burn_sample 1781794590 50 1781811000                  # real window: appended
+burn_sample 1781794590 99 1893490200                  # 2030 sentinel: dropped
+eq "burn_sample drops sentinel" "$([ -f "$BURN_FILE" ] && wc -l < "$BURN_FILE" | tr -d ' ' || echo 0)" "1"
+NOW=""
+
 # helper: write a fixture and run the estimator at a given "now"
 run5h() { BURN_FILE="$TMPD/b5.tsv"; printf '%b' "$1" > "$BURN_FILE"; NOW="$2"; burn_eta_5h; }
 
@@ -298,11 +314,18 @@ eq "neither-reported renders nothing" "${#SEG_TXT[@]}" "0"
 # Drives the whole statusline.sh so the top-level gate is exercised end to end.
 if command -v jq >/dev/null 2>&1; then
   gate_run() {  # $1=VL_SEGMENTS → "written" if a sample landed, else "absent"
-    local conf="$TMPD/conf.sh" bf="$TMPD/gate/burn.tsv"
+    local conf="$TMPD/conf.sh" bf="$TMPD/gate/burn.tsv" in="$TMPD/gate-input.json" soon
     rm -rf "$TMPD/gate"
     printf 'VL_SEGMENTS=%q\n' "$1" > "$conf"
+    # Give the fixture a plausible near-future reset (raw epoch; to_epoch accepts
+    # it) so the sentinel guard (#32) doesn't correctly drop the sample and mask
+    # the gate under test. The bundled sample-input.json keeps its 2030 sentinel.
+    soon=$(( $(date +%s) + 10800 ))
+    jq --arg r "$soon" \
+       '.rate_limits.five_hour.resets_at=$r | .rate_limits.seven_day.resets_at=$r' \
+       "$HERE/sample-input.json" > "$in"
     CORALLINE_CONFIG="$conf" CORALLINE_BURN_FILE="$bf" \
-      bash "$SCRIPT" < "$HERE/sample-input.json" >/dev/null 2>&1
+      bash "$SCRIPT" < "$in" >/dev/null 2>&1
     [ -f "$bf" ] && echo written || echo absent
   }
   eq "gate: burn listed → samples"    "$(gate_run 'dir burn clock')" "written"

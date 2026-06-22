@@ -224,7 +224,9 @@ bash ~/.claude/coralline/configure.sh --install
 The installer verifies rendering automatically. For a manual check, run:
 
 ```bash
-bash ~/.claude/coralline/statusline.sh < ~/.claude/coralline/sample-input.json
+CORALLINE_NO_SAMPLE=1 bash ~/.claude/coralline/statusline.sh < ~/.claude/coralline/sample-input.json
 ```
+
+`CORALLINE_NO_SAMPLE=1` makes the render read-only, so the sample's preview values are never written to the cross-session limit/burn stores. Without it, `sample-input.json`'s far-future sentinel reset would poison `limit5h`/`limit7d` when `VL_LIMIT_SYNC=1`.
 
 Success means exit code `0`, a rendered statusline on stdout, and no error text on stderr.

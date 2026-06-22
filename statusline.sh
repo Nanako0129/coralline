@@ -228,6 +228,10 @@ fmt_eta() {  # → _ETA ; $1=seconds (mirrors fmt_countdown's d/h/m formatting)
 burn_sample() {  # append one 5h sample; $1=now $2=pct(raw) $3=resets_at(raw)
   [ -n "$2" ] || return 0
   to_epoch "$3" || return 0
+  # Reject an implausibly-far-future reset (corrupt/sentinel snapshot): a 5h
+  # window cannot reset more than ~7 days out, so anything past now+8d would
+  # otherwise poison the burn projection permanently (see #32).
+  [ "$_EP" -le "$(( $1 + 8*86400 ))" ] || return 0
   # [ -d ] is a builtin (steady state stays fork-free); mkdir forks only on the
   # first render after a fresh install, when ~/.claude/coralline/ doesn't exist.
   [ -d "${BURN_FILE%/*}" ] || mkdir -p "${BURN_FILE%/*}" 2>/dev/null
@@ -250,6 +254,11 @@ rl_dir() { _RLD="${1%.tsv}.d"; }
 rl_sample() {  # $1=file $2=pct(raw int/float) $3=resets_at(raw)
   [ -n "$2" ] || return 0
   to_epoch "$3" || return 0
+  # Reject an implausibly-far-future reset (corrupt/sentinel snapshot): a 5h/7d
+  # window cannot reset more than ~7 days out, so a value past now+8d would win
+  # rl_latest's high-water forever and rmdir every real entry (see #32). Guarded
+  # on NOW being set so direct unit calls without a clock keep recording.
+  [ -z "${NOW:-}" ] || [ "$_EP" -le "$(( NOW + 8*86400 ))" ] || return 0
   rl_dir "$1"
   if [ ! -d "$_RLD" ]; then
     mkdir -p "$_RLD" 2>/dev/null
@@ -771,14 +780,21 @@ term_cols() {  # → _COLS
 # single source of truth, so enabling burn in configure.sh just works. _SEG_SCAN
 # also covers VL_FLOAT_SEGMENTS, so burn samples even when it's only in the float
 # readout (mirrors how read_git is gated above).
-case "$_SEG_SCAN" in *" burn "*) burn_sample "$NOW" "$fh_pct" "$fh_rst" ;; esac
-# limit-sync records to its own high-water store (separate from the burn file),
-# only for the limit segment that is actually shown.
-if [ "$VL_LIMIT_SYNC" = "1" ]; then
-  case "$_SEG_SCAN" in *" limit5h "*) rl_sample "$RL5H_FILE" "$fh_pct" "$fh_rst" ;; esac
-  # burn also consumes the synced 7d (below), so sample it whenever burn shows too,
-  # otherwise burn would read a stale/older synced 7d instead of this render's value.
-  case "$_SEG_SCAN" in *" limit7d "*|*" burn "*) rl_sample "$RL7D_FILE" "$wd_pct" "$wd_rst" ;; esac
+#
+# CORALLINE_NO_SAMPLE=1 makes a render read-only: it skips every write to the
+# cross-session stores. A preview/verification render (sample-input.json carries
+# a year-2030 sentinel reset) would otherwise win the high-water forever and prune
+# the real entries, so the documented preview commands set this flag (see #32).
+if [ "${CORALLINE_NO_SAMPLE:-0}" != 1 ]; then
+  case "$_SEG_SCAN" in *" burn "*) burn_sample "$NOW" "$fh_pct" "$fh_rst" ;; esac
+  # limit-sync records to its own high-water store (separate from the burn file),
+  # only for the limit segment that is actually shown.
+  if [ "$VL_LIMIT_SYNC" = "1" ]; then
+    case "$_SEG_SCAN" in *" limit5h "*) rl_sample "$RL5H_FILE" "$fh_pct" "$fh_rst" ;; esac
+    # burn also consumes the synced 7d (below), so sample it whenever burn shows too,
+    # otherwise burn would read a stale/older synced 7d instead of this render's value.
+    case "$_SEG_SCAN" in *" limit7d "*|*" burn "*) rl_sample "$RL7D_FILE" "$wd_pct" "$wd_rst" ;; esac
+  fi
 fi
 case "$_SEG_SCAN" in *" burn "*) burn_estimate ;; esac
 

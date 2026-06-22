@@ -486,7 +486,9 @@ render_preview() {
   cache=$(preview_cache_path "$tmp" "$cols")
   printf '\nPreview (%s cols):\n' "$cols"
   if [ ! -f "$cache" ]; then
-    if ! CORALLINE_CONFIG="$tmp" COLUMNS="$cols" bash "$statusline" < "$input" > "$cache"; then
+    # CORALLINE_NO_SAMPLE: a preview must never write to the cross-session limit/
+    # burn stores, or the wizard would poison real sessions every keystroke (#32).
+    if ! CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$tmp" COLUMNS="$cols" bash "$statusline" < "$input" > "$cache"; then
       rm -f "$cache" "$tmp"
       return 1
     fi
@@ -1125,13 +1127,16 @@ verify_render() {
   statusline=$(runtime_statusline)
   sample=$(runtime_sample)
   printf '\nVerification render:\n'
+  # CORALLINE_NO_SAMPLE: the verification render must not mutate the cross-session
+  # stores; sample-input.json carries a year-2030 sentinel reset that would poison
+  # the real high-water otherwise (#32).
   if [ -n "$sample" ]; then
     need_file "$sample"
-    CORALLINE_CONFIG="$CONFIG_FILE" COLUMNS=120 bash "$statusline" < "$sample"
+    CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$CONFIG_FILE" COLUMNS=120 bash "$statusline" < "$sample"
   else
     input=$(mktemp "${TMPDIR:-/tmp}/coralline-input.XXXXXX") || exit 1
     jq -n --arg cwd "$SCRIPT_DIR" '{cwd: $cwd, workspace: {current_dir: $cwd}}' > "$input"
-    CORALLINE_CONFIG="$CONFIG_FILE" COLUMNS=120 bash "$statusline" < "$input"
+    CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$CONFIG_FILE" COLUMNS=120 bash "$statusline" < "$input"
     rm -f "$input"
   fi
 }
