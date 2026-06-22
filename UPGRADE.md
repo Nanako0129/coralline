@@ -53,23 +53,35 @@ description may be a clipped first sentence). Enable only what the user approves
 ## Write Config
 
 First read `~/.claude/coralline.conf`. Find the existing `VL_SEGMENTS`,
-`VL_SEGMENTS2`, and `VL_SEGMENTS3` assignments (coralline aggregates all three at
-render time). Then apply only what the user approved, additively:
+`VL_SEGMENTS2`, `VL_SEGMENTS3`, and `VL_LAYOUT` assignments. Layout matters for
+where a new segment goes: in `fixed` layout (the default) all three lists render
+as separate lines, but in `auto` layout **only `VL_SEGMENTS` is rendered** —
+`VL_SEGMENTS2`/`VL_SEGMENTS3` do not display. Then apply only what the user
+approved, additively:
 
-- New segment: append it to whichever of `VL_SEGMENTS`/`VL_SEGMENTS2`/`VL_SEGMENTS3`
-  the user already uses (default: `VL_SEGMENTS`). Never add a segment already
-  present in **any** of the three, and never reorder or drop existing segments.
+- New segment: append it to `VL_SEGMENTS` by default. Only use `VL_SEGMENTS2` or
+  `VL_SEGMENTS3` when `VL_LAYOUT` is `fixed` **and** the user already populates
+  that line (in `auto` layout a segment added to `2`/`3` would never show). Never
+  add a segment already present in **any** of the three, and never reorder or drop
+  existing segments.
 - New option: append the exact enabling assignment from the report (e.g.
   `VL_FLOAT=1`). Never change a knob the user has already set.
 
-If `coralline.conf` does not exist, create it with just the approved additions.
+If `coralline.conf` does not exist, do **not** write a bare `VL_SEGMENTS="<new
+segment>"` — any `VL_SEGMENTS` assignment replaces the built-in default list, so
+that would hide every default segment. Seed the shipped default list first, then
+append the approved segments:
+
+    VL_SEGMENTS="dir git model ctx limit5h limit7d cost clock <approved segments>"
+
+followed by one line per approved option.
 
 ## Verification
 
 Render once with the bundled sample to confirm it still renders and the new
 segments are present:
 
-    cat ~/.claude/coralline/sample-input.json | bash ~/.claude/coralline/statusline.sh
+    cat ~/.claude/coralline/sample-input.json | CORALLINE_NO_SAMPLE=1 bash ~/.claude/coralline/statusline.sh
 
 A newly added segment like `burn` may show a neutral "warming" glyph until real
 usage data accrues — that is expected. Then tell the user to restart Claude Code

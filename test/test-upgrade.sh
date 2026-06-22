@@ -36,7 +36,7 @@ seg_effort() {  # reasoning effort level (low/medium/high)
   :
 }
 VL_ASCII=0
-VL_NAME_MAX=0
+VL_NAME_MAX=0                   # max chars for names before truncation (0 = off)
 VL_BG_DIR="0,0,0"
 VL_BG_BURN="1,2,3"
 VL_FLOAT=0                      # 1 = also write a plain-text readout to VL_FLOAT_FILE
@@ -56,6 +56,7 @@ case "$knobs" in *" VL_FLOAT "*)      check "knob_names finds VL_FLOAT"      1 ;
 case "$knobs" in *" VL_LIMIT_SYNC "*) check "knob_names finds VL_LIMIT_SYNC" 1 ;; *) check "knob_names finds VL_LIMIT_SYNC" 0 ;; esac
 case "$knobs" in *" VL_BG_BURN "*)    check "knob_names EXCLUDES color knob (non-0 default)" 0 ;; *) check "knob_names EXCLUDES color knob (non-0 default)" 1 ;; esac
 case "$knobs" in *" VL_NOCOLOR "*)    check "knob_names EXCLUDES internal-tagged knob" 0 ;; *) check "knob_names EXCLUDES internal-tagged knob" 1 ;; esac
+case "$knobs" in *" VL_NAME_MAX "*)   check "knob_names EXCLUDES numeric 0=off value knob" 0 ;; *) check "knob_names EXCLUDES numeric 0=off value knob" 1 ;; esac
 
 # ---- Section B: description extractors ------------------------------------
 eval "$(sed -n '/^segment_desc() {/,/^}/p' "$CONF")"
@@ -117,6 +118,10 @@ mkdir -p "$tmp/inst/empty"
 [ -z "$(backup_statusline "$tmp/inst/empty")" ] && check "absent statusline → empty path" 1 || check "absent statusline → empty path" 0
 
 # ---- Section E: install_files integration (sandboxed) --------------------
+# Permission-bit cases (E5/E6) behave differently under root: UID 0 bypasses the
+# mode bits, so the cp neither fails nor is blocked. Gate those assertions on a
+# non-root uid and assert the root-equivalent outcome otherwise.
+IS_ROOT=0; [ "$(id -u 2>/dev/null)" = "0" ] && IS_ROOT=1
 mk_old_install() {  # $1=home/.claude dir ; creates an OLD install missing seg_burn
   mkdir -p "$1/coralline"
   printf 'seg_dir() { :; }\nVL_ASCII=0\n' > "$1/coralline/statusline.sh"
@@ -126,7 +131,7 @@ mk_old_install() {  # $1=home/.claude dir ; creates an OLD install missing seg_b
 # (E1) upgrade with new content → report + backup, conf preserved
 home="$tmp/h1/.claude"; mk_old_install "$home"
 conf_before=$(cat "$home/coralline.conf")
-out=$(CORALLINE_HOME="$home/coralline" CLAUDE_SETTINGS="$home/settings.json" \
+out=$(CORALLINE_HOME="$home/coralline" CORALLINE_CONFIG="$home/coralline.conf" CLAUDE_SETTINGS="$home/settings.json" \
       bash "$CONF" --install-only 2>&1)
 printf '%s\n' "$out" | grep -q 'new since your installed copy' && check "E1 install-only prints report" 1 || check "E1 install-only prints report" 0
 printf '%s\n' "$out" | grep -qE 'segment +burn' && check "E1 report includes burn" 1 || check "E1 report includes burn" 0
@@ -156,11 +161,20 @@ out4=$(CORALLINE_HOME="$home4/coralline" CLAUDE_SETTINGS="$home4/settings.json" 
 printf '%s\n' "$out4" | grep -q 'new since your installed copy' && check "E4 bugfix-only: no report" 0 || check "E4 bugfix-only: no report" 1
 ls "$home4"/coralline/statusline.sh.bak.* >/dev/null 2>&1 && check "E4 bugfix-only: backup taken" 1 || check "E4 bugfix-only: backup taken" 0
 
-# (E5) unreadable old statusline → install still succeeds (fail-open)
+# (E5) unreadable old statusline.sh → installer FAILS LOUDLY (the overwrite cp
+# cannot replace a mode-000 file) and prints NO flood "everything is new" report.
+# Previously it silently exited 0 while the runtime was never actually replaced.
 home5="$tmp/h5/.claude"; mk_old_install "$home5"; chmod 000 "$home5/coralline/statusline.sh"
-CORALLINE_HOME="$home5/coralline" CLAUDE_SETTINGS="$home5/settings.json" bash "$CONF" --install-only >/dev/null 2>&1
+out5=$(CORALLINE_HOME="$home5/coralline" CORALLINE_CONFIG="$home5/coralline.conf" CLAUDE_SETTINGS="$home5/settings.json" bash "$CONF" --install-only 2>&1)
 rc=$?; chmod 644 "$home5/coralline/statusline.sh" 2>/dev/null
-[ "$rc" = "0" ] && check "E5 unreadable old: install succeeds" 1 || check "E5 unreadable old: install succeeds" 0
+if [ "$IS_ROOT" = "1" ]; then
+  # root reads/writes the mode-000 file, so the upgrade goes through normally.
+  { [ "$rc" = "0" ] && grep -q 'seg_burn' "$home5/coralline/statusline.sh"; } \
+    && check "E5 (root) unreadable old: upgrade still installs" 1 || check "E5 (root) unreadable old: upgrade still installs" 0
+else
+  [ "$rc" != "0" ] && check "E5 unreadable old: install fails loudly" 1 || check "E5 unreadable old: install fails loudly" 0
+  printf '%s\n' "$out5" | grep -q 'new since your installed copy' && check "E5 unreadable old: no flood report" 0 || check "E5 unreadable old: no flood report" 1
+fi
 
 # (E6) unwritable backup target → install still succeeds, no backup line (fail-open)
 home6="$tmp/h6/.claude"; mk_old_install "$home6"
@@ -168,7 +182,11 @@ chmod 500 "$home6/coralline"   # dir read+exec only → cp of new bak fails
 out6=$(CORALLINE_HOME="$home6/coralline" CLAUDE_SETTINGS="$home6/settings.json" bash "$CONF" --install-only 2>&1)
 rc6=$?; chmod 700 "$home6/coralline" 2>/dev/null
 [ "$rc6" = "0" ] && check "E6 unwritable backup: install succeeds" 1 || check "E6 unwritable backup: install succeeds" 0
-printf '%s\n' "$out6" | grep -q 'backup at' && check "E6 unwritable backup: no backup line" 0 || check "E6 unwritable backup: no backup line" 1
+if [ "$IS_ROOT" != "1" ]; then
+  # root bypasses the unwritable dir and would create the backup, so only assert
+  # the "no backup line" fail-open behavior when the mode bits actually apply.
+  printf '%s\n' "$out6" | grep -q 'backup at' && check "E6 unwritable backup: no backup line" 0 || check "E6 unwritable backup: no backup line" 1
+fi
 
 # ---- Section F: UPGRADE.md structure -------------------------------------
 UP="$REPO/UPGRADE.md"

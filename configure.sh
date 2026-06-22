@@ -155,14 +155,16 @@ segment_names() {  # $1=statusline file
     | sed 's/^seg_//' | grep -Ev '^(len|limit)$' | sort -u | tr '\n' ' '
 }
 
-# Space-separated, sorted-unique opt-in knob names: VL_/CORALLINE_ assignments
-# whose shipped default is exactly 0 and whose line is not tagged "internal".
-# This excludes color knobs (non-0 defaults like "r,g,b") and internal vars,
-# which would otherwise flood the upgrade report. A numeric 0-default knob can
-# slip through, but such knobs pre-exist and so never appear as "new".
+# Space-separated, sorted-unique BOOLEAN opt-in knob names: VL_/CORALLINE_
+# assignments whose shipped default is exactly 0 and whose line is not tagged
+# "internal". This excludes color knobs (non-0 defaults like "r,g,b") and
+# internal vars. It also excludes value knobs whose comment documents "0 = off"
+# (e.g. VL_NAME_MAX): for those, enabling via "<knob>=1" is meaningless, and the
+# report renders every listed knob as "<knob>=1", so they must not be listed.
 knob_names() {  # $1=statusline file
   grep -E '^(VL_|CORALLINE_)[A-Za-z0-9_]+=0([[:space:]]|$)' "$1" 2>/dev/null \
     | grep -iv 'internal' \
+    | grep -v '#.*0[[:space:]]*=' \
     | sed -E 's/=0.*$//' | sort -u | tr '\n' ' '
 }
 
@@ -196,8 +198,19 @@ knob_desc() {  # $1=statusline file $2=knob name
   [ -n "$first" ] || return 0
   first=$(printf '%s\n' "$first" | sed 's/^[[:space:]]*#[[:space:]]*//')
   # Keep just the first sentence so a multi-line block yields a clean summary
-  # instead of a mid-sentence clause.
-  printf '%s\n' "${first%%. *}"
+  # instead of a mid-sentence clause. Stop at the first word ending in . ! or ?,
+  # but NOT on a known abbreviation (vs. e.g. i.e. etc.) so "5h vs. 7d windows."
+  # is not clipped to "5h vs".
+  printf '%s\n' "$first" | awk '{
+    n = split($0, w, " "); out = ""
+    for (i = 1; i <= n; i++) {
+      out = (out == "" ? w[i] : out " " w[i])
+      if (w[i] ~ /[.!?]$/ && w[i] !~ /^(vs|e\.g|i\.e|etc|cf|approx|al)\.$/) {
+        sub(/[.!?]+$/, "", out); print out; exit
+      }
+    }
+    print out
+  }'
 }
 
 # Print a "new since your installed copy" report when the new statusline adds
@@ -1181,12 +1194,15 @@ install_files() {
   need_file "$SCRIPT_DIR/test/sample-input.json"
   [ -d "$SCRIPT_DIR/themes" ] || die "missing themes directory"
 
-  # Upgrade path: on a real overwrite, back up the old statusline.sh, and (only
-  # in install-only/agent mode, so the interactive wizard's alt-screen isn't
-  # clobbered) report what is new. Gated on a real change so identical re-runs
-  # leave no backup.
+  # Upgrade path: on a real, readable overwrite, back up the old statusline.sh,
+  # and (only in install-only/agent mode) report what is new. --install drops into
+  # the menu afterward, which would scroll the report away, so it shows only for
+  # --install-only. The [ -r ] guard matters: without it an UNREADABLE old file
+  # makes cmp -s exit non-zero (read like "differs"), and segment_names/knob_names
+  # would then read it as empty and flood the report with every segment/knob as
+  # "new". Gated on a real change so identical re-runs leave no backup.
   local _bak=""
-  if [ -f "$TARGET_DIR/statusline.sh" ] \
+  if [ -f "$TARGET_DIR/statusline.sh" ] && [ -r "$TARGET_DIR/statusline.sh" ] \
     && ! cmp -s "$TARGET_DIR/statusline.sh" "$SCRIPT_DIR/statusline.sh"; then
     _bak=$(backup_statusline "$TARGET_DIR")
     if [ "$install_only" = "1" ]; then
@@ -1194,7 +1210,11 @@ install_files() {
     fi
   fi
   mkdir -p "$TARGET_DIR/themes"
-  cp "$SCRIPT_DIR/statusline.sh" "$TARGET_DIR/statusline.sh"
+  # Fail loud if the runtime overwrite cannot happen (e.g. an unreadable/unwritable
+  # old statusline.sh) instead of reporting a successful, feature-adding upgrade
+  # that never replaced the file.
+  cp "$SCRIPT_DIR/statusline.sh" "$TARGET_DIR/statusline.sh" \
+    || die "could not write $TARGET_DIR/statusline.sh (check permissions on the existing file)"
   cp "$SCRIPT_DIR/configure.sh" "$TARGET_DIR/configure.sh"
   cp "$SCRIPT_DIR/test/sample-input.json" "$TARGET_DIR/sample-input.json"
   theme_dir="$SCRIPT_DIR/themes"
