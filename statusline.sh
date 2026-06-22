@@ -446,7 +446,7 @@ burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
   fi
 }
 
-seg_burn() {
+seg_burn() {  # range-to-empty ETA until the binding 5h/7d limit hits 100% at the recent burn rate
   [ -n "$fh_pct" ] || [ -n "$wd_pct" ] || return 0
   # _BURN_* is precomputed once per render (see the burn_estimate call beside the
   # sampler below), so the visible and float passes share one computation.
@@ -631,7 +631,7 @@ seg_project() {  # repo-root name in a repo; falls back to dir outside one (unle
   push "${VL_BG_PROJECT:-$VL_BG_DIR}" "${BOLD}${_FG} ⬢ ${_TR} ${NORM}"
 }
 
-seg_dir() {
+seg_dir() {  # current directory, long paths collapsed to ~/a/…/z
   [ -n "$cwd" ] || return 0
   local tilde='~'; local short="${cwd/#"$HOME"/$tilde}" n last
   local IFS='/'; set -- $short; n=$#
@@ -643,7 +643,7 @@ seg_dir() {
   push "$VL_BG_DIR" "${BOLD}${_FG} ${short} ${NORM}"
 }
 
-seg_git() {
+seg_git() {  # branch with staged/modified/untracked and ahead/behind counts
   [ -n "$GIT_BRANCH" ] || return 0
   local bgc="$VL_BG_GIT_OK"
   [ "$GIT_DIRTY" -eq 1 ] && bgc="$VL_BG_GIT_DIRTY"
@@ -651,13 +651,13 @@ seg_git() {
   push "$bgc" "${BOLD}${_FG} ⎇ ${_TR}${GIT_MARKS}${GIT_AB} ${NORM}"
 }
 
-seg_model() {
+seg_model() {  # active Claude model
   [ -n "$model" ] || return 0
   fg "$VL_FG_TEXT"
   push "$VL_BG_MODEL" "${BOLD}${_FG} ◆ ${model#Claude } ${NORM}"
 }
 
-seg_ctx() {
+seg_ctx() {  # context-window gauge with input/output/cache token counts
   [ -n "$ctx_pct" ] || return 0
   local ci fgc fgd ti to tcr tcw
   printf -v ci '%.0f' "$ctx_pct" 2>/dev/null || ci=0
@@ -683,14 +683,14 @@ seg_limit() {  # $1=label $2=pct $3=resets_at $4=bg
 }
 # With VL_LIMIT_SYNC, show the freshest cross-session value for the current
 # window (falling back to this session's own snapshot when none is recorded).
-seg_limit5h() {
+seg_limit5h() {  # 5h rate-limit gauge with reset countdown
   local p="$fh_pct" r="$fh_rst"
   if [ "$VL_LIMIT_SYNC" = "1" ]; then
     rl_latest "$RL5H_FILE" "$RL_MAX_5H"; [ -n "$_LL_PCT" ] && { p="$_LL_PCT"; r="$_LL_RST"; }
   fi
   seg_limit "5h" "$p" "$r" "$VL_BG_5H"
 }
-seg_limit7d() {
+seg_limit7d() {  # 7d rate-limit gauge with reset countdown
   local p="$wd_pct" r="$wd_rst"
   if [ "$VL_LIMIT_SYNC" = "1" ]; then
     rl_latest "$RL7D_FILE" "$RL_MAX_7D"; [ -n "$_LL_PCT" ] && { p="$_LL_PCT"; r="$_LL_RST"; }
@@ -698,7 +698,7 @@ seg_limit7d() {
   seg_limit "7d" "$p" "$r" "$VL_BG_7D"
 }
 
-seg_cost() {
+seg_cost() {  # session cost in USD
   [ -n "$cost" ] && [ "$cost" != "0" ] || return 0
   local fmt
   printf -v fmt "\$%.${VL_COST_DECIMALS}f" "$cost" 2>/dev/null || fmt="\$$cost"
@@ -706,7 +706,7 @@ seg_cost() {
   push "$VL_BG_COST" "${_FG} ${fmt} "
 }
 
-seg_clock() {
+seg_clock() {  # time, 12h or 24h
   [ "$VL_CLOCK" = "off" ] && return 0
   if [ "$VL_CLOCK" = "24h" ]; then
     [ "$VL_CLOCK_SECONDS" = "1" ] && now_strftime '%H:%M:%S' || now_strftime '%H:%M'
@@ -718,7 +718,7 @@ seg_clock() {
   push "$VL_BG_CLOCK" "${_FG} ⊙ ${_T} "
 }
 
-seg_lines() {
+seg_lines() {  # lines added/removed this session
   [ "${lines_add:-0}" -gt 0 ] 2>/dev/null || [ "${lines_del:-0}" -gt 0 ] 2>/dev/null || return 0
   local fgo fgh
   fg "$VL_FG_OK";  fgo="$_FG"
@@ -726,13 +726,13 @@ seg_lines() {
   push "$VL_BG_LINES" " ${fgo}+${lines_add} ${fgh}-${lines_del} "
 }
 
-seg_style() {
+seg_style() {  # active output style
   [ -n "$out_style" ] && [ "$out_style" != "default" ] || return 0
   fg "$VL_FG_TEXT"
   push "$VL_BG_STYLE" "${_FG} ✎ ${out_style} "
 }
 
-seg_duration() {
+seg_duration() {  # session wall-clock duration
   [ "${dur_ms:-0}" -gt 0 ] 2>/dev/null || return 0
   fmt_duration "$dur_ms"
   fg "$VL_FG_TEXT"
@@ -747,7 +747,7 @@ seg_effort() {  # reasoning effort level (low/medium/high/xhigh/max); glyph ψ i
   push "$VL_BG_EFFORT" "${_FG} ψ ${label} "
 }
 
-seg_stash() {
+seg_stash() {  # git stash count
   [ -n "$GIT_BRANCH" ] || return 0
   local n
   n=$(git -C "$cwd" rev-list --walk-reflogs --count refs/stash 2>/dev/null) || return 0
