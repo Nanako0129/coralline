@@ -95,6 +95,34 @@ Then add to `~/.claude/settings.json`:
 > installers bundle every theme; after a manual install, copy the rest of
 > `~/.claude/coralline-src/themes/*.conf` into `~/.claude/coralline/themes/` to switch themes.
 
+### Updating
+
+Two ways to update, both driven by the same installer. Either way your
+`~/.claude/coralline.conf` is preserved and the previous `statusline.sh` is backed up
+under `~/.claude/coralline/` (the 3 newest are kept).
+
+#### Ask Claude (recommended)
+
+Paste this into Claude Code:
+
+```text
+Please update coralline for me:
+fetch https://raw.githubusercontent.com/Nanako0129/coralline/main/UPGRADE.md
+and follow the playbook in it.
+```
+
+Claude re-runs the installer, reads the "new since your installed copy" report, and
+offers to turn on any new opt-in features for you.
+
+#### Update it yourself
+
+Re-run the installer — it prints a short "new since your installed copy" report when
+something new shipped:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash -s -- --install-only
+```
+
 ## Setup
 
 Both paths use the same installer. Humans run it with no mode and get the visual setup. Claude
