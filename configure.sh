@@ -129,6 +129,8 @@ theme_count() {
 
 # Derive the segment menu from the runtime's seg_* functions so a new segment in
 # statusline.sh shows up here automatically — mirrors the theme auto-scan above.
+# NOTE: segment_names() below mirrors this seg_* discovery pattern for the upgrade
+# report; keep the two in sync if the discovery regex changes.
 load_segment_choices() {
   local statusline discovered s ordered=""
   statusline=$(runtime_statusline)
@@ -144,6 +146,125 @@ load_segment_choices() {
   done
   for s in $discovered; do ordered="${ordered}${ordered:+ }$s"; done
   SEGMENT_CHOICES="$ordered"
+}
+
+# Space-separated, sorted-unique segment names in a statusline file. Mirrors
+# load_segment_choices' discovery so detection and the wizard agree on "segment".
+segment_names() {  # $1=statusline file
+  grep -oE '^seg_[A-Za-z0-9_]+' "$1" 2>/dev/null \
+    | sed 's/^seg_//' | grep -Ev '^(len|limit)$' | sort -u | tr '\n' ' '
+}
+
+# Space-separated, sorted-unique BOOLEAN opt-in knob names: VL_/CORALLINE_
+# assignments whose shipped default is exactly 0 and whose line is not tagged
+# "internal". This excludes color knobs (non-0 defaults like "r,g,b") and
+# internal vars. It also excludes value knobs whose comment documents "0 = off"
+# (e.g. VL_NAME_MAX): for those, enabling via "<knob>=1" is meaningless, and the
+# report renders every listed knob as "<knob>=1", so they must not be listed.
+knob_names() {  # $1=statusline file
+  grep -E '^(VL_|CORALLINE_)[A-Za-z0-9_]+=0([[:space:]]|$)' "$1" 2>/dev/null \
+    | grep -iv 'internal' \
+    | grep -v '#.*0[[:space:]]*=' \
+    | sed -E 's/=0.*$//' | sort -u | tr '\n' ' '
+}
+
+# Inline comment after `seg_<name>() {`, else empty.
+segment_desc() {  # $1=statusline file $2=segment name
+  local line
+  line=$(grep -E "^seg_$2\(\) \{" "$1" 2>/dev/null | head -1)
+  case "$line" in
+    *\#*) printf '%s\n' "${line#*\#}" | sed 's/^[[:space:]]*//' ;;
+  esac
+}
+
+# Trailing inline comment on the knob's declaration line; else the FIRST SENTENCE
+# of the contiguous # comment block immediately above it; else empty.
+knob_desc() {  # $1=statusline file $2=knob name
+  local file="$1" name="$2" ln line i first=""
+  ln=$(grep -nE "^$name=" "$file" 2>/dev/null | head -1 | cut -d: -f1)
+  [ -n "$ln" ] || return 0
+  line=$(sed -n "${ln}p" "$file")
+  case "$line" in
+    *\#*) printf '%s\n' "${line#*\#}" | sed 's/^[[:space:]]*//'; return 0 ;;
+  esac
+  i=$((ln - 1))
+  while [ "$i" -ge 1 ]; do
+    line=$(sed -n "${i}p" "$file")
+    case "$line" in
+      \#*|[[:space:]]*\#*) first="$line"; i=$((i - 1)) ;;
+      *) break ;;
+    esac
+  done
+  [ -n "$first" ] || return 0
+  first=$(printf '%s\n' "$first" | sed 's/^[[:space:]]*#[[:space:]]*//')
+  # Keep just the first sentence so a multi-line block yields a clean summary
+  # instead of a mid-sentence clause. Stop at the first word ending in . ! or ?,
+  # but NOT on a known abbreviation (vs. e.g. i.e. etc.) so "5h vs. 7d windows."
+  # is not clipped to "5h vs".
+  printf '%s\n' "$first" | awk '{
+    n = split($0, w, " "); out = ""
+    for (i = 1; i <= n; i++) {
+      out = (out == "" ? w[i] : out " " w[i])
+      if (w[i] ~ /[.!?]$/ && w[i] !~ /^(vs|e\.g|i\.e|etc|cf|approx|al)\.$/) {
+        sub(/[.!?]+$/, "", out); print out; exit
+      }
+    }
+    print out
+  }'
+}
+
+# Print a "new since your installed copy" report when the new statusline adds
+# segments or opt-in knobs the old one lacked. Silent on fresh install or no
+# delta. Reports only — never writes config. Emits color only on a tty so the
+# piped/agent path gets clean, parseable text.
+report_upgrade_delta() {  # $1=old statusline $2=new statusline $3=backup path (may be empty)
+  local old="$1" new="$2" bak="${3:-}"
+  [ -f "$old" ] && [ -f "$new" ] || return 0
+  local cb="" cr="" cc="" cd=""
+  if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    cb="${T_BOLD:-}"; cr="${T_RESET:-}"; cc="${T_CORAL:-}"; cd="${T_DIM:-}"
+  fi
+  local IFS=' '
+  local old_segs new_segs old_knobs new_knobs s k d seglist="" knoblist=""
+  old_segs=" $(segment_names "$old") " ; new_segs=" $(segment_names "$new") "
+  for s in $new_segs; do
+    case "$old_segs" in *" $s "*) : ;; *) seglist="${seglist}${seglist:+ }$s" ;; esac
+  done
+  old_knobs=" $(knob_names "$old") " ; new_knobs=" $(knob_names "$new") "
+  for k in $new_knobs; do
+    case "$old_knobs" in *" $k "*) : ;; *) knoblist="${knoblist}${knoblist:+ }$k" ;; esac
+  done
+  [ -n "$seglist" ] || [ -n "$knoblist" ] || return 0
+  printf '\n%scoralline upgrade — new since your installed copy:%s\n' "$cb" "$cr"
+  for s in $seglist; do
+    d=$(segment_desc "$new" "$s")
+    printf '  segment  %s%-16s%s %s\n' "$cc" "$s" "$cr" "$d"
+  done
+  for k in $knoblist; do
+    d=$(knob_desc "$new" "$k")
+    printf '  option   %s%-16s%s %s\n' "$cc" "${k}=1" "$cr" "$d"
+  done
+  printf '%s~/.claude/coralline.conf preserved%s' "$cd" "$cr"
+  [ -n "$bak" ] && printf '%s · backup at %s%s' "$cd" "$bak" "$cr"
+  printf '\n%senable: rerun configure.sh, or let Claude wire them in (see UPGRADE.md)%s\n' "$cd" "$cr"
+}
+
+# Back up an install dir's statusline.sh to statusline.sh.bak.<ts> (mirrors the
+# settings.json.bak.<ts> convention), keep only the 3 newest, and echo the new
+# backup path. Echo nothing on failure or when statusline.sh is absent (fail
+# open). A single-file copy, so a symlinked install dir is harmless.
+backup_statusline() {  # $1=install dir
+  # Keep the N newest timestamped backups; prune older ones. A rollback safety
+  # net, not history — a few recent copies cover slip-ups without piling up.
+  local dir="$1" src="$1/statusline.sh" bak old keep_backups=3
+  [ -f "$src" ] || return 0
+  bak="${src}.bak.$(date +%Y%m%d-%H%M%S)"
+  [ -e "$bak" ] && bak="${bak}.$$"
+  cp "$src" "$bak" 2>/dev/null || return 0
+  printf '%s\n' "$bak"
+  ls -1t "${src}".bak.* 2>/dev/null | tail -n +$((keep_backups + 1)) | while IFS= read -r old; do
+    rm -f "$old" 2>/dev/null
+  done
 }
 
 segment_total() {
@@ -1075,8 +1196,27 @@ install_files() {
   need_file "$SCRIPT_DIR/test/sample-input.json"
   [ -d "$SCRIPT_DIR/themes" ] || die "missing themes directory"
 
+  # Upgrade path: on a real, readable overwrite, back up the old statusline.sh,
+  # and (only in install-only/agent mode) report what is new. --install drops into
+  # the menu afterward, which would scroll the report away, so it shows only for
+  # --install-only. The [ -r ] guard matters: without it an UNREADABLE old file
+  # makes cmp -s exit non-zero (read like "differs"), and segment_names/knob_names
+  # would then read it as empty and flood the report with every segment/knob as
+  # "new". Gated on a real change so identical re-runs leave no backup.
+  local _bak=""
+  if [ -f "$TARGET_DIR/statusline.sh" ] && [ -r "$TARGET_DIR/statusline.sh" ] \
+    && ! cmp -s "$TARGET_DIR/statusline.sh" "$SCRIPT_DIR/statusline.sh"; then
+    _bak=$(backup_statusline "$TARGET_DIR")
+    if [ "$install_only" = "1" ]; then
+      report_upgrade_delta "$TARGET_DIR/statusline.sh" "$SCRIPT_DIR/statusline.sh" "$_bak"
+    fi
+  fi
   mkdir -p "$TARGET_DIR/themes"
-  cp "$SCRIPT_DIR/statusline.sh" "$TARGET_DIR/statusline.sh"
+  # Fail loud if the runtime overwrite cannot happen (e.g. an unreadable/unwritable
+  # old statusline.sh) instead of reporting a successful, feature-adding upgrade
+  # that never replaced the file.
+  cp "$SCRIPT_DIR/statusline.sh" "$TARGET_DIR/statusline.sh" \
+    || die "could not write $TARGET_DIR/statusline.sh (check permissions on the existing file)"
   cp "$SCRIPT_DIR/configure.sh" "$TARGET_DIR/configure.sh"
   cp "$SCRIPT_DIR/test/sample-input.json" "$TARGET_DIR/sample-input.json"
   theme_dir="$SCRIPT_DIR/themes"
@@ -1248,7 +1388,7 @@ main_menu() {
 for arg in "$@"; do
   case "$arg" in
     --install) install_files; update_settings ;;
-    --install-only) install_files; update_settings; install_only=1 ;;
+    --install-only) install_only=1; install_files; update_settings ;;
     --default) setup_mode="default" ;;
     --import-p10k) setup_mode="import-p10k" ;;
     --wizard) setup_mode="wizard" ;;

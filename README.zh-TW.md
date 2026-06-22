@@ -91,6 +91,31 @@ cp ~/.claude/coralline-src/themes/claude-coral.conf ~/.claude/coralline/themes/
 > **注意：** 上面的指令只複製 `claude-coral` 一個主題。「請 Claude 安裝」與一行安裝會帶上全部主題；
 > 手動安裝後若要換主題，把 `~/.claude/coralline-src/themes/*.conf` 其餘的也複製進 `~/.claude/coralline/themes/`。
 
+### 更新
+
+兩種更新方式，都由同一支 installer 驅動。無論哪種，你的 `~/.claude/coralline.conf`
+都會被保留，舊的 `statusline.sh` 會備份在 `~/.claude/coralline/` 下（保留最近 3 份）。
+
+#### 請 Claude 更新（推薦）
+
+把這段貼進 Claude Code：
+
+```text
+Please update coralline for me:
+fetch https://raw.githubusercontent.com/Nanako0129/coralline/main/UPGRADE.md
+and follow the playbook in it.
+```
+
+Claude 會重跑 installer、讀取「new since your installed copy」報告，並主動問你要不要開啟新出現的 opt-in 功能。
+
+#### 自己更新
+
+重跑 installer —— 有新東西時它會印出一段簡短的「new since your installed copy」報告：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash -s -- --install-only
+```
+
 ## 設定
 
 兩種方式都使用同一支 installer。人類不帶模式參數執行時會進入視覺化設定；
