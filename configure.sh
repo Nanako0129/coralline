@@ -164,6 +164,40 @@ knob_names() {  # $1=statusline file
     | sed -E 's/=0.*$//' | sort -u | tr '\n' ' '
 }
 
+# Inline comment after `seg_<name>() {`, else empty.
+segment_desc() {  # $1=statusline file $2=segment name
+  local line
+  line=$(grep -E "^seg_$2\(\) \{" "$1" 2>/dev/null | head -1)
+  case "$line" in
+    *\#*) printf '%s\n' "${line#*\#}" | sed 's/^[[:space:]]*//' ;;
+  esac
+}
+
+# Trailing inline comment on the knob's declaration line; else the FIRST SENTENCE
+# of the contiguous # comment block immediately above it; else empty.
+knob_desc() {  # $1=statusline file $2=knob name
+  local file="$1" name="$2" ln line i first=""
+  ln=$(grep -nE "^$name=" "$file" 2>/dev/null | head -1 | cut -d: -f1)
+  [ -n "$ln" ] || return 0
+  line=$(sed -n "${ln}p" "$file")
+  case "$line" in
+    *\#*) printf '%s\n' "${line#*\#}" | sed 's/^[[:space:]]*//'; return 0 ;;
+  esac
+  i=$((ln - 1))
+  while [ "$i" -ge 1 ]; do
+    line=$(sed -n "${i}p" "$file")
+    case "$line" in
+      \#*|[[:space:]]*\#*) first="$line"; i=$((i - 1)) ;;
+      *) break ;;
+    esac
+  done
+  [ -n "$first" ] || return 0
+  first=$(printf '%s\n' "$first" | sed 's/^[[:space:]]*#[[:space:]]*//')
+  # Keep just the first sentence so a multi-line block yields a clean summary
+  # instead of a mid-sentence clause.
+  printf '%s\n' "${first%%. *}"
+}
+
 segment_total() {
   set -- $SEGMENT_CHOICES
   printf '%s\n' "$#"

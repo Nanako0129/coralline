@@ -57,4 +57,18 @@ case "$knobs" in *" VL_LIMIT_SYNC "*) check "knob_names finds VL_LIMIT_SYNC" 1 ;
 case "$knobs" in *" VL_BG_BURN "*)    check "knob_names EXCLUDES color knob (non-0 default)" 0 ;; *) check "knob_names EXCLUDES color knob (non-0 default)" 1 ;; esac
 case "$knobs" in *" VL_NOCOLOR "*)    check "knob_names EXCLUDES internal-tagged knob" 0 ;; *) check "knob_names EXCLUDES internal-tagged knob" 1 ;; esac
 
+# ---- Section B: description extractors ------------------------------------
+eval "$(sed -n '/^segment_desc() {/,/^}/p' "$CONF")"
+eval "$(sed -n '/^knob_desc() {/,/^}/p'    "$CONF")"
+
+[ "$(segment_desc "$tmp/new.sh" effort)" = "reasoning effort level (low/medium/high)" ] \
+  && check "segment_desc reads inline comment (effort)" 1 || check "segment_desc reads inline comment (effort)" 0
+[ -z "$(segment_desc "$tmp/new.sh" burn)" ] \
+  && check "segment_desc empty when no comment (burn)" 1 || check "segment_desc empty when no comment (burn)" 0
+
+[ "$(knob_desc "$tmp/new.sh" VL_FLOAT)" = "1 = also write a plain-text readout to VL_FLOAT_FILE" ] \
+  && check "knob_desc reads inline comment (VL_FLOAT)" 1 || check "knob_desc reads inline comment (VL_FLOAT)" 0
+[ "$(knob_desc "$tmp/new.sh" VL_LIMIT_SYNC)" = "Cross-session limit sync (opt-in)" ] \
+  && check "knob_desc reads first sentence of block (VL_LIMIT_SYNC)" 1 || check "knob_desc reads first sentence of block (VL_LIMIT_SYNC)" 0
+
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi
