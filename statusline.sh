@@ -280,13 +280,28 @@ rl_latest() {  # $1=file → _LL_PCT _LL_RST (epoch)
   # entry added after `hi` was chosen, and the loop would rmdir that fresher (and
   # possibly higher) entry. Iterating the same snapshot means post-snapshot adds
   # are never deletion candidates, so a concurrent higher add is never lost.
-  local snap hi d
+  local snap hi d cut="" kept=""
+  # A store poisoned before this fix (a 2030 sentinel written by an old preview)
+  # would still pin every read: rl_latest picks the max reset and rmdirs the rest.
+  # So drop entries beyond NOW+8d on read too. That keeps the sentinel out of the
+  # high-water AND prunes it, so the store self-heals (#32). Guarded on NOW so
+  # direct unit calls without a clock keep every entry. A real reset is never that
+  # far out, so a concurrent legitimate add is never a pruning candidate.
+  [ -z "${NOW:-}" ] || cut=$(( NOW + 8*86400 ))
   snap=$(ls -1 "$_RLD" 2>/dev/null | grep '^[0-9]' | sort)
   [ -n "$snap" ] || return 0
-  hi=$(printf '%s\n' "$snap" | tail -n1)
+  for d in $snap; do
+    if [ -n "$cut" ] && [ "$(( 10#${d%_*} ))" -gt "$cut" ]; then
+      rmdir "$_RLD/$d" 2>/dev/null            # purge the poisoned sentinel entry
+    else
+      kept="${kept}${kept:+ }$d"
+    fi
+  done
+  [ -n "$kept" ] || return 0
+  hi="${kept##* }"             # kept is built in sorted order, so the last is the max
   _LL_RST=$(( 10#${hi%_*} ))   # 10# avoids the leading-zero octal trap on the reset
   _LL_PCT="${hi#*_}"           # keep as string so a fractional pct is preserved
-  for d in $snap; do
+  for d in $kept; do
     [ "$d" = "$hi" ] || rmdir "$_RLD/$d" 2>/dev/null
   done
 }
@@ -298,9 +313,13 @@ burn_eta_5h() {  # → _B5_STATE _B5_ETA _B5_RATE _B5_TTR ; trims $BURN_FILE
   out=$(awk -F'\t' -v now="$NOW" -v win="$CORALLINE_BURN_WINDOW" \
             -v trim="$BURN_TRIM" -v tmp="$tmp" '
     $2 != "" {
-      e = $1 + 0
+      e = $1 + 0; r = $3 + 0
+      # Drop a row whose reset is implausibly far out (a 2030 sentinel from an old
+      # sample preview). Left in, it becomes the "current window" below and starves
+      # the real samples; dropping it on read self-heals a pre-fix poisoned file (#32).
+      if (r > now + 8*86400) { dropped = 1; next }
       if (!(e in seen)) { ord[++n] = e; seen[e] = 1 }
-      pct[e] = $2 + 0; rst[e] = $3 + 0
+      pct[e] = $2 + 0; rst[e] = r
     }
     END {
       if (n == 0) { print "warming inf 0 0"; next_done = 1 }
@@ -356,8 +375,9 @@ burn_eta_5h() {  # → _B5_STATE _B5_ETA _B5_RATE _B5_TTR ; trims $BURN_FILE
         # bursts (resize storms) append same-second rows that n dedups away, so an
         # n-based cap would never fire and the file would grow unbounded. The
         # rewrite emits the deduped last-`trim` seconds, so it also collapses the
-        # burst rows. Fires only when the file actually exceeds the cap.
-        if (NR > trim) {
+        # burst rows. Fires when the file exceeds the cap, or when a sentinel row
+        # was dropped above, so the poisoned row is purged from the file too (#32).
+        if (NR > trim || dropped) {
           lo = n - trim + 1; if (lo < 1) lo = 1
           for (i = lo; i <= n; i++)
             printf "%d\t%s\t%d\n", ord[i], pct[ord[i]], rst[ord[i]] > tmp
