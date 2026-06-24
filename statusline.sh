@@ -13,7 +13,9 @@
 #
 # Requires: jq, and a Nerd Font terminal unless VL_ASCII=1
 
-input=$(cat)
+# -d '' reads until NUL (i.e. all of stdin, like cat) without forking.
+# -t 5 prevents zombie bash on MSYS2 where pipe EOF may never arrive.
+read -t 5 -r -d '' input || true
 
 # ── Defaults (every value can be overridden by the config file) ──────────────
 VL_STYLE="pill"                 # pill: powerline pills · lean: p10k-lean flat text
