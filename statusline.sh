@@ -188,16 +188,37 @@ fmt_tok() {
 }
 
 # Accepts epoch seconds (with or without decimals) or an ISO 8601 timestamp → _EP.
-# Claude Code sends rate-limit resets_at as ISO ("…Z"), so that branch shells out
-# to date once per call — the same fork seg_limit's countdown already pays. The
-# epoch-int branch is the fork-free path for callers that already hold epoch.
+# Claude Code sends rate-limit resets_at as ISO UTC ("…Z"). The common shape is
+# parsed fork-free with pure integer date math (days-from-civil), so the default
+# limit5h/limit7d countdowns no longer shell out to date on every render. A
+# non-standard shape falls back to one date call. The epoch-int branch is
+# fork-free for callers that already hold epoch.
 to_epoch() {
-  local t="$1" s
+  local t="$1" s d tm Y Mo D H Mi S yy era yoe doy doe days
   [ -z "$t" ] && return 1
   case "$t" in
-    *T*)  # ISO 8601 — try GNU date, then BSD date (assume UTC if tz lost)
+    *T*)  # ISO 8601 — assume UTC (resets_at is always "…Z"; tz offset, if any,
+          # is dropped, matching the previous date-based behavior).
+      s="${t%%[.+]*}" ; s="${s%Z}"          # 2026-06-24T15:20:00
+      d="${s%%T*}" ; tm="${s#*T}"
+      Y="${d%%-*}" ; D="${d##*-}" ; Mo="${d#*-}" ; Mo="${Mo%%-*}"
+      H="${tm%%:*}" ; S="${tm##*:}" ; Mi="${tm#*:}" ; Mi="${Mi%%:*}"
+      case "$Y$Mo$D$H$Mi$S" in
+        ''|*[!0-9]*) ;;                      # unexpected shape → date fallback
+        *)
+          # 10# forces base-10 so a leading zero (08, 09) is not read as octal
+          Y=$((10#$Y)); Mo=$((10#$Mo)); D=$((10#$D))
+          H=$((10#$H)); Mi=$((10#$Mi)); S=$((10#$S))
+          yy=$(( Y - (Mo <= 2) ))           # days-from-civil (Howard Hinnant), UTC
+          era=$(( (yy >= 0 ? yy : yy - 399) / 400 ))
+          yoe=$(( yy - era * 400 ))
+          doy=$(( (153 * (Mo + (Mo > 2 ? -3 : 9)) + 2) / 5 + D - 1 ))
+          doe=$(( yoe * 365 + yoe / 4 - yoe / 100 + doy ))
+          days=$(( era * 146097 + doe - 719468 ))
+          _EP=$(( days * 86400 + H * 3600 + Mi * 60 + S ))
+          return 0 ;;
+      esac
       _EP=$(date -u -d "$t" +%s 2>/dev/null) && return 0
-      s="${t%%[.+]*}" ; s="${s%Z}"
       _EP=$(date -ju -f '%Y-%m-%dT%H:%M:%S' "$s" +%s 2>/dev/null) && return 0
       return 1 ;;
     *[0-9]*) _EP="${t%%.*}" ; return 0 ;;
