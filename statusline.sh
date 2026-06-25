@@ -188,14 +188,48 @@ fmt_tok() {
 }
 
 # Accepts epoch seconds (with or without decimals) or an ISO 8601 timestamp → _EP.
-# Claude Code sends rate-limit resets_at as ISO ("…Z"), so that branch shells out
-# to date once per call — the same fork seg_limit's countdown already pays. The
-# epoch-int branch is the fork-free path for callers that already hold epoch.
+# Claude Code sends rate-limit resets_at as ISO UTC ("…Z"). The common shape is
+# parsed fork-free with pure integer date math (days-from-civil), so the default
+# limit5h/limit7d countdowns no longer shell out to date on every render. A
+# non-standard shape falls back to one date call. The epoch-int branch is
+# fork-free for callers that already hold epoch.
 to_epoch() {
-  local t="$1" s
+  local t="$1" s tm Y Mo D H Mi S yy era yoe doy doe days dim
   [ -z "$t" ] && return 1
   case "$t" in
-    *T*)  # ISO 8601 — try GNU date, then BSD date (assume UTC if tz lost)
+    *T*)  # ISO 8601. Fast-path ONLY the canonical UTC shape
+          #   YYYY-MM-DDTHH:MM:SS  with an optional .fraction and optional Z.
+          # Anything else (a timezone offset, missing seconds, an impossible
+          # date) falls through to date so behavior matches the old path exactly.
+      tm="${t#*T}"
+      case "$tm" in
+        *[+-]*) ;;                            # tz offset present → date fallback
+        *)
+          s="${t%Z}" ; s="${s%%.*}"          # drop trailing Z and any fraction
+          case "$s" in
+            [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9])
+              # fixed offsets are safe now that the exact shape is confirmed.
+              # 10# forces base-10 so a leading zero (08, 09) is not read as octal.
+              Y=$((10#${s:0:4})); Mo=$((10#${s:5:2})); D=$((10#${s:8:2}))
+              H=$((10#${s:11:2})); Mi=$((10#${s:14:2})); S=$((10#${s:17:2}))
+              dim=31                          # days in month, for range validation
+              case $Mo in
+                4|6|9|11) dim=30 ;;
+                2) dim=$(( (Y % 4 == 0 && (Y % 100 != 0 || Y % 400 == 0)) ? 29 : 28 )) ;;
+              esac
+              if [ "$Mo" -ge 1 ] && [ "$Mo" -le 12 ] && [ "$D" -ge 1 ] && [ "$D" -le "$dim" ] \
+                 && [ "$H" -le 23 ] && [ "$Mi" -le 59 ] && [ "$S" -le 59 ]; then
+                yy=$(( Y - (Mo <= 2) ))       # days-from-civil (Howard Hinnant), UTC
+                era=$(( (yy >= 0 ? yy : yy - 399) / 400 ))
+                yoe=$(( yy - era * 400 ))
+                doy=$(( (153 * (Mo + (Mo > 2 ? -3 : 9)) + 2) / 5 + D - 1 ))
+                doe=$(( yoe * 365 + yoe / 4 - yoe / 100 + doy ))
+                days=$(( era * 146097 + doe - 719468 ))
+                _EP=$(( days * 86400 + H * 3600 + Mi * 60 + S ))
+                return 0
+              fi ;;
+          esac ;;
+      esac
       _EP=$(date -u -d "$t" +%s 2>/dev/null) && return 0
       s="${t%%[.+]*}" ; s="${s%Z}"
       _EP=$(date -ju -f '%Y-%m-%dT%H:%M:%S' "$s" +%s 2>/dev/null) && return 0
