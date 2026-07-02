@@ -527,13 +527,36 @@ normalize_segments() {
 }
 
 import_p10k() {
-  local wizard_options time_fmt
+  local wizard_options time_fmt bg sep
   [ -f "$P10K_FILE" ] || die "cannot import; $P10K_FILE does not exist"
 
   wizard_options=$(grep -E '^# Wizard options:' "$P10K_FILE" 2>/dev/null | tail -1)
   case "$wizard_options" in
     *lean*) style="lean" ;;
-    *classic*|*rainbow*|*powerline*) style="pill" ;;
+    *classic*)
+      # p10k "classic" is lean text on one uniform background bar, so emit
+      # coralline's first-class classic style (statusline.sh resolves it to lean plus
+      # a default bar + end cap). Carry p10k's own background and separator as
+      # explicit overrides so a personalised classic still reproduces exactly; the
+      # per-segment colours come through as foregrounds (the classic branch below).
+      style="classic"
+      bg=$(p10k_value POWERLEVEL9K_BACKGROUND || true)
+      [ -n "$bg" ] && bg=$(normalize_color "$bg") && add_extra VL_LEAN_BG "$bg"
+      sep=$(p10k_value POWERLEVEL9K_LEFT_SEGMENT_SEPARATOR || true)
+      # Decode p10k's \uXXXX escape to real UTF-8 bytes with jq (already required):
+      # bash 3.2 (stock macOS /bin/bash) does not expand $'\uXXXX', so writing the
+      # escape verbatim would leave a literal 6-char string; jq decodes it and passes
+      # an already-literal glyph through unchanged. Emit it shell-quoted (write_assign,
+      # via printf %q) rather than through add_extra's bare double quotes, so an odd or
+      # hostile separator (a quote, $, or backtick) cannot break or inject into the
+      # sourced coralline.conf; %q stays bash-3.2-safe too.
+      if [ -n "$sep" ]; then
+        sep=$(printf '"%s"' "$sep" | jq -r . 2>/dev/null) || sep=""
+        [ -n "$sep" ] && extra_config="${extra_config}$(write_assign VL_LEAN_CAP_R "$sep")
+"
+      fi
+      ;;
+    *rainbow*|*powerline*) style="pill" ;;
   esac
   case "$wizard_options" in
     *24h\ time*) clock_mode="24h" ;;
@@ -547,19 +570,23 @@ import_p10k() {
     *%S*) clock_seconds=1 ;;
   esac
 
-  if [ "$style" = "lean" ]; then
-    map_p10k_color POWERLEVEL9K_DIR_FOREGROUND VL_BG_DIR
-    map_p10k_color POWERLEVEL9K_VCS_CLEAN_FOREGROUND VL_BG_GIT_OK
-    map_p10k_color POWERLEVEL9K_VCS_MODIFIED_FOREGROUND VL_BG_GIT_DIRTY
-    map_p10k_color POWERLEVEL9K_VCS_UNTRACKED_FOREGROUND VL_BG_GIT_DIRTY
-    map_p10k_color POWERLEVEL9K_TIME_FOREGROUND VL_BG_CLOCK
-  else
-    map_p10k_color POWERLEVEL9K_DIR_BACKGROUND VL_BG_DIR
-    map_p10k_color POWERLEVEL9K_VCS_CLEAN_BACKGROUND VL_BG_GIT_OK
-    map_p10k_color POWERLEVEL9K_VCS_MODIFIED_BACKGROUND VL_BG_GIT_DIRTY
-    map_p10k_color POWERLEVEL9K_VCS_UNTRACKED_BACKGROUND VL_BG_GIT_DIRTY
-    map_p10k_color POWERLEVEL9K_TIME_BACKGROUND VL_BG_CLOCK
-  fi
+  # lean and classic both colour the text (foregrounds); pill colours pill backgrounds.
+  case "$style" in
+    lean|classic)
+      map_p10k_color POWERLEVEL9K_DIR_FOREGROUND VL_BG_DIR
+      map_p10k_color POWERLEVEL9K_VCS_CLEAN_FOREGROUND VL_BG_GIT_OK
+      map_p10k_color POWERLEVEL9K_VCS_MODIFIED_FOREGROUND VL_BG_GIT_DIRTY
+      map_p10k_color POWERLEVEL9K_VCS_UNTRACKED_FOREGROUND VL_BG_GIT_DIRTY
+      map_p10k_color POWERLEVEL9K_TIME_FOREGROUND VL_BG_CLOCK
+      ;;
+    *)
+      map_p10k_color POWERLEVEL9K_DIR_BACKGROUND VL_BG_DIR
+      map_p10k_color POWERLEVEL9K_VCS_CLEAN_BACKGROUND VL_BG_GIT_OK
+      map_p10k_color POWERLEVEL9K_VCS_MODIFIED_BACKGROUND VL_BG_GIT_DIRTY
+      map_p10k_color POWERLEVEL9K_VCS_UNTRACKED_BACKGROUND VL_BG_GIT_DIRTY
+      map_p10k_color POWERLEVEL9K_TIME_BACKGROUND VL_BG_CLOCK
+      ;;
+  esac
   map_p10k_color POWERLEVEL9K_STATUS_OK_FOREGROUND VL_FG_OK
   map_p10k_color POWERLEVEL9K_STATUS_ERROR_FOREGROUND VL_FG_HOT
 }

@@ -139,7 +139,7 @@ Ask concise questions. If the user says "you decide", choose the defaults.
 1. **Theme**: inspect `~/.claude/coralline/themes/**/*.conf` and offer the installed theme
    labels. Default to `claude-coral` when unsure. Nested themes use labels like
    `best-themes/github-dark`.
-2. **Style**: `pill` default, or `lean`.
+2. **Style**: `pill` default, `lean`, or `classic` (p10k's uniform dark-bar look).
 3. **Segments**: default is `dir git model ctx limit5h limit7d cost clock`.
    Optional extras: `project`, `node`, `python`, `effort`, `burn`, `lines`, `style`,
    `duration`, `stash`. `node` shows the active Node version (`.nvmrc` / `.node-version`,
@@ -167,7 +167,10 @@ when present:
 | p10k setting | coralline config |
 |---|---|
 | Wizard options include `lean` | `VL_STYLE="lean"` |
-| Wizard options include `classic`, `rainbow`, or `powerline` | `VL_STYLE="pill"` |
+| Wizard options include `classic` | `VL_STYLE="classic"` (and carry the two rows below) |
+| Wizard options include `rainbow` or `powerline` | `VL_STYLE="pill"` |
+| `POWERLEVEL9K_BACKGROUND` (classic only) | `VL_LEAN_BG` — the uniform bar color |
+| `POWERLEVEL9K_LEFT_SEGMENT_SEPARATOR` (classic only) | `VL_LEAN_CAP_R` — the trailing cap glyph |
 | Wizard options or time format indicate 24h | `VL_CLOCK="24h"` |
 | `POWERLEVEL9K_DIR_BACKGROUND` or `_FOREGROUND` | `VL_BG_DIR` |
 | `POWERLEVEL9K_VCS_CLEAN_*` | `VL_BG_GIT_OK` |
