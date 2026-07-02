@@ -38,9 +38,18 @@ emit() {
   printf '\033]1337;SetUserVar=coralline=%s\007' "$b64" > "$TTY"
 }
 
-# Portable mtime in epoch seconds (BSD then GNU).
+# Portable mtime in epoch seconds, robust to whichever stat is on PATH.
+# GNU coreutils (-c) is tried first: BSD's `stat -f %m` is misread by GNU stat as
+# --file-system and "succeeds" with non-numeric junk, so a BSD-first chain breaks
+# on machines that have GNU stat installed (e.g. via Nix/Homebrew coreutils).
+# The numeric guard keeps any stray output from reaching arithmetic under set -u.
 file_mtime() {
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
+  local mt
+  mt=$(stat -c %Y "$1" 2>/dev/null) || mt=$(stat -f %m "$1" 2>/dev/null)
+  case "$mt" in
+    ''|*[!0-9]*) ;;          # not a clean integer → emit nothing (treated as stale)
+    *) printf '%s' "$mt" ;;
+  esac
 }
 
 # Compute the value to push: contents if fresh, empty if stale/missing.
