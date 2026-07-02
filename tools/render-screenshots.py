@@ -398,6 +398,18 @@ def lean_blocks():
         ("same data, pill style", run_bar("claude-coral", "dir git model clock", LOW)),
     ]
 
+def classic_blocks():
+    # Classic is a look, not a palette: the stock claude-coral colours ride p10k's
+    # own dark bar (VL_STYLE="classic" → lean text on VL_BG_BAR + a trailing cap).
+    classic = 'VL_STYLE="classic"\n'
+    return [
+        ("daily drive",       run_bar("claude-coral", "dir git model clock", LOW, classic)),
+        ("context & limits",  run_bar("claude-coral", "ctx limit5h limit7d cost", MID, classic)),
+        ("running hot",       run_bar("claude-coral", "ctx limit5h limit7d cost", HIGH, classic)),
+        ("extras",            run_bar("claude-coral", "effort lines style duration stash", HIGH, classic)),
+        ("same data, lean (no bar)", run_bar("claude-coral", "dir git model clock", LOW, 'VL_STYLE="lean"\n')),
+    ]
+
 def wrap_blocks():
     SEGS = "dir git model ctx limit5h limit7d cost clock"
     auto = lambda n: f'VL_LAYOUT="auto"\nVL_MAX_LINES={n}\n'
@@ -419,6 +431,7 @@ def main():
         return
     render_image("coralline — pick your vibe", hero_blocks(), ASSETS / "hero.png")
     render_image("coralline · lean style", lean_blocks(), ASSETS / "style-lean.png")
+    render_image("coralline · classic style", classic_blocks(), ASSETS / "style-classic.png")
     render_image("coralline · responsive wrap", wrap_blocks(), ASSETS / "wrap-demo.png")
     for theme in THEMES:
         render_image(f"coralline · {theme}", theme_blocks(theme),

@@ -156,7 +156,7 @@ curl -fsSL https://raw.githubusercontent.com/YOU/coralline/main/install.sh | bas
 
 | 變數 | 預設值 | 說明 |
 |---|---|---|
-| `VL_STYLE` | `pill` | `pill`：powerline 膠囊 · `lean`：p10k lean 的純色文字風格 |
+| `VL_STYLE` | `pill` | `pill`：powerline 膠囊 · `lean`：純色文字 · `classic`：文字鋪在統一深色橫條上(p10k classic) |
 | `VL_LAYOUT` | `fixed` | `fixed`：每個 `VL_SEGMENTS*` 變數固定一行 · `auto`：響應式 |
 | `VL_MAX_LINES` | `3` | 僅 `auto`——最多折成幾行（`1` = 永不折行） |
 | `VL_WRAP_MARGIN` | `4` | 僅 `auto`——右側預留的欄數，避免 segment 貼到視窗邊緣 |
@@ -241,10 +241,31 @@ narrow window:  ~/dev/app  ⎇ main  ◆ Fable 5
 | `VL_STYLE` | `pill` | 設為 `lean` 切換成簡潔風格 |
 | `VL_LEAN_SEP` | （空） | 區段之間的額外分隔字串，例如 `·` |
 | `VL_LEAN_FG` | （空） | 強制指定文字色；留空 = 繼承各區段的強調色 |
+| `VL_LEAN_BG` | （空） | 在整列後面鋪一層統一背景——`"R,G,B"` 或 256 色碼。想要完整的 p10k *classic* 外觀，建議直接用下方的 `VL_STYLE="classic"` preset，它會幫你接好這個 |
+| `VL_LEAN_CAP_R` | （空） | 收尾字元，用 `VL_LEAN_BG` 的顏色畫出,把橫條尾端斜切收進終端(p10k 的尾端分隔,例如 `$''`);需搭配 `VL_LEAN_BG` |
+| `VL_LEAN_CAP_L` | （空） | 起始截角字元——`VL_LEAN_CAP_R` 在 bar 開頭的左向鏡像（例如 `$''`）；需搭配 `VL_LEAN_BG`。stock p10k *classic* 左端保持平的 |
 
 > **提示：** 本來就是 p10k 使用者？跟 AI 安裝員或視覺化 wizard 說要匯入
 > `~/.p10k.zsh`，它會在你同意後帶入風格、配色與時間格式。詳見
 > [INSTALL.md 的 AI interview](./INSTALL.md#ai-interview)。
+
+### Classic 風格
+
+想要 Powerlevel10k 原廠的 *classic* 提示列——一條統一的深色橫條、彩色文字、
+尾端一個實心截角？設定 `VL_STYLE="classic"`。這是一鍵預設：它以 `lean` 的方式
+把文字畫在深色橫條上（p10k 的 `POWERLEVEL9K_BACKGROUND`），並加上尾端的
+powerline 截角，不需要其他設定。
+
+![Classic 風格](./assets/style-classic.png)
+
+| 變數 | 預設值 | 說明 |
+|---|---|---|
+| `VL_STYLE` | `pill` | 設為 `classic` 切換成 p10k 深色橫條外觀 |
+| `VL_BG_BAR` | （空 → `238`） | 整列後面那條橫條的顏色——`"R,G,B"` 或 256 色碼。任何主題的配色都會鋪在這條橫條上；灰階配色（例如 `mono`）建議明確設定 `VL_BG_BAR` 以拉開對比 |
+
+底層上 `classic` 就是 `lean` 加上一個 `VL_LEAN_BG`（來自 `VL_BG_BAR`）與一個
+`VL_LEAN_CAP_R` 尾端截角，所以你若明確指定 `VL_LEAN_BG` 或截角仍會蓋過預設。
+匯入 p10k *classic* 設定時，會帶入你原本的橫條顏色與分隔字元。
 
 ## 主題
 
@@ -262,7 +283,8 @@ wizard 會自動掃描 `themes/*.conf` 與 `themes/best-themes/*.conf` 這類巢
 新增主題檔時不需要修改 `configure.sh`。
 
 > **要貢獻新主題？** 複製一份現有 `.conf`，設好所有 `VL_BG_*` / `VL_FG_*`（含
-> `VL_BG_EFFORT`），把名稱加進 [`tools/render-screenshots.py`](./tools/render-screenshots.py)
+> `VL_BG_EFFORT`；`VL_BG_BAR` 選用——只有灰階配色需要它來讓 classic 橫條可讀），
+> 把名稱加進 [`tools/render-screenshots.py`](./tools/render-screenshots.py)
 > 的 `THEMES` 清單，重跑產生 `assets/theme-<名稱>.png`，再到上方表格加一列。請**不要重產
 > `hero.png`** —— 它是固定展示最初六個主題的招牌圖、不是完整目錄。
 

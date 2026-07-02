@@ -164,7 +164,7 @@ Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the scrip
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `VL_STYLE` | `pill` | `pill`: powerline pills · `lean`: flat colored text, p10k-lean style |
+| `VL_STYLE` | `pill` | `pill`: powerline pills · `lean`: flat colored text · `classic`: lean on a uniform dark bar (p10k classic) |
 | `VL_LAYOUT` | `fixed` | `fixed`: one line per `VL_SEGMENTS*` var · `auto`: responsive |
 | `VL_MAX_LINES` | `3` | `auto` only — wrap into at most this many lines (`1` = never wrap) |
 | `VL_WRAP_MARGIN` | `4` | `auto` only — columns kept free on the right so segments never touch the edge |
@@ -253,10 +253,31 @@ Prefer Powerlevel10k's *lean* look — no backgrounds, just colored text? Set
 | `VL_STYLE` | `pill` | set to `lean` for the flat look |
 | `VL_LEAN_SEP` | _(empty)_ | extra text between segments, e.g. `·` |
 | `VL_LEAN_FG` | _(empty)_ | force a text color; empty = inherit each segment's accent |
+| `VL_LEAN_BG` | _(empty)_ | paint one uniform background behind the row — `"R,G,B"` or 256 index. For the full p10k *classic* look, prefer the `VL_STYLE="classic"` preset below — it wires this up for you |
+| `VL_LEAN_CAP_R` | _(empty)_ | trailing cap glyph drawn in the `VL_LEAN_BG` color to bevel the bar's end into the terminal (p10k's end separator, e.g. `$''`); needs `VL_LEAN_BG` |
+| `VL_LEAN_CAP_L` | _(empty)_ | leading cap glyph — the left-facing mirror of `VL_LEAN_CAP_R` at the bar's start (e.g. `$''`); needs `VL_LEAN_BG`. Stock p10k *classic* leaves it flat |
 
 > **Tip:** already a p10k user? Tell the AI installer or the visual wizard to import your
 > `~/.p10k.zsh` — it will carry over your style, colors, and time format after you opt in.
 > See the [AI interview notes in INSTALL.md](./INSTALL.md#ai-interview).
+
+### Classic style
+
+Want Powerlevel10k's stock *classic* prompt — one uniform dark bar with colored
+text and a solid end cap? Set `VL_STYLE="classic"`. It's a one-word preset: it
+renders like `lean` on a dark bar (p10k's `POWERLEVEL9K_BACKGROUND`) with a
+trailing powerline cap, no other knobs required.
+
+![Classic style](./assets/style-classic.png)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `VL_STYLE` | `pill` | set to `classic` for the p10k dark-bar look |
+| `VL_BG_BAR` | _(empty → `238`)_ | the uniform bar color behind the row — `"R,G,B"` or 256 index. Any theme's palette rides this bar; grayscale palettes (e.g. `mono`) want an explicit `VL_BG_BAR` for contrast |
+
+Under the hood `classic` is `lean` plus a `VL_LEAN_BG` (from `VL_BG_BAR`) and a
+`VL_LEAN_CAP_R` end cap, so an explicit `VL_LEAN_BG` or cap still wins. Importing
+a p10k *classic* config carries over your exact bar color and separator.
 
 ## Float readout (optional)
 
@@ -304,7 +325,8 @@ The wizard discovers themes automatically from `themes/*.conf` and nested collec
 `themes/best-themes/*.conf`, so adding a theme file does not require editing `configure.sh`.
 
 > **Adding a theme?** Copy an existing `.conf`, set every `VL_BG_*` / `VL_FG_*`
-> (including `VL_BG_EFFORT`), add its name to the `THEMES` list in
+> (including `VL_BG_EFFORT`; `VL_BG_BAR` is optional — only grayscale palettes need
+> it, to keep the classic bar readable), add its name to the `THEMES` list in
 > [`tools/render-screenshots.py`](./tools/render-screenshots.py), re-run it to generate
 > `assets/theme-<name>.png`, and add a row to the table above. Please **don't regenerate
 > `hero.png`** — it's a fixed sampler of the original six themes, not a full catalog.
