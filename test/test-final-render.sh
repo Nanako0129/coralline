@@ -55,4 +55,18 @@ case "$out2" in
 esac
 rm -rf "$h2"
 
+# --- Case 3: config path is a directory -> die before mv, no false success ---
+# mv into a directory would otherwise "succeed" (temp file dropped inside it),
+# leaving $CONFIG_FILE a directory that statusline.sh never sources.
+h3=$(mktemp -d "${TMPDIR:-/tmp}/coralline-final-render.XXXXXX") || exit 1
+mkdir -p "$h3/.claude/coralline.conf"             # a DIRECTORY at the config path
+out3=$(run_install "$h3" "$h3/.claude/coralline.conf"); rc3=$?
+[ "$rc3" -ne 0 ] && check "directory config path exits non-zero" 1 || check "directory config path exits non-zero" 0
+[ -d "$h3/.claude/coralline.conf" ] && check "directory config path left intact (no temp file dropped in)" "$([ -z "$(find "$h3/.claude/coralline.conf" -type f 2>/dev/null)" ] && echo 1 || echo 0)" || check "directory config path left intact" 0
+case "$out3" in
+  *"Verification render:"*) check "no verification render for a directory config path" 0 ;;
+  *)                        check "no verification render for a directory config path" 1 ;;
+esac
+rm -rf "$h3"
+
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi

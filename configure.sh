@@ -1191,7 +1191,11 @@ write_final_config() {
   fi
   # Fail loud if the config cannot be written, rather than printing Wrote and
   # rendering against a stale config. Without these guards the unconditional
-  # return 0 below would report success even when mkdir/mv failed.
+  # return 0 below would report success even when the write did not land at
+  # $CONFIG_FILE. The -d check comes first: mv into a directory (or a symlink to
+  # one) "succeeds" by dropping the temp file inside it under its mktemp name,
+  # leaving $CONFIG_FILE a directory that statusline.sh never sources.
+  [ -d "$CONFIG_FILE" ] && die "config path $CONFIG_FILE is a directory, expected a file"
   mkdir -p "$(dirname "$CONFIG_FILE")" || die "could not create $(dirname "$CONFIG_FILE")"
   mv "$tmp" "$CONFIG_FILE" || die "could not write $CONFIG_FILE"
   printf '%sWrote%s %s\n' "$T_GREEN" "$T_RESET" "$CONFIG_FILE"
