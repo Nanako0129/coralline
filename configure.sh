@@ -1189,8 +1189,11 @@ write_final_config() {
       return 1
     fi
   fi
-  mkdir -p "$(dirname "$CONFIG_FILE")"
-  mv "$tmp" "$CONFIG_FILE"
+  # Fail loud if the config cannot be written, rather than printing Wrote and
+  # rendering against a stale config. Without these guards the unconditional
+  # return 0 below would report success even when mkdir/mv failed.
+  mkdir -p "$(dirname "$CONFIG_FILE")" || die "could not create $(dirname "$CONFIG_FILE")"
+  mv "$tmp" "$CONFIG_FILE" || die "could not write $CONFIG_FILE"
   printf '%sWrote%s %s\n' "$T_GREEN" "$T_RESET" "$CONFIG_FILE"
   [ "$float_enabled" = "1" ] && print_float_help
   # Return success explicitly: the trailing float test above is 1 when float is
