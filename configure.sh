@@ -1193,6 +1193,11 @@ write_final_config() {
   mv "$tmp" "$CONFIG_FILE"
   printf '%sWrote%s %s\n' "$T_GREEN" "$T_RESET" "$CONFIG_FILE"
   [ "$float_enabled" = "1" ] && print_float_help
+  # Return success explicitly: the trailing float test above is 1 when float is
+  # off (the default), which would otherwise make the caller's
+  # `write_final_config || exit 0` bail before the verification render. The only
+  # intentional non-zero exit is the "user declined overwrite" path above.
+  return 0
 }
 
 install_files() {
