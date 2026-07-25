@@ -50,7 +50,7 @@ VL_BAR_EMPTY="▱"
 # font that lacks them leaves the substitution to the terminal's own fallback —
 # which may land on a glyph wider than one cell and shove the rest of the row
 # out of alignment (#47). Override with characters your terminal font carries.
-VL_CTX_GLYPH="⬡"                # glyph for the ctx segment
+VL_CTX_GLYPH="⬡"                # glyph for the ctx segment (main bar and subagent rows)
 VL_PROJECT_GLYPH="⬢"            # glyph for the project segment
 VL_CLOCK="12h"                  # 12h | 24h | off
 VL_CLOCK_SECONDS=1
@@ -1021,10 +1021,10 @@ subseg_ctx() {  # per-task context gauge; bare token count without a window size
     make_bar "$ci"; pct_fg "$ci"
     fg "$_PFG";      fgc="$_FG"
     fg "$VL_FG_DIM"; fgd="$_FG"
-    push "${VL_BG_SUB_CTX:-$VL_BG_CTX}" "${fgc} ⬡ ${_BAR} ${ci}% ${fgd}${_TOK} "
+    push "${VL_BG_SUB_CTX:-$VL_BG_CTX}" "${fgc} ${VL_CTX_GLYPH} ${_BAR} ${ci}% ${fgd}${_TOK} "
   else
     fg "$VL_FG_DIM"
-    push "${VL_BG_SUB_CTX:-$VL_BG_CTX}" "${_FG} ⬡ ${_TOK} "
+    push "${VL_BG_SUB_CTX:-$VL_BG_CTX}" "${_FG} ${VL_CTX_GLYPH} ${_TOK} "
   fi
 }
 

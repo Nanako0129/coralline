@@ -101,7 +101,8 @@ The renderer shares your config file but reads only the knobs that shape a row:
 `VL_LEAN_CAP_L`/`VL_LEAN_CAP_R`, `VL_LEAN_FG`, `VL_BG_BAR`) — `VL_ASCII`,
 `VL_NAME_MAX` (recommended — panel labels are long, and overlong rows are
 clipped from the right, hiding model/ctx first), the gauge knobs
-(`VL_BAR_WIDTH`, `VL_BAR_FILL`, `VL_BAR_EMPTY`, `VL_WARN_PCT`, `VL_HOT_PCT`),
+(`VL_BAR_WIDTH`, `VL_BAR_FILL`, `VL_BAR_EMPTY`, `VL_CTX_GLYPH`, `VL_WARN_PCT`,
+`VL_HOT_PCT`),
 the shared palette (`VL_FG_TEXT`, `VL_FG_DIM`, `VL_FG_OK`, `VL_FG_WARN`,
 `VL_FG_HOT`), and the row colors `VL_BG_SUB_NAME` / `VL_BG_SUB_MODEL` /
 `VL_BG_SUB_CTX` / `VL_BG_SUB_ELAPSED` (empty = fall back to `VL_BG_DIR` /

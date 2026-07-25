@@ -98,6 +98,17 @@ case "$c1" in (*"Explore config sources"*) ok "row1 uses label when name absent"
 case "$c1" in (*"local_agent"*) bad "row1 must not show raw type: [$c1]" ;; (*) ok "row1 hides local_agent type" ;; esac
 case "$c1" in (*$'\033['*) ok "row1 carries ANSI" ;; (*) bad "row1 ANSI" ;; esac
 case "$c1" in (*"⧖"*) ok "row1 has elapsed" ;; (*) bad "row1 elapsed: [$c1]" ;; esac
+case "$c1" in (*"⬡"*) ok "row1 uses the default ctx glyph" ;; (*) bad "row1 ctx glyph: [$c1]" ;; esac
+
+# VL_CTX_GLYPH has to reach the panel too, not just the main bar: the glyph it
+# replaces is plain Unicode that some Nerd Fonts lack, so a user who overrides it
+# for the main row would otherwise keep a broken hexagon here (#47).
+GCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-subglyph.XXXXXX") || exit 1
+printf 'VL_CTX_GLYPH="◔"\n' > "$GCONF"
+GOUT=$(CORALLINE_CONFIG="$GCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
+rm -f "$GCONF"
+case "$GOUT" in (*"◔"*) ok "VL_CTX_GLYPH reaches the subagent ctx row" ;; (*) bad "subagent VL_CTX_GLYPH: [$GOUT]" ;; esac
+case "$GOUT" in (*"⬡"*) bad "subagent row kept the default glyph: [$GOUT]" ;; (*) ok "subagent override displaces the default" ;; esac
 
 # Claude omits agentType from the payload, but writes it to the task sidecar.
 # Recover that native role without a subprocess; explicit payload names still win.

@@ -98,7 +98,7 @@ subagent renderer 與主列共用同一份 config，但只讀取與「單列外�
 `VL_LEAN_CAP_L`/`VL_LEAN_CAP_R`、`VL_LEAN_FG`、`VL_BG_BAR`）——`VL_ASCII`、
 `VL_NAME_MAX`（建議設定——面板 label 通常很長，列過寬時 Claude Code 從右側裁切，
 最先消失的就是 model/ctx）、用量條參數（`VL_BAR_WIDTH`、`VL_BAR_FILL`、
-`VL_BAR_EMPTY`、`VL_WARN_PCT`、`VL_HOT_PCT`）、共用色盤（`VL_FG_TEXT`、
+`VL_BAR_EMPTY`、`VL_CTX_GLYPH`、`VL_WARN_PCT`、`VL_HOT_PCT`）、共用色盤（`VL_FG_TEXT`、
 `VL_FG_DIM`、`VL_FG_OK`、`VL_FG_WARN`、`VL_FG_HOT`），以及列顏色
 `VL_BG_SUB_NAME` / `VL_BG_SUB_MODEL` / `VL_BG_SUB_CTX` / `VL_BG_SUB_ELAPSED`
 （留空 = 分別退回 `VL_BG_DIR` / `VL_BG_MODEL` / `VL_BG_CTX` /
