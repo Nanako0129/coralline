@@ -168,25 +168,15 @@ knob_names() {  # $1=statusline file
     | sed -E 's/=0.*$//' | sort -u | tr '\n' ' '
 }
 
-# Space-separated, sorted-unique GLYPH knob names: VL_*GLYPH assignments with a
-# quoted default, minus "internal" lines. Kept separate from knob_names because
-# the report renders every boolean knob as "<knob>=1", which is meaningless for a
-# string-valued one — these are reported with their shipped default instead, so
-# the hint stays copy-pasteable. Only the _GLYPH family qualifies: widening this
-# to "any quoted default" would sweep in structural options (VL_SEGMENTS,
-# VL_STYLE) that an upgrade report has no business suggesting. PUA glyphs built
-# with `printf -v` (VL_NODE_GLYPH, VL_PY_GLYPH) are not assignments, so they are
-# excluded for free — and rightly, since those DO ship inside a Nerd Font.
-glyph_knob_names() {  # $1=statusline file
-  grep -E '^VL_[A-Za-z0-9_]*GLYPH="' "$1" 2>/dev/null \
-    | grep -iv 'internal' \
-    | sed -E 's/=.*$//' | sort -u | tr '\n' ' '
-}
-
-# Shipped value of a quoted knob declaration, quotes stripped; empty when absent.
-knob_default() {  # $1=statusline file $2=knob name
-  sed -nE "s/^$2=\"([^\"]*)\".*/\1/p" "$1" 2>/dev/null | head -1
-}
+# Glyph knobs (VL_CTX_GLYPH, VL_BAR_EMPTY, ...) are deliberately NOT reported
+# here. An option token is the exact assignment the UPGRADE.md playbook appends,
+# and the right value for a glyph depends on what the user's terminal font
+# carries — something no delta can know. Emitting the shipped default would
+# write a no-op; emitting a replacement would change the look of installs that
+# render fine. Worse, the two gauge knobs are not new, so a "new since your
+# installed copy" report structurally cannot surface them at all. That check
+# lives in UPGRADE.md's verification step instead, where the user is already
+# looking at a rendered line (#47).
 
 # Inline comment after `seg_<name>() {`, else empty.
 segment_desc() {  # $1=statusline file $2=segment name
@@ -245,8 +235,7 @@ report_upgrade_delta() {  # $1=old statusline $2=new statusline $3=backup path (
     cb="${T_BOLD:-}"; cr="${T_RESET:-}"; cc="${T_CORAL:-}"; cd="${T_DIM:-}"
   fi
   local IFS=' '
-  local old_segs new_segs old_knobs new_knobs old_glyphs new_glyphs s k d
-  local seglist="" knoblist="" glyphlist=""
+  local old_segs new_segs old_knobs new_knobs s k d seglist="" knoblist=""
   old_segs=" $(segment_names "$old") " ; new_segs=" $(segment_names "$new") "
   for s in $new_segs; do
     case "$old_segs" in *" $s "*) : ;; *) seglist="${seglist}${seglist:+ }$s" ;; esac
@@ -255,11 +244,7 @@ report_upgrade_delta() {  # $1=old statusline $2=new statusline $3=backup path (
   for k in $new_knobs; do
     case "$old_knobs" in *" $k "*) : ;; *) knoblist="${knoblist}${knoblist:+ }$k" ;; esac
   done
-  old_glyphs=" $(glyph_knob_names "$old") " ; new_glyphs=" $(glyph_knob_names "$new") "
-  for k in $new_glyphs; do
-    case "$old_glyphs" in *" $k "*) : ;; *) glyphlist="${glyphlist}${glyphlist:+ }$k" ;; esac
-  done
-  [ -n "$seglist" ] || [ -n "$knoblist" ] || [ -n "$glyphlist" ] || return 0
+  [ -n "$seglist" ] || [ -n "$knoblist" ] || return 0
   printf '\n%scoralline upgrade — new since your installed copy:%s\n' "$cb" "$cr"
   for s in $seglist; do
     d=$(segment_desc "$new" "$s")
@@ -268,12 +253,6 @@ report_upgrade_delta() {  # $1=old statusline $2=new statusline $3=backup path (
   for k in $knoblist; do
     d=$(knob_desc "$new" "$k")
     printf '  option   %s%-16s%s %s\n' "$cc" "${k}=1" "$cr" "$d"
-  done
-  # Glyph knobs carry their shipped default rather than "=1": the useful hint is
-  # "here is the character to replace", not "turn this on".
-  for k in $glyphlist; do
-    d=$(knob_desc "$new" "$k")
-    printf '  option   %s%-16s%s %s\n' "$cc" "${k}=\"$(knob_default "$new" "$k")\"" "$cr" "$d"
   done
   printf '%s~/.claude/coralline.conf preserved%s' "$cd" "$cr"
   [ -n "$bak" ] && printf '%s · backup at %s%s' "$cd" "$bak" "$cr"
@@ -1285,8 +1264,8 @@ install_files() {
   # and (only in install-only/agent mode) report what is new. --install drops into
   # the menu afterward, which would scroll the report away, so it shows only for
   # --install-only. The [ -r ] guard matters: without it an UNREADABLE old file
-  # makes cmp -s exit non-zero (read like "differs"), and the segment/knob/glyph
-  # name extractors would read it as empty and flood the report with everything as
+  # makes cmp -s exit non-zero (read like "differs"), and segment_names/knob_names
+  # would then read it as empty and flood the report with every segment/knob as
   # "new". Gated on a real change so identical re-runs leave no backup.
   local _bak=""
   if [ -f "$TARGET_DIR/statusline.sh" ] && [ -r "$TARGET_DIR/statusline.sh" ] \
