@@ -198,6 +198,9 @@ curl -fsSL https://raw.githubusercontent.com/YOU/coralline/main/install.sh | bas
 | `VL_CLOCK` | `12h` | `12h` / `24h` / `off` |
 | `VL_CLOCK_SECONDS` | `1` | 時鐘是否顯示秒數 |
 | `VL_BAR_WIDTH` | `5` | 量表寬度（格數） |
+| `VL_BAR_FILL` / `VL_BAR_EMPTY` | `▰` / `▱` | 量表字符 |
+| `VL_CTX_GLYPH` | `⬡` | `ctx` 區段的字符 |
+| `VL_PROJECT_GLYPH` | `⬢` | `project` 區段的字符 |
 | `VL_PATH_DEPTH` | `4` | 路徑超過此深度即摺疊 |
 | `VL_NAME_MAX` | `0` | `project` / `git` 名稱超過此字數即以 `…` 截斷（`0` = 關閉） |
 | `VL_COST_DECIMALS` | `2` | 費用顯示的小數位數 |
@@ -205,6 +208,16 @@ curl -fsSL https://raw.githubusercontent.com/YOU/coralline/main/install.sh | bas
 | `VL_ASCII` | `0` | 設為 `1` 停用 Nerd Font 字符 |
 | `VL_RUNTIME_PROBE` | `0` | `node` / `python`：設為 `1` 時，若無 pin 檔則改用 `PATH` 上的 `node` / `python3` 偵測（每次繪製會 fork） |
 | `VL_BG_*` / `VL_FG_*` | 依主題 | 顏色——256 色編號或 `"R,G,B"` |
+
+上述四個字符設定（`VL_BAR_FILL`、`VL_BAR_EMPTY`、`VL_CTX_GLYPH`、`VL_PROJECT_GLYPH`）
+屬於一般 Unicode，並非 Nerd Font 圖示，因此 Nerd Fonts 不會補進字型；
+若你的字型沒有這些字，替代就交給終端機自己的 fallback 決定。一旦替代字寬於一格，整列
+就會被推歪——量表擠成一團，或百分比前面的空格被吃掉。此時請改成終端機字型確實具備的字符。
+`▪` / `▫`（量表）與 `◔`（`ctx`）在 Meslo 與 JetBrainsMono Nerd Font 中都存在且剛好一格寬：
+
+```sh
+VL_BAR_FILL="▪" ; VL_BAR_EMPTY="▫" ; VL_CTX_GLYPH="◔"
+```
 
 ### 消耗率區段
 

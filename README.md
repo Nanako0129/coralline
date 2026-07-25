@@ -211,6 +211,9 @@ Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the scrip
 | `VL_CLOCK` | `12h` | `12h` / `24h` / `off` |
 | `VL_CLOCK_SECONDS` | `1` | show seconds in the clock |
 | `VL_BAR_WIDTH` | `5` | gauge width in cells |
+| `VL_BAR_FILL` / `VL_BAR_EMPTY` | `▰` / `▱` | gauge glyphs |
+| `VL_CTX_GLYPH` | `⬡` | glyph for the `ctx` segment |
+| `VL_PROJECT_GLYPH` | `⬢` | glyph for the `project` segment |
 | `VL_PATH_DEPTH` | `4` | collapse paths deeper than this |
 | `VL_NAME_MAX` | `0` | max chars for the `project` / `git` names before `…` truncation (`0` = off) |
 | `VL_COST_DECIMALS` | `2` | decimal places for the cost segment |
@@ -218,6 +221,18 @@ Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the scrip
 | `VL_ASCII` | `0` | `1` disables Nerd Font glyphs |
 | `VL_RUNTIME_PROBE` | `0` | `node` / `python`: `1` = also detect via `node` / `python3` on `PATH` when no pin file (forks per render) |
 | `VL_BG_*` / `VL_FG_*` | theme | colors — `256`-color index or `"R,G,B"` |
+
+The four glyph settings above — `VL_BAR_FILL`, `VL_BAR_EMPTY`, `VL_CTX_GLYPH`,
+`VL_PROJECT_GLYPH` — are plain Unicode, not Nerd Font icons, so Nerd Fonts does not patch
+them in and a font that lacks them leaves the substitution to your terminal's own font
+fallback. If the substitute is wider than one cell it shoves the rest of the row out
+of alignment — a squashed gauge, or a missing space before the percentage. Override them
+with characters your terminal font actually carries. `▪` / `▫` for the gauge and `◔` for
+`ctx` are present at exactly one cell in both Meslo and JetBrainsMono Nerd Font:
+
+```sh
+VL_BAR_FILL="▪" ; VL_BAR_EMPTY="▫" ; VL_CTX_GLYPH="◔"
+```
 
 ### Burn-rate segment
 

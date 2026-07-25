@@ -40,6 +40,12 @@ VL_SEGMENTS3=""                 # fixed only — optional third line
 VL_BAR_WIDTH=5
 VL_BAR_FILL="▰"
 VL_BAR_EMPTY="▱"
+# Segment glyphs. These four are plain Unicode, not Nerd Font PUA icons, so a
+# font that lacks them leaves the substitution to the terminal's own fallback —
+# which may land on a glyph wider than one cell and shove the rest of the row
+# out of alignment (#47). Override with characters your terminal font carries.
+VL_CTX_GLYPH="⬡"
+VL_PROJECT_GLYPH="⬢"
 VL_CLOCK="12h"                  # 12h | 24h | off
 VL_CLOCK_SECONDS=1
 VL_PATH_DEPTH=4                 # collapse paths deeper than this
@@ -698,7 +704,7 @@ seg_project() {  # repo-root name in a repo; falls back to dir outside one (unle
     seg_dir; return
   fi
   fg "$VL_FG_TEXT"; trunc "$GIT_ROOT" "$VL_NAME_MAX"
-  push "${VL_BG_PROJECT:-$VL_BG_DIR}" "${BOLD}${_FG} ⬢ ${_TR} ${NORM}"
+  push "${VL_BG_PROJECT:-$VL_BG_DIR}" "${BOLD}${_FG} ${VL_PROJECT_GLYPH} ${_TR} ${NORM}"
 }
 
 seg_dir() {  # current directory, long paths collapsed to ~/a/…/z
@@ -738,7 +744,7 @@ seg_ctx() {  # context-window gauge with input/output/cache token counts
   fmt_tok "$tok_out"; to="$_TOK"
   fmt_tok "$tok_cr"; tcr="$_TOK"
   fmt_tok "$tok_cw"; tcw="$_TOK"
-  push "$VL_BG_CTX" "${fgc} ⬡ ${_BAR} ${ci}% ${fgd}↑${ti} ↓${to} cr:${tcr} cw:${tcw} "
+  push "$VL_BG_CTX" "${fgc} ${VL_CTX_GLYPH} ${_BAR} ${ci}% ${fgd}↑${ti} ↓${to} cr:${tcr} cw:${tcw} "
 }
 
 seg_limit() {  # $1=label $2=pct $3=resets_at $4=bg
