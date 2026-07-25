@@ -44,8 +44,8 @@ VL_BAR_EMPTY="▱"
 # font that lacks them leaves the substitution to the terminal's own fallback —
 # which may land on a glyph wider than one cell and shove the rest of the row
 # out of alignment (#47). Override with characters your terminal font carries.
-VL_CTX_GLYPH="⬡"
-VL_PROJECT_GLYPH="⬢"
+VL_CTX_GLYPH="⬡"                # glyph for the ctx segment
+VL_PROJECT_GLYPH="⬢"            # glyph for the project segment
 VL_CLOCK="12h"                  # 12h | 24h | off
 VL_CLOCK_SECONDS=1
 VL_PATH_DEPTH=4                 # collapse paths deeper than this

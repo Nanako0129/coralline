@@ -19,6 +19,8 @@ T_BOLD="" ; T_RESET="" ; T_CORAL="" ; T_DIM=""
 # Pull the pure functions out of configure.sh so the test cannot drift.
 eval "$(sed -n '/^segment_names() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^knob_names() {/,/^}/p'    "$CONF")"
+eval "$(sed -n '/^glyph_knob_names() {/,/^}/p' "$CONF")"
+eval "$(sed -n '/^knob_default() {/,/^}/p'  "$CONF")"
 
 # ---- fixtures: an OLD and a NEW statusline.sh -----------------------------
 cat > "$tmp/old.sh" <<'OLD'
@@ -27,6 +29,7 @@ seg_model() { :; }
 VL_ASCII=0
 VL_NAME_MAX=0
 VL_BG_DIR="0,0,0"
+VL_BURN_GLYPH="↗"
 OLD
 cat > "$tmp/new.sh" <<'NEW'
 seg_dir() { :; }
@@ -44,6 +47,9 @@ VL_NOCOLOR=0                    # internal: fg()/bg() emit nothing when 1
 # Cross-session limit sync (opt-in). Records high-water across sessions so
 # idle sessions converge when they next redraw.
 VL_LIMIT_SYNC=0
+VL_BAR_FILL="▰"
+VL_BURN_GLYPH="↗"
+VL_CTX_GLYPH="⬡"                # glyph for the ctx segment
 NEW
 
 # ---- Section A: name extractors ------------------------------------------
@@ -57,6 +63,16 @@ case "$knobs" in *" VL_LIMIT_SYNC "*) check "knob_names finds VL_LIMIT_SYNC" 1 ;
 case "$knobs" in *" VL_BG_BURN "*)    check "knob_names EXCLUDES color knob (non-0 default)" 0 ;; *) check "knob_names EXCLUDES color knob (non-0 default)" 1 ;; esac
 case "$knobs" in *" VL_NOCOLOR "*)    check "knob_names EXCLUDES internal-tagged knob" 0 ;; *) check "knob_names EXCLUDES internal-tagged knob" 1 ;; esac
 case "$knobs" in *" VL_NAME_MAX "*)   check "knob_names EXCLUDES numeric 0=off value knob" 0 ;; *) check "knob_names EXCLUDES numeric 0=off value knob" 1 ;; esac
+
+# Glyph knobs are a separate family: string defaults, so knob_names cannot see
+# them (#47) and the report must not render them as "<knob>=1".
+glyphs=" $(glyph_knob_names "$tmp/new.sh") "
+case "$glyphs" in *" VL_CTX_GLYPH "*)  check "glyph_knob_names finds VL_CTX_GLYPH"  1 ;; *) check "glyph_knob_names finds VL_CTX_GLYPH"  0 ;; esac
+case "$glyphs" in *" VL_BURN_GLYPH "*) check "glyph_knob_names finds VL_BURN_GLYPH" 1 ;; *) check "glyph_knob_names finds VL_BURN_GLYPH" 0 ;; esac
+case "$glyphs" in *" VL_BAR_FILL "*)   check "glyph_knob_names EXCLUDES non-GLYPH string knob" 0 ;; *) check "glyph_knob_names EXCLUDES non-GLYPH string knob" 1 ;; esac
+case "$knobs"  in *" VL_CTX_GLYPH "*)  check "knob_names EXCLUDES glyph knob (string default)"  0 ;; *) check "knob_names EXCLUDES glyph knob (string default)"  1 ;; esac
+[ "$(knob_default "$tmp/new.sh" VL_CTX_GLYPH)" = "⬡" ] \
+  && check "knob_default strips the quotes" 1 || check "knob_default strips the quotes" 0
 
 # ---- Section B: description extractors ------------------------------------
 eval "$(sed -n '/^segment_desc() {/,/^}/p' "$CONF")"
@@ -80,6 +96,10 @@ printf '%s\n' "$rep" | grep -q 'new since your installed copy' && check "report 
 printf '%s\n' "$rep" | grep -qE 'segment +burn'                 && check "report lists burn segment" 1 || check "report lists burn segment" 0
 printf '%s\n' "$rep" | grep -qE 'option +VL_FLOAT=1'            && check "report lists VL_FLOAT=1" 1 || check "report lists VL_FLOAT=1" 0
 printf '%s\n' "$rep" | grep -q 'also write a plain-text readout' && check "report shows knob desc" 1 || check "report shows knob desc" 0
+printf '%s\n' "$rep" | grep -qE 'option +VL_CTX_GLYPH="⬡"'      && check "report lists the glyph knob with its default" 1 || check "report lists the glyph knob with its default" 0
+printf '%s\n' "$rep" | grep -q 'glyph for the ctx segment'      && check "report shows glyph knob desc" 1 || check "report shows glyph knob desc" 0
+printf '%s\n' "$rep" | grep -q 'VL_CTX_GLYPH=1'                 && check "report never renders a glyph knob as =1" 0 || check "report never renders a glyph knob as =1" 1
+printf '%s\n' "$rep" | grep -q 'VL_BURN_GLYPH'                  && check "report omits a glyph knob the old copy already had" 0 || check "report omits a glyph knob the old copy already had" 1
 printf '%s\n' "$rep" | grep -q 'backup at /home/u/.claude/coralline/statusline.sh.bak.20260622-100501' && check "report names backup path" 1 || check "report names backup path" 0
 printf '%s\n' "$rep" | grep -qE 'option +VL_BG_BURN' && check "report omits filtered color knob" 0 || check "report omits filtered color knob" 1
 
