@@ -492,6 +492,20 @@ It runs every second (`refreshInterval: 1`), so the script is built to be cheap 
 call provides branch, dirty state, and ahead/behind together. No `bc`, no per-field subprocess
 spam. Works on stock macOS bash 3.2 and any Linux bash.
 
+## Support coralline
+
+coralline makes no network or API calls and uses zero tokens at runtime. The
+maintenance work is elsewhere: tracking Claude Code payload changes, optional
+live subagent-panel checks, shell regressions, nine-theme screenshot and font
+QA, and installer verification across macOS, Linux, and Windows with Git Bash.
+
+Sponsorship helps cover the Claude access and maintainer time behind that
+compatibility work while coralline remains MIT-licensed and free. If the
+statusline makes your daily sessions clearer, you can support its continued
+development on Ko-fi.
+
+[![Support coralline on Ko-fi](https://img.shields.io/badge/Support_on_Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/nanako0129)
+
 ## Acknowledgements
 
 The visual language of coralline — segmented pills, powerline transitions, the `⇡⇣` git
