@@ -140,7 +140,116 @@ case "$c2" in (*"Refactor renderer"*) ok "row2 keeps task label beside name" ;; 
 c3=$(printf '%s\n' "$OUT" | sed -n 3p | jq -r .content)
 case "$c3" in (*"just-spawned"*) ok "row3 renders name-only" ;; (*) bad "row3: [$c3]" ;; esac
 case "$c3" in (*"◆"*|*"⬡"*|*"⧖"*) bad "row3 must omit model/ctx/elapsed: [$c3]" ;; (*) ok "row3 omits missing segments" ;; esac
-case "$c3" in (*'[38;5;245m'*) ok "row3 unknown status is dim" ;; (*) bad "row3 dim: [$c3]" ;; esac
+case "$c3" in (*'[38;2;177;177;177m'*) ok "row3 unknown status is dim" ;; (*) bad "row3 dim: [$c3]" ;; esac
+
+# VL_FG_SUB_* retint the name pill per status. The main VL_FG_* palette is tuned
+# for the dark gauge backgrounds, so on a light name pill (VL_BG_SUB_NAME left
+# empty, falling back to VL_BG_DIR) the completed/failed/unknown tints drop as
+# low as 1.0:1 — hence the dark ground the built-in defaults and every theme set.
+SCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-subfg.XXXXXX") || exit 1
+printf 'VL_FG_SUB_OK="4,5,6"\nVL_FG_SUB_DIM="1,2,3"\n' > "$SCONF"
+SOUT=$(CORALLINE_CONFIG="$SCONF" bash "$SCRIPT" --subagent < "$SAMPLE")
+rm -f "$SCONF"
+s2=$(printf '%s\n' "$SOUT" | sed -n 2p | jq -r .content)   # completed
+s3=$(printf '%s\n' "$SOUT" | sed -n 3p | jq -r .content)   # queued → unknown
+case "$s2" in (*'38;2;4;5;6'*) ok "VL_FG_SUB_OK retints a completed row" ;; (*) bad "VL_FG_SUB_OK: [$s2]" ;; esac
+case "$s3" in (*'38;2;1;2;3'*) ok "VL_FG_SUB_DIM retints an unknown row" ;; (*) bad "VL_FG_SUB_DIM: [$s3]" ;; esac
+case "$s3" in (*'38;2;177;177;177'*) bad "VL_FG_SUB_DIM did not displace the default: [$s3]" ;; (*) ok "override displaces the built-in default" ;; esac
+
+# Emptying a VL_FG_SUB_* / VL_BG_SUB_NAME must still reach the VL_FG_* / VL_BG_DIR
+# fallback, so a user can restore the old light-pill look from their own config.
+ECONF=$(mktemp "${TMPDIR:-/tmp}/coralline-subempty.XXXXXX") || exit 1
+printf 'VL_BG_SUB_NAME=""\nVL_FG_SUB_TEXT=""\nVL_FG_SUB_HOT=""\nVL_FG_SUB_DIM=""\n' > "$ECONF"
+e3=$(CORALLINE_CONFIG="$ECONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
+rm -f "$ECONF"
+case "$e3" in (*'[38;5;245m'*) ok "empty VL_FG_SUB_DIM falls back to VL_FG_DIM" ;; (*) bad "empty-string fallback: [$e3]" ;; esac
+case "$e3" in (*'48;2;81;166;199'*) ok "empty VL_BG_SUB_NAME falls back to VL_BG_DIR" ;; (*) bad "empty bg fallback: [$e3]" ;; esac
+
+# A custom theme predating VL_*_SUB_* defines only VL_BG_DIR / VL_FG_*. The stock
+# panel defaults must not pin its name pill to claude-coral's grey: replacing the
+# palette has to keep subseg_name falling back to that theme's own colors.
+LCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-legacy.XXXXXX") || exit 1
+printf 'VL_BG_DIR="250,250,250"\nVL_FG_DIM="20,20,20"\n' > "$LCONF"
+l3=$(CORALLINE_CONFIG="$LCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
+rm -f "$LCONF"
+case "$l3" in (*'48;2;250;250;250'*) ok "legacy custom palette keeps its own name pill" ;; (*) bad "legacy pill: [$l3]" ;; esac
+case "$l3" in (*'38;2;20;20;20'*) ok "legacy custom palette keeps its own dim ink" ;; (*) bad "legacy dim: [$l3]" ;; esac
+case "$l3" in (*'48;2;68;68;68'*) bad "legacy palette got pinned to the stock grey: [$l3]" ;; (*) ok "stock default stays off custom palettes" ;; esac
+
+# The guard has to fingerprint the whole palette, not just VL_BG_DIR: a theme
+# copied from claude-coral that only retints a status ink still keeps the stock
+# VL_BG_DIR, and forcing the dark pill under a dark custom ink is unreadable.
+PCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-partial.XXXXXX") || exit 1
+printf 'VL_FG_OK="0,0,0"\n' > "$PCONF"          # VL_BG_DIR left at the stock value
+p2=$(CORALLINE_CONFIG="$PCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 2p | jq -r .content)
+rm -f "$PCONF"
+case "$p2" in (*'48;2;68;68;68'*) bad "partial custom palette got the stock dark pill: [$p2]" ;; (*) ok "one retinted ink marks the palette custom" ;; esac
+case "$p2" in (*'48;2;81;166;199'*) ok "partial custom palette keeps the VL_BG_DIR pill" ;; (*) bad "partial pill: [$p2]" ;; esac
+
+# The realistic upgrade shape: configure.sh writes `. themes/<name>.conf` and
+# appends overrides after it (a p10k import does exactly this), and upgrades keep
+# the config while replacing the theme file. The theme's panel colors must drop
+# out once the palette they were solved against is retinted, or a dark custom ink
+# lands on the theme's dark pill — claude-coral + VL_FG_OK="0,0,0" is 2.16:1.
+TCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-theme-ovr.XXXXXX") || exit 1
+printf '. %s/themes/claude-coral.conf\nVL_FG_OK="0,0,0"\n' "$HERE/.." > "$TCONF"
+t2=$(CORALLINE_CONFIG="$TCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 2p | jq -r .content)
+rm -f "$TCONF"
+case "$t2" in (*'48;2;68;68;68'*) bad "retinted palette kept the theme's dark pill: [$t2]" ;; (*) ok "retinting after a sourced theme drops its panel colors" ;; esac
+case "$t2" in (*'48;2;81;166;199'*) ok "retinted palette falls back to the VL_BG_DIR pill" ;; (*) bad "sourced-theme fallback: [$t2]" ;; esac
+
+# ...and an untouched sourced theme must still get its own pill.
+UCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-theme-plain.XXXXXX") || exit 1
+printf '. %s/themes/nord.conf\n' "$HERE/.." > "$UCONF"
+u3=$(CORALLINE_CONFIG="$UCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
+rm -f "$UCONF"
+case "$u3" in (*'48;2;67;76;94'*) ok "an untouched sourced theme applies its own pill" ;; (*) bad "sourced theme pill: [$u3]" ;; esac
+
+# Bare lean paints no segment background, so the label takes the segment's accent
+# on the terminal's own background. Candidates solved against a pill must not be
+# adopted there: claude-coral's running ink is white, which on a light terminal
+# would be 1:1 where the inherited VL_BG_DIR accent was readable.
+NCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-lean.XXXXXX") || exit 1
+printf '. %s/themes/claude-coral.conf\nVL_STYLE="lean"\n' "$HERE/.." > "$NCONF"
+n1=$(CORALLINE_CONFIG="$NCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
+rm -f "$NCONF"
+case "$n1" in (*'38;2;255;255;255'*) bad "bare lean adopted the pill's running ink: [$n1]" ;; (*) ok "bare lean skips the panel candidates" ;; esac
+case "$n1" in (*'38;2;81;166;199'*) ok "bare lean keeps the segment accent" ;; (*) bad "bare lean accent: [$n1]" ;; esac
+
+# The stock panel colors are resolved from unset, so an exported VL_FG_SUB_* from
+# the parent shell would otherwise read as a deliberate config and survive even
+# CORALLINE_CONFIG=/dev/null. Every other VL_* is assigned outright at the top.
+e2=$(VL_FG_SUB_OK="0,0,0" CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 2p | jq -r .content)
+case "$e2" in (*'38;2;0;0;0'*) bad "an inherited VL_FG_SUB_OK reached the row: [$e2]" ;; (*) ok "inherited env values do not count as config" ;; esac
+
+# The bar knobs only matter in the styles that paint a bar. In pill style a
+# leftover VL_BG_BAR (say after switching away from classic) is inert, so it must
+# not disable the pill fix; in classic the same value has to disqualify it.
+PCONF2=$(mktemp "${TMPDIR:-/tmp}/coralline-inertbar.XXXXXX") || exit 1
+printf 'VL_BG_BAR="255,255,255"\n' > "$PCONF2"
+i3=$(CORALLINE_CONFIG="$PCONF2" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
+printf 'VL_STYLE="classic"\nVL_BG_BAR="255,255,255"\n' > "$PCONF2"
+k3=$(CORALLINE_CONFIG="$PCONF2" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
+rm -f "$PCONF2"
+case "$i3" in (*'48;2;68;68;68'*) ok "an inert bar does not disable the pill fix" ;; (*) bad "inert bar: [$i3]" ;; esac
+case "$k3" in (*'[38;5;245m'*) ok "a painted custom bar still bows out" ;; (*) bad "classic custom bar: [$k3]" ;; esac
+
+# VL_LEAN_FG is an explicit request for the row's text color; the lean block
+# assigns it to VL_FG_TEXT, and a status ink resolved here must not outrank it.
+FCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-leanfg.XXXXXX") || exit 1
+printf 'VL_STYLE="classic"\nVL_LEAN_FG="1,2,3"\n' > "$FCONF"
+f1=$(CORALLINE_CONFIG="$FCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
+rm -f "$FCONF"
+case "$f1" in (*'38;2;255;255;255'*) bad "VL_LEAN_FG was overridden by the running ink: [$f1]" ;; (*) ok "VL_LEAN_FG outranks the running default" ;; esac
+case "$f1" in (*'38;2;1;2;3'*) ok "VL_LEAN_FG reaches the name" ;; (*) bad "VL_LEAN_FG not applied: [$f1]" ;; esac
+
+# An explicit VL_BG_SUB_NAME is a ground of the user's choosing, so the inks go
+# back to the main palette rather than assuming the one they were solved against.
+GCONF2=$(mktemp "${TMPDIR:-/tmp}/coralline-ownbg.XXXXXX") || exit 1
+printf '. %s/themes/nord.conf\nVL_BG_SUB_NAME="190,221,229"\n' "$HERE/.." > "$GCONF2"
+g1=$(CORALLINE_CONFIG="$GCONF2" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
+rm -f "$GCONF2"
+case "$g1" in (*'48;2;190;221;229'*'38;2;46;52;64'*) ok "a custom ground keeps nord's own VL_FG_TEXT" ;; (*) bad "custom ground ink: [$g1]" ;; esac
 
 # tokenCount without contextWindowSize → bare count, no bar
 NOBAR=$(printf '{"tasks":[{"id":"x","name":"n","type":"t","tokenCount":42000}]}' \
@@ -228,7 +337,7 @@ case "$US" in (*"Fable 5"*) ok "0x1f cannot shift fields" ;; (*) bad "0x1f field
 # absent status is "unknown" → dim, not the running text color (per README table)
 NOST=$(printf '{"tasks":[{"id":"x","name":"nostatus","type":"t"}]}' \
   | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
-case "$NOST" in (*'[38;5;245m'*) ok "missing status renders dim" ;; (*) bad "missing status dim: [$NOST]" ;; esac
+case "$NOST" in (*'[38;2;177;177;177m'*) ok "missing status renders dim" ;; (*) bad "missing status dim: [$NOST]" ;; esac
 
 # description (documented task field) beats type in the display-name fallback
 DESC=$(printf '{"tasks":[{"id":"x","type":"local_agent","description":"Summarize the diff"}]}' \

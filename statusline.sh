@@ -68,10 +68,26 @@ VL_NOCOLOR=0                    # internal: fg()/bg() emit nothing when 1 (plain
 
 # ── Subagent panel rows (--subagent mode) ────────────────────────────────────
 VL_SUB_SEGMENTS="name model ctx elapsed"  # panel-row segment list (subseg_*)
-VL_BG_SUB_NAME=""               # panel-row colors; empty → fall back to the
-VL_BG_SUB_MODEL=""              #   main-bar counterparts (dir/model/ctx/duration)
-VL_BG_SUB_CTX=""
+VL_BG_SUB_MODEL=""              # panel-row colors; empty → fall back to the
+VL_BG_SUB_CTX=""                #   main-bar counterparts (model/ctx/duration)
 VL_BG_SUB_ELAPSED=""
+# subseg_name tints the label by task status out of the main VL_FG_* palette,
+# which is tuned for the gauge segments' dark backgrounds. On a light name pill
+# those colors wash out (down to 1.0:1), so the pill takes that same dark ground
+# and the statuses get their own inks:
+#   VL_BG_SUB_NAME   name pill ground      VL_FG_SUB_TEXT  running
+#   VL_FG_SUB_OK     completed             VL_FG_SUB_HOT   failed
+#   VL_FG_SUB_DIM    queued / unknown
+# They are left unset here rather than blank on purpose: the stock defaults are
+# applied after the config loads, and only when the palette is still the built-in
+# one (see below), so a custom theme that predates these knobs keeps falling back
+# to its own colors. Empty → the VL_BG_DIR / VL_FG_* counterpart, the light pill.
+# Unset rather than blank means an inherited environment value would read as a
+# deliberate config, so clear them (and the theme-candidate names) first. Every
+# other VL_* above is assigned outright, which already isolates it from the env.
+unset VL_BG_SUB_NAME VL_FG_SUB_TEXT VL_FG_SUB_OK VL_FG_SUB_HOT VL_FG_SUB_DIM \
+      _VL_SUB_BG_NAME _VL_SUB_FG_TEXT _VL_SUB_FG_OK _VL_SUB_FG_HOT _VL_SUB_FG_DIM \
+      _VL_SUB_FP _VL_SUB_BAR
 
 # ── Burn-rate segment (range-to-empty) ───────────────────────────────────────
 # Opt in by adding `burn` to VL_SEGMENTS*; the sampler below runs only then.
@@ -138,7 +154,59 @@ VL_FG_HOT=167
 
 # ── Load user config ─────────────────────────────────────────────────────────
 VL_CONF="${CORALLINE_CONFIG:-$HOME/.claude/coralline.conf}"
+# Fingerprint of the palette subseg_name draws with, so a config that retinted any
+# of it is not mistaken for the stock one. The bar knobs are checked separately
+# below, because they only matter in the styles that actually paint a bar.
+_VL_STOCK="$VL_BG_DIR|$VL_FG_TEXT|$VL_FG_OK|$VL_FG_HOT|$VL_FG_DIM"
+_VL_STOCK_BAR="$VL_BG_BAR|$VL_LEAN_BG"
 [ -f "$VL_CONF" ] && . "$VL_CONF"
+
+# Subagent name pill. Its colors have to be resolved here, after the whole config
+# has run, because they are only safe while the palette they were solved against
+# is still intact. A theme publishes candidates as _VL_SUB_* plus _VL_SUB_FP, the
+# palette fingerprint as that theme left it; with no theme sourced the built-in
+# palette is claude-coral's, so _VL_STOCK and claude-coral's candidates apply.
+# Either way, adopt them only if nothing later retinted the palette. Retinting it
+# (a p10k import appends VL_BG_* overrides after sourcing a theme, and configs
+# survive upgrades) would strand a dark ink on the dark pill: `. claude-coral.conf`
+# followed by VL_FG_OK="0,0,0" renders completed at 2.16:1, where the light pill
+# it replaced was fine. When that holds these stay unset and subseg_name falls
+# back to the config's own VL_BG_DIR / VL_FG_*, exactly as before this knob
+# existed. An explicit value always wins, and an explicit empty string restores
+# the light pill.
+#
+# Four more ways the ground stops being the one they were solved against, each
+# bowing out for the same reason:
+#   * bare lean (VL_STYLE="lean", no VL_LEAN_BG) paints no segment background at
+#     all, so the label takes the segment's accent on the terminal's own
+#     background, which no palette can predict
+#   * lean/classic paint the row on the uniform bar rather than the pill, so a bar
+#     the candidates were not tuned for disqualifies them; in pill style the bar
+#     is inert and is not consulted, so a leftover VL_BG_BAR cannot disable this
+#   * VL_LEAN_FG forces the row's text colour, and that request outranks a
+#     status ink resolved here (the lean block below assigns it to VL_FG_TEXT)
+#   * an explicit VL_BG_SUB_NAME is a ground of the user's choosing, so the inks
+#     go back to the main palette rather than assuming this one
+_VL_SUB_OK=1
+[ -n "${VL_BG_SUB_NAME+s}" ] && _VL_SUB_OK=""
+[ -n "${VL_LEAN_FG:-}" ] && _VL_SUB_OK=""
+case "$VL_STYLE" in
+  (lean)
+    [ -z "$VL_LEAN_BG" ] && _VL_SUB_OK=""
+    [ "$VL_BG_BAR|$VL_LEAN_BG" = "${_VL_SUB_BAR-$_VL_STOCK_BAR}" ] || _VL_SUB_OK=""
+  ;;
+  (classic)
+    [ "$VL_BG_BAR|$VL_LEAN_BG" = "${_VL_SUB_BAR-$_VL_STOCK_BAR}" ] || _VL_SUB_OK=""
+  ;;
+esac
+if [ -n "$_VL_SUB_OK" ] \
+   && [ "$VL_BG_DIR|$VL_FG_TEXT|$VL_FG_OK|$VL_FG_HOT|$VL_FG_DIM" = "${_VL_SUB_FP-$_VL_STOCK}" ]; then
+  VL_BG_SUB_NAME="${VL_BG_SUB_NAME-${_VL_SUB_BG_NAME-68,68,68}}"    # VL_BG_CTX 238 as RGB
+  VL_FG_SUB_TEXT="${VL_FG_SUB_TEXT-${_VL_SUB_FG_TEXT-255,255,255}}" # running (9.74)
+  VL_FG_SUB_OK="${VL_FG_SUB_OK-${_VL_SUB_FG_OK-}}"                  # completed (5.61, falls through)
+  VL_FG_SUB_HOT="${VL_FG_SUB_HOT-${_VL_SUB_FG_HOT-231,157,157}}"    # failed (4.50)
+  VL_FG_SUB_DIM="${VL_FG_SUB_DIM-${_VL_SUB_FG_DIM-177,177,177}}"    # queued / unknown (4.54)
+fi
 
 if [ "$VL_ASCII" = "1" ]; then
   VL_CAP_L="" ; VL_CAP_R="" ; VL_SEP=""
@@ -990,10 +1058,10 @@ subseg_name() {  # identity + task label; each falls back independently
   fi
   [ -n "$label" ] || return 0
   case "$t_status" in
-    (running|in_progress|active) col="$VL_FG_TEXT" ;;
-    (completed|success|done)     col="$VL_FG_OK"   ;;
-    (failed|error|cancelled)     col="$VL_FG_HOT"  ;;
-    (*)                          col="$VL_FG_DIM"  ;;  # incl. missing → unknown
+    (running|in_progress|active) col="${VL_FG_SUB_TEXT:-$VL_FG_TEXT}" ;;
+    (completed|success|done)     col="${VL_FG_SUB_OK:-$VL_FG_OK}"     ;;
+    (failed|error|cancelled)     col="${VL_FG_SUB_HOT:-$VL_FG_HOT}"   ;;
+    (*)                          col="${VL_FG_SUB_DIM:-$VL_FG_DIM}"   ;;  # incl. missing → unknown
   esac
   fg "$col"; trunc "$label" "$VL_NAME_MAX"
   push "${VL_BG_SUB_NAME:-$VL_BG_DIR}" "${BOLD}${_FG} ${_TR} ${NORM}"

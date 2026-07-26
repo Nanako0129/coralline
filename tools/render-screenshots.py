@@ -410,6 +410,42 @@ def classic_blocks():
         ("same data, lean (no bar)", run_bar("claude-coral", "dir git model clock", LOW, 'VL_STYLE="lean"\n')),
     ]
 
+def run_panel(theme, tasks, extra_conf=""):
+    """Run statusline.sh --subagent and parse its rows. The protocol emits one
+    JSON object per task, with the styled text in .content."""
+    conf = FAKE_HOME / "panel.conf"
+    conf.write_text(f'. {REPO}/themes/{theme}.conf\n{extra_conf}')
+    env = dict(os.environ, HOME=str(FAKE_HOME), CORALLINE_CONFIG=str(conf),
+               CORALLINE_NO_SAMPLE="1")
+    out = subprocess.run(["bash", str(REPO / "statusline.sh"), "--subagent"],
+                         input=json.dumps({"session_id": "demo",
+                                           "transcript_path": "/tmp/none.jsonl",
+                                           "columns": 120, "tasks": tasks}),
+                         env=env, check=True, capture_output=True, text=True)
+    return [parse_ansi(json.loads(l)["content"])
+            for l in out.stdout.splitlines() if l.strip()]
+
+def panel_blocks():
+    # startTime is relative to now so the elapsed segment renders real durations.
+    now = int(time.time() * 1000)
+    task = lambda role, label, model, status, tok, secs: {
+        "id": role, "type": "local_agent", "name": role, "label": label,
+        "status": status, "startTime": now - secs * 1000, "model": model,
+        "contextWindowSize": 200000, "tokenCount": tok}
+    tasks = [
+        task("Explore", "Map all seg_ functions", "claude-haiku-4-5-20251001", "running", 23200, 53),
+        task("mech-executor", "Format theme comments", "claude-sonnet-5", "running", 29100, 52),
+        task("executor", "Rebuild preview fixtures", "claude-opus-4-8", "completed", 30400, 49),
+        task("general-purpose", "Profile jq parse cost", "claude-fable-5", "running", 26100, 47),
+        task("verifier", "Verify ASCII fallback", "claude-opus-4-8", "failed", 25600, 45),
+    ]
+    clock = 'VL_CLOCK="24h"\nVL_CLOCK_SECONDS=0\n'
+    return [
+        ("main statusline", run_bar("claude-coral", "dir git model effort ctx", MID, clock)
+                          + run_bar("claude-coral", "limit5h limit7d cost clock", MID, clock)),
+        ("subagent panel rows", run_panel("claude-coral", tasks, 'VL_NAME_MAX=46\n')),
+    ]
+
 def wrap_blocks():
     SEGS = "dir git model ctx limit5h limit7d cost clock"
     auto = lambda n: f'VL_LAYOUT="auto"\nVL_MAX_LINES={n}\n'
@@ -433,6 +469,7 @@ def main():
     render_image("coralline · lean style", lean_blocks(), ASSETS / "style-lean.png")
     render_image("coralline · classic style", classic_blocks(), ASSETS / "style-classic.png")
     render_image("coralline · responsive wrap", wrap_blocks(), ASSETS / "wrap-demo.png")
+    render_image("coralline · subagent panel", panel_blocks(), ASSETS / "subagent-panel.png")
     for theme in THEMES:
         render_image(f"coralline · {theme}", theme_blocks(theme),
                      ASSETS / f"theme-{theme}.png")

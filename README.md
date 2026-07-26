@@ -46,7 +46,7 @@ defaults to `name · description · token count`. coralline can theme the
  executor · Apply R2 fixes ◆ Fable 5 ⬡ ▰▰▰▰▱ 77% 155.0k ⧖ 45s
 ```
 
-![A live Claude Code session with coralline's main statusline and themed subagent rows](./assets/subagent-panel.png)
+![coralline's main statusline above five themed subagent panel rows, one per task status](./assets/subagent-panel.png)
 
 Claude Code v2.1.211 does not include its internal `agentType` role in the
 `subagentStatusLine` payload, but local Agent tasks have a small metadata
@@ -90,7 +90,7 @@ segments. These four are the complete set:
 
 | Segment | Shows | Hidden when |
 |---|---|---|
-| `name` | task identity plus task label: explicit `name` and sidecar `agentType` compose when both exist, followed by payload `label` or `description`; `type` is the final fallback; colored by status — running: text color, completed: ok, failed: hot, missing/unknown: dim | every source is empty or unavailable |
+| `name` | task identity plus task label: explicit `name` and sidecar `agentType` compose when both exist, followed by payload `label` or `description`; `type` is the final fallback; colored by status via `VL_FG_SUB_*` — running: text color, completed: ok, failed: hot, missing/unknown: dim | every source is empty or unavailable |
 | `model` | `◆` model from Claude Code's per-task payload; known Claude IDs are shortened and unknown/gateway IDs are shown verbatim | model not resolved yet, or pre-v2.1.205 |
 | `ctx` | `⬡` context gauge + token count; bare count without `contextWindowSize` | no `tokenCount` |
 | `elapsed` | `⧖` wall-clock since `startTime`, shown to the second (epoch s/ms or UTC ISO) | `startTime` missing or unparseable |
@@ -104,9 +104,18 @@ clipped from the right, hiding model/ctx first), the gauge knobs
 (`VL_BAR_WIDTH`, `VL_BAR_FILL`, `VL_BAR_EMPTY`, `VL_CTX_GLYPH`, `VL_WARN_PCT`,
 `VL_HOT_PCT`),
 the shared palette (`VL_FG_TEXT`, `VL_FG_DIM`, `VL_FG_OK`, `VL_FG_WARN`,
-`VL_FG_HOT`), and the row colors `VL_BG_SUB_NAME` / `VL_BG_SUB_MODEL` /
+`VL_FG_HOT`), the row colors `VL_BG_SUB_NAME` / `VL_BG_SUB_MODEL` /
 `VL_BG_SUB_CTX` / `VL_BG_SUB_ELAPSED` (empty = fall back to `VL_BG_DIR` /
-`VL_BG_MODEL` / `VL_BG_CTX` / `VL_BG_DURATION`). Everything else —
+`VL_BG_MODEL` / `VL_BG_CTX` / `VL_BG_DURATION`), and the name pill's per-status
+text colors `VL_FG_SUB_TEXT` / `VL_FG_SUB_OK` / `VL_FG_SUB_HOT` /
+`VL_FG_SUB_DIM` (empty = fall back to `VL_FG_TEXT` / `VL_FG_OK` / `VL_FG_HOT` /
+`VL_FG_DIM`). The main palette is tuned for the gauge segments' dark ground, so
+the built-in defaults and every bundled theme give the name pill that same dark
+ground via `VL_BG_SUB_NAME` and keep the theme's own light inks; without it the
+completed, failed, and unknown tints drop as low as 1.0:1 on a light pill. The
+targets are checked against both that pill and the uniform bar `VL_STYLE="classic"`
+paints instead. Setting `VL_BG_SUB_NAME=""` restores the light pill.
+Everything else —
 `VL_SEGMENTS*`, layout (`VL_LAYOUT`, `VL_MAX_LINES`, `VL_WRAP_MARGIN`), clock,
 cost, lines, float, limit-sync, burn, git, and the runtime segments — is
 main-bar-only and ignored here. To theme panel rows independently of the main
@@ -463,7 +472,10 @@ The wizard discovers themes automatically from `themes/*.conf` and nested collec
 
 > **Adding a theme?** Copy an existing `.conf`, set every `VL_BG_*` / `VL_FG_*`
 > (including `VL_BG_EFFORT`; `VL_BG_BAR` is optional — only grayscale palettes need
-> it, to keep the classic bar readable), add its name to the `THEMES` list in
+> it, to keep the classic bar readable), keep the `_VL_SUB_*` block at the end
+> (panel-row candidates plus the `_VL_SUB_FP` fingerprint, which lets a config that
+> retints the palette after sourcing your theme fall back safely), add its name to
+> the `THEMES` list in
 > [`tools/render-screenshots.py`](./tools/render-screenshots.py), re-run it to generate
 > `assets/theme-<name>.png`, and add a row to the table above. Please **don't regenerate
 > `hero.png`** — it's a fixed sampler of the original six themes, not a full catalog.

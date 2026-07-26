@@ -46,7 +46,7 @@ Claude Code 在 subagent 執行時會於 prompt 下方顯示 agent 面板；每�
  executor · Apply R2 fixes ◆ Fable 5 ⬡ ▰▰▰▰▱ 77% 155.0k ⧖ 45s
 ```
 
-![實際 Claude Code session，包含 coralline 主狀態列與套用主題的 subagent 列](./assets/subagent-panel.png)
+![coralline 主狀態列，下方是五列套用主題的 subagent 面板列，涵蓋各種 task 狀態](./assets/subagent-panel.png)
 
 Claude Code v2.1.211 沒有把內部的 `agentType` role 放進
 `subagentStatusLine` payload，但本機 Agent task 會在 session transcript
@@ -87,7 +87,7 @@ elapsed time 只會在 Claude Code 重繪面板時變動。
 
 | Segment | 顯示 | 隱藏條件 |
 |---|---|---|
-| `name` | task identity 加 task label：明確 `name` 與 sidecar `agentType` 同時存在時會組合顯示，後接 payload `label` 或 `description`，最後才以 `type` 退回；顏色反映狀態——running：一般文字色、completed：ok、failed：hot、缺失／未知：dim | 所有來源皆空或無法取得 |
+| `name` | task identity 加 task label：明確 `name` 與 sidecar `agentType` 同時存在時會組合顯示，後接 payload `label` 或 `description`，最後才以 `type` 退回；顏色由 `VL_FG_SUB_*` 反映狀態——running：一般文字色、completed：ok、failed：hot、缺失／未知：dim | 所有來源皆空或無法取得 |
 | `model` | `◆` Claude Code per-task payload 傳入的 model；已知 Claude ID 會縮短，不認得的 ID 或 gateway ID 原樣顯示 | model 尚未 resolve，或 v2.1.205 之前的版本 |
 | `ctx` | `⬡` context 用量條 + token 數；無 `contextWindowSize` 時只顯示 token 數 | 沒有 `tokenCount` |
 | `elapsed` | `⧖` 自 `startTime` 起的執行時間，精確到秒（epoch 秒／毫秒或 UTC ISO） | `startTime` 缺失或無法解析 |
@@ -99,10 +99,16 @@ subagent renderer 與主列共用同一份 config，但只讀取與「單列外�
 `VL_NAME_MAX`（建議設定——面板 label 通常很長，列過寬時 Claude Code 從右側裁切，
 最先消失的就是 model/ctx）、用量條參數（`VL_BAR_WIDTH`、`VL_BAR_FILL`、
 `VL_BAR_EMPTY`、`VL_CTX_GLYPH`、`VL_WARN_PCT`、`VL_HOT_PCT`）、共用色盤（`VL_FG_TEXT`、
-`VL_FG_DIM`、`VL_FG_OK`、`VL_FG_WARN`、`VL_FG_HOT`），以及列顏色
+`VL_FG_DIM`、`VL_FG_OK`、`VL_FG_WARN`、`VL_FG_HOT`）、列顏色
 `VL_BG_SUB_NAME` / `VL_BG_SUB_MODEL` / `VL_BG_SUB_CTX` / `VL_BG_SUB_ELAPSED`
 （留空 = 分別退回 `VL_BG_DIR` / `VL_BG_MODEL` / `VL_BG_CTX` /
-`VL_BG_DURATION`）。其餘參數——`VL_SEGMENTS*`、版面（`VL_LAYOUT`、
+`VL_BG_DURATION`），以及 name pill 各狀態的文字顏色 `VL_FG_SUB_TEXT` /
+`VL_FG_SUB_OK` / `VL_FG_SUB_HOT` / `VL_FG_SUB_DIM`（留空 = 分別退回
+`VL_FG_TEXT` / `VL_FG_OK` / `VL_FG_HOT` / `VL_FG_DIM`）。主色盤是為量表區段的深色底
+調的，所以內建預設與所有內建主題都用 `VL_BG_SUB_NAME` 讓 name pill 使用同一種深底，
+文字沿用主題原本的淺色；不這樣做的話，completed、failed、未知這三種色調在亮色 pill 上
+最低只有 1.0:1。對比同時對這個 pill 與 `VL_STYLE="classic"` 改用的整條橫條底色驗證。
+把 `VL_BG_SUB_NAME=""` 設空即可換回亮色 pill。其餘參數——`VL_SEGMENTS*`、版面（`VL_LAYOUT`、
 `VL_MAX_LINES`、`VL_WRAP_MARGIN`）、clock、cost、lines、float、limit-sync、
 burn、git 與 runtime segments——都只作用於主列，在 subagent 模式一律忽略。
 想讓面板列使用與主列不同的主題，把註冊的 command 指向獨立 config 即可：
@@ -410,6 +416,8 @@ wizard 會自動掃描 `themes/*.conf` 與 `themes/best-themes/*.conf` 這類巢
 
 > **要貢獻新主題？** 複製一份現有 `.conf`，設好所有 `VL_BG_*` / `VL_FG_*`（含
 > `VL_BG_EFFORT`；`VL_BG_BAR` 選用——只有灰階配色需要它來讓 classic 橫條可讀），
+> 保留檔尾的 `_VL_SUB_*` 區塊（面板列的候選顏色，加上 `_VL_SUB_FP` 指紋——當某份
+> config 在 source 你的主題之後又改動色盤時，靠它安全退回），
 > 把名稱加進 [`tools/render-screenshots.py`](./tools/render-screenshots.py)
 > 的 `THEMES` 清單，重跑產生 `assets/theme-<名稱>.png`，再到上方表格加一列。請**不要重產
 > `hero.png`** —— 它是固定展示最初六個主題的招牌圖、不是完整目錄。
