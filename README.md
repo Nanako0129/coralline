@@ -502,9 +502,9 @@ QA, and installer verification across macOS, Linux, and Windows with Git Bash.
 Sponsorship helps cover the Claude access and maintainer time behind that
 compatibility work while coralline remains MIT-licensed and free. If the
 statusline makes your daily sessions clearer, you can support its continued
-development on Ko-fi.
+development on Patreon.
 
-[![Support coralline on Ko-fi](https://img.shields.io/badge/Support_on_Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/nanako0129)
+[![Support coralline on Patreon](https://img.shields.io/badge/Support_on_Patreon-FF424D?style=for-the-badge&logo=patreon&logoColor=white)](https://www.patreon.com/cw/Nanako0129/membership)
 
 ## Acknowledgements
 
