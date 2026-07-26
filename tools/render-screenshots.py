@@ -32,7 +32,7 @@ DEMO = FAKE_HOME / "dev" / "coralline"
 
 THEMES = ["claude-coral", "catppuccin-mocha", "nord",
           "gruvbox-dark", "tokyo-night", "mono", "dracula",
-          "lunar-pink", "reverie"]
+          "lunar-pink", "reverie", "morning-haze"]
 
 # hero.png is a curated sampler frozen to the original six themes; new themes go
 # in the per-theme gallery (theme-<name>.png) only, so the banner doesn't grow.
