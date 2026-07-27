@@ -209,9 +209,12 @@ commit 下載全部受管理檔案。
 `$HOME\.claude\settings.json` 最上層、大小寫完全相符的 `statusLine` 做無損合併。
 `$HOME\.claude\coralline.conf` 會逐 byte 保留，而且 installer 永遠不會建立它。
 受管理的 runtime 或 settings 確實變更時，舊版本會保留為帶時間戳的同層備份。
-Installer 會序列化執行。Atomic settings backup 就是實際被移出的檔案，因此即使
-editor 的 open handle 在 replace 後才寫入，內容仍會進入保留的備份，不會遺失。
-Installer 在 commit 期間觀察到衝突時會回報失敗，不會覆寫外部內容。
+Installer 會序列化執行。單檔 runtime rollback 不會覆寫同時發生的編輯，並會保留
+被移出的 installer bytes；多檔 rollback 會 fail closed，保留現有檔案與備份供手動
+復原。Installer 會在回報成功前重新逐 byte 檢查 11 個檔案。
+Atomic settings backup 就是實際被移出的檔案，因此即使 editor 的 open handle 在
+replace 後才寫入，內容仍會進入保留的備份，不會遺失。Installer 在 commit 期間
+觀察到衝突時會回報失敗，不會覆寫外部內容。
 
 更新時重跑同一行即可。內容完全相同時會是 true no-op：不替換受管理檔案、不重寫
 settings、不建立備份，也不改 timestamp。PowerShell-only 安裝不含 wizard；請沿用既有

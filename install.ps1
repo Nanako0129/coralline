@@ -544,6 +544,32 @@ function Test-ManagedPayloadEqual([string]$StageRoot, [string]$InstalledRoot) {
     return $true
 }
 
+function Get-ManagedPayloadBytes([string]$Root) {
+    $expected = @{}
+    foreach ($relative in $script:ManagedFiles) {
+        $path = [System.IO.Path]::Combine($Root, $relative)
+        Assert-NoReparsePath $path "managed payload $relative"
+        $expected[$relative] = [System.IO.File]::ReadAllBytes($path)
+    }
+    return ,$expected
+}
+
+function Assert-ManagedPayloadBytes([string]$Root, $Expected, [string]$Label) {
+    foreach ($relative in $script:ManagedFiles) {
+        $path = [System.IO.Path]::Combine($Root, $relative)
+        Assert-SafeExistingFile $path "$Label $relative"
+        if (-not [System.IO.File]::Exists($path)) {
+            throw "$Label is missing $relative"
+        }
+        $maximum = $script:MaxThemeBytes
+        if ($relative -ceq 'statusline.ps1') { $maximum = $script:MaxRuntimeBytes }
+        $actual = Read-BoundedSharedFileBytes $path $maximum "$Label $relative"
+        if (-not (Test-ByteArraysEqual $actual $Expected[$relative])) {
+            throw "$Label changed concurrently: $relative"
+        }
+    }
+}
+
 function Skip-JsonWhitespace([string]$Text, [ref]$Index) {
     $i = [int]$Index.Value
     while ($i -lt $Text.Length) {
@@ -1038,39 +1064,99 @@ function Remove-EmptyCreatedRuntime([string]$Destination, [bool]$DestinationExis
 }
 
 function Restore-ManagedRuntime(
-    [string]$StageRoot,
     [string]$Destination,
     [string]$BackupPath,
     [string[]]$ChangedFiles,
-    [bool]$DestinationExisted
+    [bool]$DestinationExisted,
+    $Expected
 ) {
+    $hadBackup = @{}
+    foreach ($relative in $ChangedFiles) {
+        $target = [System.IO.Path]::Combine($Destination, $relative)
+        $backup = [System.IO.Path]::Combine($BackupPath, $relative)
+        $recovery = "$backup.rollback"
+        $hadBackup[$relative] = [System.IO.File]::Exists($backup)
+        if ([System.IO.File]::Exists($recovery)) {
+            throw "runtime rollback recovery path already exists: $recovery"
+        }
+        if (-not [System.IO.File]::Exists($target)) {
+            if ([bool]$hadBackup[$relative]) {
+                throw "runtime rollback target disappeared; backup retained at ${backup}: $relative"
+            }
+            continue
+        }
+        Assert-SafeExistingFile $target "runtime rollback target $relative"
+        $maximum = $script:MaxThemeBytes
+        if ($relative -ceq 'statusline.ps1') { $maximum = $script:MaxRuntimeBytes }
+        $current = Read-BoundedSharedFileBytes (
+            $target
+        ) $maximum "runtime rollback target $relative"
+        if (-not (Test-ByteArraysEqual $current $Expected[$relative])) {
+            throw "runtime rollback refused to overwrite concurrent bytes at $target"
+        }
+    }
+    if ($ChangedFiles.Count -gt 1) {
+        throw "multi-file runtime rollback requires manual recovery; files and backups retained at $BackupPath"
+    }
+
     for ($i = $ChangedFiles.Count - 1; $i -ge 0; $i--) {
         $relative = $ChangedFiles[$i]
         $target = [System.IO.Path]::Combine($Destination, $relative)
         $backup = [System.IO.Path]::Combine($BackupPath, $relative)
-        $discard = [System.IO.Path]::Combine($StageRoot, $relative)
+        $recovery = "$backup.rollback"
         Assert-SafeExistingFile $target "runtime rollback target $relative"
         Ensure-SafeDirectory ([System.IO.Path]::GetDirectoryName($target)) 'runtime rollback target parent'
-        if ([System.IO.File]::Exists($backup)) {
-            $original = [System.IO.File]::ReadAllBytes($backup)
-            Ensure-SafeDirectory ([System.IO.Path]::GetDirectoryName($discard)) 'runtime rollback staging'
-            if ([System.IO.File]::Exists($discard)) {
-                Remove-SafeInstallerFile $discard $discard 'runtime rollback discard'
+        if ([System.IO.File]::Exists($recovery)) {
+            throw "runtime rollback recovery path already exists: $recovery"
+        }
+        if ([bool]$hadBackup[$relative]) {
+            if (-not [System.IO.File]::Exists($backup)) {
+                throw "runtime rollback backup disappeared: $backup"
             }
-            if ([System.IO.File]::Exists($target)) {
-                [System.IO.File]::Replace($backup, $target, $discard)
-            } else {
-                [System.IO.File]::Move($backup, $target)
+            $maximum = $script:MaxThemeBytes
+            if ($relative -ceq 'statusline.ps1') { $maximum = $script:MaxRuntimeBytes }
+            $original = Read-BoundedSharedFileBytes (
+                $backup
+            ) $maximum "runtime rollback backup $relative"
+            Ensure-SafeDirectory ([System.IO.Path]::GetDirectoryName($recovery)) 'runtime rollback recovery parent'
+            [System.IO.File]::Move($target, $recovery)
+            Assert-NoReparsePath $recovery "runtime rollback recovery $relative"
+            $displaced = Read-BoundedSharedFileBytes (
+                $recovery
+            ) $maximum "runtime rollback recovery $relative"
+            if (-not (Test-ByteArraysEqual $displaced $Expected[$relative])) {
+                if (-not [System.IO.File]::Exists($target)) {
+                    [System.IO.File]::Move($recovery, $target)
+                }
+                throw "runtime changed during rollback; concurrent bytes retained at $target or $recovery"
             }
-            if (-not (Test-ByteArraysEqual ([System.IO.File]::ReadAllBytes($target)) $original)) {
+            [System.IO.File]::Move($backup, $target)
+            if (-not (Test-ByteArraysEqual (
+                Read-BoundedSharedFileBytes (
+                    $target
+                ) $maximum "restored runtime $relative"
+            ) $original)) {
                 throw "runtime rollback verification failed: $relative"
             }
         } elseif ([System.IO.File]::Exists($target)) {
-            Remove-SafeInstallerFile $target $target "new managed runtime $relative"
+            if ([System.IO.File]::Exists($backup)) {
+                throw "unexpected runtime rollback backup appeared: $backup"
+            }
+            Ensure-SafeDirectory ([System.IO.Path]::GetDirectoryName($recovery)) 'runtime rollback recovery parent'
+            [System.IO.File]::Move($target, $recovery)
+            Assert-NoReparsePath $recovery "new runtime rollback recovery $relative"
+            $maximum = $script:MaxThemeBytes
+            if ($relative -ceq 'statusline.ps1') { $maximum = $script:MaxRuntimeBytes }
+            $displaced = Read-BoundedSharedFileBytes (
+                $recovery
+            ) $maximum "new runtime rollback recovery $relative"
+            if (-not (Test-ByteArraysEqual $displaced $Expected[$relative])) {
+                if (-not [System.IO.File]::Exists($target)) {
+                    [System.IO.File]::Move($recovery, $target)
+                }
+                throw "new runtime changed during rollback; concurrent bytes retained at $target or $recovery"
+            }
         }
-    }
-    if ([System.IO.Directory]::Exists($BackupPath)) {
-        Remove-SafeInstallerDirectory $BackupPath $BackupPath 'consumed runtime backup'
     }
     Remove-EmptyCreatedRuntime $Destination $DestinationExisted
 }
@@ -1078,7 +1164,8 @@ function Restore-ManagedRuntime(
 function Install-Runtime(
     [string]$StageRoot,
     [string]$Destination,
-    [string]$BackupPath
+    [string]$BackupPath,
+    $Expected
 ) {
     $destinationExisted = [System.IO.Directory]::Exists($Destination)
     $changed = New-Object 'System.Collections.Generic.List[string]'
@@ -1098,7 +1185,7 @@ function Install-Runtime(
                 continue
             }
 
-            $expected = [System.IO.File]::ReadAllBytes($staged)
+            $expectedBytes = $Expected[$relative]
             if ([System.IO.File]::Exists($target)) {
                 Ensure-SafeDirectory ([System.IO.Path]::GetDirectoryName($backup)) 'runtime backup parent'
                 Assert-NoReparsePath $backup "runtime backup $relative"
@@ -1107,22 +1194,23 @@ function Install-Runtime(
                 [System.IO.File]::Move($staged, $target)
             }
             $changed.Add($relative)
-            if (-not (Test-ByteArraysEqual ([System.IO.File]::ReadAllBytes($target)) $expected)) {
+            if (-not (Test-ByteArraysEqual ([System.IO.File]::ReadAllBytes($target)) $expectedBytes)) {
                 throw "runtime commit verification failed: $relative"
             }
         }
-        Assert-ValidManagedPayload $Destination 'installed payload'
+        Assert-ManagedPayloadBytes $Destination $Expected 'installed payload'
         return ,([pscustomobject]@{
             DestinationExisted = $destinationExisted
             ChangedFiles = [string[]]$changed.ToArray()
             BackupCreated = [System.IO.Directory]::Exists($BackupPath)
+            Expected = $Expected
         })
     } catch {
         $failure = $_.Exception.Message
         try {
             Restore-ManagedRuntime (
-                $StageRoot
-            ) $Destination $BackupPath ([string[]]$changed.ToArray()) $destinationExisted
+                $Destination
+            ) $BackupPath ([string[]]$changed.ToArray()) $destinationExisted $Expected
         } catch {
             throw "runtime install failed ($failure); runtime rollback also failed: $($_.Exception.Message)"
         }
@@ -1131,14 +1219,15 @@ function Install-Runtime(
 }
 
 function Undo-RuntimeInstall(
-    [string]$StageRoot,
     [string]$Destination,
     [string]$BackupPath,
     $Transaction
 ) {
     Restore-ManagedRuntime (
-        $StageRoot
-    ) $Destination $BackupPath ([string[]]$Transaction.ChangedFiles) ([bool]$Transaction.DestinationExisted)
+        $Destination
+    ) $BackupPath ([string[]]$Transaction.ChangedFiles) (
+        [bool]$Transaction.DestinationExisted
+    ) $Transaction.Expected
 }
 
 function Invoke-CorallineInstall {
@@ -1254,11 +1343,13 @@ function Invoke-CorallineInstall {
             $resolvedCommit = Stage-RemotePayload $Repo $Ref $stage
         }
         Assert-ValidStagedPayload $stage
+        $runtimeExpected = Get-ManagedPayloadBytes $stage
         $runtimeChanged = -not (Test-ManagedPayloadEqual $stage $install)
         $settingsPlan = Get-SettingsPlan $settings $desiredStatusLine
         $settingsChanged = [bool]$settingsPlan.Changed
 
         if (-not $runtimeChanged -and -not $settingsChanged) {
+            Assert-ManagedPayloadBytes $install $runtimeExpected 'installed payload'
             Remove-SafeInstallerDirectory $stage $stage 'staging path'
             $stageExists = $false
             [Console]::Out.WriteLine('coralline is already up to date.')
@@ -1266,7 +1357,9 @@ function Invoke-CorallineInstall {
         }
 
         if ($runtimeChanged) {
-            $runtimeTransaction = Install-Runtime $stage $install $runtimeBackup
+            $runtimeTransaction = Install-Runtime (
+                $stage
+            ) $install $runtimeBackup $runtimeExpected
             $runtimeInstalled = $true
         }
 
@@ -1280,16 +1373,18 @@ function Invoke-CorallineInstall {
                 $settingsFailure = $_.Exception.Message
                 if ($runtimeInstalled) {
                     try {
-                        Undo-RuntimeInstall $stage $install $runtimeBackup $runtimeTransaction
+                        Undo-RuntimeInstall $install $runtimeBackup $runtimeTransaction
                         $runtimeInstalled = $false
                     } catch {
                         throw "settings update failed ($settingsFailure); runtime rollback also failed: $($_.Exception.Message)"
                     }
+                    throw "settings update failed; previous managed runtime restored; displaced runtime files retained at ${runtimeBackup}: $settingsFailure"
                 }
                 throw $settingsFailure
             }
         }
 
+        Assert-ManagedPayloadBytes $install $runtimeExpected 'installed payload before success'
         [Console]::Out.WriteLine("coralline installed at $install")
         if ($null -ne $resolvedCommit) {
             [Console]::Out.WriteLine("resolved $Repo@$Ref to $resolvedCommit")

@@ -285,19 +285,24 @@ function Copy-ManagedSource([string]$Destination) {
     }
 }
 
-function Get-InstallerCommitFunctions {
+function Get-InstallerTransactionFunctions {
     $wanted = @(
         'Test-HasControlCharacter',
         'Assert-SafePathSegments',
         'Resolve-CanonicalLocalPath',
         'Assert-NoReparsePath',
         'Assert-SafeExistingFile',
+        'Ensure-SafeDirectory',
         'Remove-SafeInstallerFile',
         'Test-ByteArraysEqual',
         'Read-BoundedSharedFileBytes',
         'Write-BytesCreateNew',
         'Restore-SettingsOriginal',
-        'Commit-Settings'
+        'Commit-Settings',
+        'Test-DirectoryEmpty',
+        'Remove-EmptyCreatedRuntime',
+        'Restore-ManagedRuntime',
+        'Assert-ManagedPayloadBytes'
     )
     $tokens = $null
     $errors = $null
@@ -567,8 +572,10 @@ try {
     Test-InvalidSettings 'array-root' '[1,2,3]'
     Test-InvalidSettings 'duplicate-exact' '{"statusLine":1,"status\u004cine":2}'
 
-    . ([scriptblock]::Create((Get-InstallerCommitFunctions)))
+    . ([scriptblock]::Create((Get-InstallerTransactionFunctions)))
     $script:MaxSettingsBytes = 8MB
+    $script:MaxRuntimeBytes = 2MB
+    $script:MaxThemeBytes = 256KB
     $lockedPaths = New-Paths 'concurrent-installer-lock'
     $heldMutex = New-Object System.Threading.Mutex(
         $false,
@@ -766,6 +773,157 @@ try {
     Check 'open settings handle creates no rollback artifact' (
         -not [IO.File]::Exists($openHandleTemporary) -and
         -not [IO.File]::Exists($openHandleRestore)
+    )
+
+    $script:ManagedFiles = @('themes\mono.conf')
+    $runtimeConflictRoot = Join-Path $TempRoot 'runtime-rollback-conflict'
+    $runtimeConflictInstall = Join-Path $runtimeConflictRoot 'install'
+    $runtimeConflictBackup = Join-Path $runtimeConflictRoot 'backup'
+    [void][IO.Directory]::CreateDirectory((Join-Path $runtimeConflictInstall 'themes'))
+    [void][IO.Directory]::CreateDirectory((Join-Path $runtimeConflictBackup 'themes'))
+    $runtimeConflictTarget = Join-Path $runtimeConflictInstall 'themes\mono.conf'
+    $runtimeConflictOriginal = $Utf8NoBom.GetBytes('original runtime bytes')
+    $runtimeConflictInstalled = $Utf8NoBom.GetBytes('installer runtime bytes')
+    $runtimeConflictExternal = $Utf8NoBom.GetBytes('external runtime bytes')
+    [IO.File]::WriteAllBytes($runtimeConflictTarget, $runtimeConflictExternal)
+    $runtimeConflictBackupFile = Join-Path $runtimeConflictBackup 'themes\mono.conf'
+    [IO.File]::WriteAllBytes($runtimeConflictBackupFile, $runtimeConflictOriginal)
+    $runtimeExpected = @{ 'themes\mono.conf' = $runtimeConflictInstalled }
+    $runtimeConflictRejected = $false
+    try {
+        Restore-ManagedRuntime (
+            $runtimeConflictInstall
+        ) $runtimeConflictBackup @('themes\mono.conf') $true $runtimeExpected
+    } catch {
+        $runtimeConflictRejected = $_.Exception.Message.Contains($runtimeConflictTarget)
+    }
+    Check 'runtime rollback rejects concurrent managed-file edit' $runtimeConflictRejected
+    Check 'runtime rollback preserves concurrent target bytes' (
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($runtimeConflictTarget)) -ceq
+        [Convert]::ToBase64String($runtimeConflictExternal)
+    )
+    Check 'runtime rollback retains original backup after conflict' (
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($runtimeConflictBackupFile)) -ceq
+        [Convert]::ToBase64String($runtimeConflictOriginal)
+    )
+
+    $script:ManagedFiles = @('statusline.ps1', 'themes\mono.conf')
+    $runtimeBatchRoot = Join-Path $TempRoot 'runtime-rollback-batch-preflight'
+    $runtimeBatchInstall = Join-Path $runtimeBatchRoot 'install'
+    $runtimeBatchBackup = Join-Path $runtimeBatchRoot 'backup'
+    [void][IO.Directory]::CreateDirectory((Join-Path $runtimeBatchInstall 'themes'))
+    [void][IO.Directory]::CreateDirectory((Join-Path $runtimeBatchBackup 'themes'))
+    $runtimeBatchMissingTarget = Join-Path $runtimeBatchInstall 'statusline.ps1'
+    $runtimeBatchMissingBackup = Join-Path $runtimeBatchBackup 'statusline.ps1'
+    $runtimeBatchSentinel = "$runtimeBatchMissingBackup.rollback"
+    $runtimeBatchTheme = Join-Path $runtimeBatchInstall 'themes\mono.conf'
+    $runtimeBatchThemeBackup = Join-Path $runtimeBatchBackup 'themes\mono.conf'
+    $runtimeBatchSentinelBytes = $Utf8NoBom.GetBytes('external recovery sentinel')
+    [IO.File]::WriteAllBytes($runtimeBatchSentinel, $runtimeBatchSentinelBytes)
+    [IO.File]::WriteAllBytes($runtimeBatchTheme, $runtimeConflictInstalled)
+    [IO.File]::WriteAllBytes($runtimeBatchThemeBackup, $runtimeConflictOriginal)
+    $runtimeBatchExpected = @{
+        'statusline.ps1' = $runtimeConflictInstalled
+        'themes\mono.conf' = $runtimeConflictInstalled
+    }
+    $runtimeBatchRejected = $false
+    try {
+        Restore-ManagedRuntime (
+            $runtimeBatchInstall
+        ) $runtimeBatchBackup @('statusline.ps1', 'themes\mono.conf') $true $runtimeBatchExpected
+    } catch {
+        $runtimeBatchRejected = $_.Exception.Message.Contains($runtimeBatchSentinel)
+    }
+    Check 'runtime rollback preflights every recovery path before mutation' $runtimeBatchRejected
+    Check 'runtime rollback recovery collision preserves later target and backup' (
+        -not [IO.File]::Exists($runtimeBatchMissingTarget) -and
+        -not [IO.File]::Exists($runtimeBatchMissingBackup) -and
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($runtimeBatchSentinel)) -ceq
+        [Convert]::ToBase64String($runtimeBatchSentinelBytes) -and
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($runtimeBatchTheme)) -ceq
+        [Convert]::ToBase64String($runtimeConflictInstalled) -and
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($runtimeBatchThemeBackup)) -ceq
+        [Convert]::ToBase64String($runtimeConflictOriginal)
+    )
+    [IO.File]::Delete($runtimeBatchSentinel)
+    [IO.File]::WriteAllBytes($runtimeBatchMissingTarget, $runtimeConflictInstalled)
+    [IO.File]::WriteAllBytes($runtimeBatchMissingBackup, $runtimeConflictOriginal)
+    $runtimeBatchManual = $false
+    try {
+        Restore-ManagedRuntime (
+            $runtimeBatchInstall
+        ) $runtimeBatchBackup @('statusline.ps1', 'themes\mono.conf') $true $runtimeBatchExpected
+    } catch {
+        $runtimeBatchManual = $_.Exception.Message.Contains('multi-file runtime rollback')
+    }
+    Check 'multi-file runtime rollback fails closed before mutation' $runtimeBatchManual
+    Check 'multi-file runtime rollback leaves every target and backup unchanged' (
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($runtimeBatchMissingTarget)) -ceq
+        [Convert]::ToBase64String($runtimeConflictInstalled) -and
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($runtimeBatchMissingBackup)) -ceq
+        [Convert]::ToBase64String($runtimeConflictOriginal) -and
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($runtimeBatchTheme)) -ceq
+        [Convert]::ToBase64String($runtimeConflictInstalled) -and
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($runtimeBatchThemeBackup)) -ceq
+        [Convert]::ToBase64String($runtimeConflictOriginal)
+    )
+
+    $script:ManagedFiles = @('themes\mono.conf')
+    $runtimeRestoreRoot = Join-Path $TempRoot 'runtime-rollback-owned'
+    $runtimeRestoreInstall = Join-Path $runtimeRestoreRoot 'install'
+    $runtimeRestoreBackup = Join-Path $runtimeRestoreRoot 'backup'
+    [void][IO.Directory]::CreateDirectory((Join-Path $runtimeRestoreInstall 'themes'))
+    [void][IO.Directory]::CreateDirectory((Join-Path $runtimeRestoreBackup 'themes'))
+    $runtimeRestoreTarget = Join-Path $runtimeRestoreInstall 'themes\mono.conf'
+    $runtimeRestoreBackupFile = Join-Path $runtimeRestoreBackup 'themes\mono.conf'
+    $runtimeRestoreRecovery = "$runtimeRestoreBackupFile.rollback"
+    [IO.File]::WriteAllBytes($runtimeRestoreTarget, $runtimeConflictInstalled)
+    [IO.File]::WriteAllBytes($runtimeRestoreBackupFile, $runtimeConflictOriginal)
+    Restore-ManagedRuntime (
+        $runtimeRestoreInstall
+    ) $runtimeRestoreBackup @('themes\mono.conf') $true $runtimeExpected
+    Check 'runtime rollback restores original bytes' (
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($runtimeRestoreTarget)) -ceq
+        [Convert]::ToBase64String($runtimeConflictOriginal)
+    )
+    Check 'runtime rollback retains displaced installer bytes' (
+        [IO.File]::Exists($runtimeRestoreRecovery) -and
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($runtimeRestoreRecovery)) -ceq
+        [Convert]::ToBase64String($runtimeConflictInstalled)
+    )
+
+    $newRuntimeRoot = Join-Path $TempRoot 'new-runtime-rollback-owned'
+    $newRuntimeInstall = Join-Path $newRuntimeRoot 'install'
+    $newRuntimeBackup = Join-Path $newRuntimeRoot 'backup'
+    [void][IO.Directory]::CreateDirectory((Join-Path $newRuntimeInstall 'themes'))
+    $newRuntimeTarget = Join-Path $newRuntimeInstall 'themes\mono.conf'
+    $newRuntimeRecovery = Join-Path $newRuntimeBackup 'themes\mono.conf.rollback'
+    [IO.File]::WriteAllBytes($newRuntimeTarget, $runtimeConflictInstalled)
+    Restore-ManagedRuntime (
+        $newRuntimeInstall
+    ) $newRuntimeBackup @('themes\mono.conf') $true $runtimeExpected
+    Check 'new runtime rollback removes installer-owned target' (
+        -not [IO.File]::Exists($newRuntimeTarget)
+    )
+    Check 'new runtime rollback retains installer bytes in recovery' (
+        [IO.File]::Exists($newRuntimeRecovery) -and
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($newRuntimeRecovery)) -ceq
+        [Convert]::ToBase64String($runtimeConflictInstalled)
+    )
+
+    [IO.File]::WriteAllBytes($runtimeRestoreTarget, $runtimeConflictExternal)
+    $runtimeFinalRejected = $false
+    try {
+        Assert-ManagedPayloadBytes (
+            $runtimeRestoreInstall
+        ) $runtimeExpected 'installed payload before success'
+    } catch {
+        $runtimeFinalRejected = $_.Exception.Message.Contains('changed concurrently')
+    }
+    Check 'final runtime byte validation rejects valid external content' $runtimeFinalRejected
+    Check 'final runtime byte validation preserves external content' (
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($runtimeRestoreTarget)) -ceq
+        [Convert]::ToBase64String($runtimeConflictExternal)
     )
 
     $commitRaceRoot = Join-Path $TempRoot 'commit-point-settings'

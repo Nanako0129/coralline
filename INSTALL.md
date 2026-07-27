@@ -31,9 +31,12 @@ It never creates or edits `$HOME\.claude\coralline.conf`, never writes
 `subagentStatusLine`, and retains timestamped sibling backups when existing
 managed content changes. An identical rerun is a true no-op. Renderer state and
 custom files remain in place because updates replace only the managed allowlist.
-Installer invocations are serialized. The atomic settings backup is the actual
-displaced file, so writes through an already-open editor handle remain in that
-backup; conflicts observed during commit fail without overwriting external bytes.
+Installer invocations are serialized. Single-file runtime rollback rejects
+concurrent edits and retains displaced installer bytes; multi-file rollback fails
+closed with current files and backups left for manual recovery. The exact allowlist
+is rechecked before success. The atomic settings backup is the actual displaced
+file, so writes through an already-open editor handle remain in that backup;
+conflicts observed during commit fail without overwriting external bytes.
 
 Ask whether the user wants mutable `main`, a named release tag, or an audited
 40-character commit SHA. Do not describe a tag as immutable. Run the matching

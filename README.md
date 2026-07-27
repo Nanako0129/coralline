@@ -222,9 +222,12 @@ then the installer downloads every managed file from that same commit.
 exact-case top-level `statusLine` member in `$HOME\.claude\settings.json`. It preserves
 `$HOME\.claude\coralline.conf` byte-for-byte and never creates it. Existing runtime and settings
 are backed up with timestamped sibling names when their managed content changes. Installer
-invocations are serialized. The atomic settings backup is the actual displaced file, so even an
-open editor handle that writes after replacement updates the retained backup instead of losing data.
-Conflicts observed during commit make the installer fail without overwriting the external bytes.
+invocations are serialized. Single-file runtime rollback refuses to overwrite concurrent edits and
+retains displaced installer bytes; multi-file rollback fails closed with current files and backups
+left for manual recovery. The exact 11-file payload is rechecked before reporting success.
+The atomic settings backup is the actual displaced file, so even an open editor handle that writes
+after replacement updates the retained backup instead of losing data. Conflicts observed during
+commit make the installer fail without overwriting the external bytes.
 
 Rerun the same command to update. An identical rerun is a true no-op: no managed-file
 replacement, settings rewrite, backup, or timestamp change. PowerShell-only installs do not include a
