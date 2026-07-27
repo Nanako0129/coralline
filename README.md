@@ -124,11 +124,10 @@ bar, point the registration at its own config file:
 
 ## Install
 
-On macOS, Linux, and Windows environments with Bash, three install routes use the same
-`install.sh`. Each one copies the Bash renderer **and the setup wizard** into
-`~/.claude/coralline` and registers the status line in Claude Code, so you can re-run the
-wizard later no matter which Bash route you used. A PowerShell-only Windows machine uses the
-separate native archive flow under [Windows without Git Bash](#windows-without-git-bash).
+On macOS, Linux, and Windows environments with Bash, the install routes use `install.sh`.
+PowerShell-only Windows uses the recommended native `install.ps1` route under
+[Windows without Git Bash](#windows-without-git-bash). It needs only Windows PowerShell 5.1:
+no Bash, Git, `jq`, WSL, or archive extractor.
 
 > **Bash requirements:** `jq` and a [Nerd Font](https://www.nerdfonts.com/) terminal. No Nerd
 > Font? Set `VL_ASCII=1` in your config for a glyph-free rendering. The native PowerShell
@@ -144,11 +143,10 @@ fetch https://raw.githubusercontent.com/Nanako0129/coralline/main/INSTALL.md
 and follow the playbook in it.
 ```
 
-In a Bash environment, Claude will read the playbook, use `install.sh` to bootstrap the
-runtime, interview you about the look, write the config, verify it, and remind you that you can
-rerun the visual wizard if the first result doesn't match your taste. On PowerShell-only
-Windows, use the native archive flow below instead; the Bash playbook does not install
-`statusline.ps1`.
+Claude checks the environment first. In a Bash environment it uses `install.sh`, interviews
+you, and can open the visual wizard. On PowerShell-only Windows it uses `install.ps1`, which
+installs the native renderer and themes but does not provide a wizard or create
+`coralline.conf`.
 
 If your Claude flags the playbook and wants to inspect things first, that is the right
 instinct, not an obstacle: see [Trust and security](#trust-and-security).
@@ -206,34 +204,34 @@ bar supports the same segments, `pill`/`lean`/`classic` styles, `fixed`/`auto` l
 history, limit sync, and float publication as the bash renderer. The `--subagent` panel-row
 protocol remains bash-only and exits without output in `statusline.ps1`.
 
-```powershell
-$download = Join-Path $env:TEMP ("coralline-" + [guid]::NewGuid())
-$archive = Join-Path $download "coralline-main.zip"
-New-Item -ItemType Directory -Force $download | Out-Null
-Invoke-WebRequest https://github.com/Nanako0129/coralline/archive/refs/heads/main.zip -UseBasicParsing -OutFile $archive
-Expand-Archive $archive -DestinationPath $download
+The following is the **mutable `main`** one-line installer. It downloads `install.ps1` with a
+bounded `HttpWebRequest`, parses it before execution, launches the absolute
+`$PSHOME\powershell.exe`, and then lets the installer resolve `main` once to a commit SHA:
 
-$source = Join-Path $download "coralline-main"
-$target = Join-Path $HOME ".claude\coralline"
-New-Item -ItemType Directory -Force (Join-Path $target "themes") | Out-Null
-$runtime = Join-Path $target "statusline.ps1"
-if (Test-Path -LiteralPath $runtime) {
-  Copy-Item -LiteralPath $runtime -Destination ($runtime + ".bak." + (Get-Date -Format "yyyyMMdd-HHmmss"))
-}
-Copy-Item (Join-Path $source "statusline.ps1") $runtime
-Copy-Item (Join-Path $source "themes\*.conf") (Join-Path $target "themes")
-Remove-Item $download -Recurse -Force
+```powershell
+& { $ErrorActionPreference='Stop';$repo='Nanako0129/coralline';$ref='main';if($repo -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$' -or $ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $ref.Length -gt 200 -or $ref.Contains('..') -or $ref.Contains('//') -or $ref.Contains('@{') -or $ref.EndsWith('/') -or $ref.EndsWith('.') -or $ref -match '(?i)(^|/)[^/]*\.lock($|/)'){throw 'invalid Repo or Ref'};$safe={param([string]$p,[string]$label,[bool]$cmd=$false);if([string]::IsNullOrWhiteSpace($p) -or $p -match '[\x00-\x1f\x7f-\x9f]' -or $p.StartsWith('\\') -or $p.StartsWith('//') -or $p.IndexOf(':',2) -ge 0){throw "$label is not a safe local path"};$full=[IO.Path]::GetFullPath($p).Replace('/','\');$root=[IO.Path]::GetPathRoot($full);if($root -notmatch '^[A-Za-z]:\\$'){throw "$label is not on a local drive"};$drive=New-Object IO.DriveInfo($root);if($drive.DriveType -eq [IO.DriveType]::Network){throw "$label is on a network drive"};if($cmd -and ($full.Contains('"') -or $full.Contains('%') -or $full.Contains('!'))){throw "$label is not cmd-safe"};$current=$root;foreach($part in $full.Substring($root.Length).Split(@([char]'\'),[StringSplitOptions]::RemoveEmptyEntries)){$current=[IO.Path]::Combine($current,$part);$item=Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue;if($null -eq $item){break};if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw "$label contains a reparse point"}};if($full.Length -gt $root.Length){$full=$full.TrimEnd('\')};return $full};$old=[Net.ServicePointManager]::SecurityProtocol;$tmp=$null;$made=$false;$response=$null;$code=0;try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$tempRoot=& $safe ([IO.Path]::GetTempPath()) 'TEMP';$tmp=& $safe ([IO.Path]::Combine($tempRoot,('coralline-install-'+[guid]::NewGuid().ToString('N')+'.ps1'))) 'installer temp';$parts=$repo.Split('/');$uri=[uri]('https://raw.githubusercontent.com/'+[uri]::EscapeDataString($parts[0])+'/'+[uri]::EscapeDataString($parts[1])+'/'+[uri]::EscapeDataString($ref)+'/install.ps1');if($uri.Scheme -cne 'https' -or $uri.Host -cne 'raw.githubusercontent.com' -or $uri.UserInfo -or $uri.Query -or $uri.Fragment){throw 'unexpected installer URI'};$request=[Net.HttpWebRequest]::Create($uri);$request.Method='GET';$request.AllowAutoRedirect=$false;$request.Timeout=15000;$request.ReadWriteTimeout=15000;$request.UserAgent='coralline-bootstrap';$response=[Net.HttpWebResponse]$request.GetResponse();if($response.StatusCode -ne [Net.HttpStatusCode]::OK -or $response.ResponseUri.AbsoluteUri -cne $uri.AbsoluteUri){throw 'installer request failed or redirected'};$cap=1MB;if($response.ContentLength -gt $cap){throw 'installer Content-Length exceeds limit'};$input=$response.GetResponseStream();$output=[IO.File]::Open($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$made=$true;try{$buffer=New-Object byte[] 8192;$total=0L;while(($read=$input.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $cap){throw 'installer stream exceeds limit'};$output.Write($buffer,0,$read)};if($response.ContentLength -ge 0 -and $total -ne $response.ContentLength){throw 'installer download was truncated'};$output.Flush($true)}finally{$output.Dispose();$input.Dispose()};$checked=& $safe $tmp 'downloaded installer';if($checked -cne $tmp){throw 'installer temp identity changed'};$tokens=$null;$errors=$null;[void][Management.Automation.Language.Parser]::ParseFile($tmp,[ref]$tokens,[ref]$errors);if($errors.Count -ne 0){throw ('downloaded installer parse failed: '+$errors[0].Message)};$exe=& $safe ([IO.Path]::Combine($PSHOME,'powershell.exe')) 'PowerShell executable' $true;if(-not [IO.File]::Exists($exe)){throw 'trusted powershell.exe is missing'};$psi=New-Object Diagnostics.ProcessStartInfo;$psi.FileName=$exe;$psi.UseShellExecute=$false;$psi.Arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$tmp+'" -Repo "'+$repo+'" -Ref "'+$ref+'"';$process=New-Object Diagnostics.Process;$process.StartInfo=$psi;try{if(-not $process.Start()){throw 'installer child did not start'};$process.WaitForExit();$code=$process.ExitCode}finally{$process.Dispose()}}finally{if($null -ne $response){$response.Dispose()};[Net.ServicePointManager]::SecurityProtocol=$old;if($made -and $null -ne $tmp -and [IO.File]::Exists($tmp)){$checked=& $safe $tmp 'installer cleanup';if($checked -cne $tmp){throw 'refusing unexpected cleanup path'};$item=Get-Item -LiteralPath $tmp -Force;if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'refusing reparse-point cleanup'};[IO.File]::Delete($tmp)}};if($code -ne 0){exit $code} }
 ```
 
-Then add to `~/.claude/settings.json`:
+For an audited release or commit, copy the same line and replace only
+`$ref='main'` with `$ref='AUDITED_TAG_OR_40_CHARACTER_COMMIT_SHA'`. A tag names a release but
+can technically be moved; only an audited 40-character commit SHA makes the bootstrap URL
+immutable. The installer still resolves either choice once and downloads every managed file
+from that resolved commit.
 
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:/Users/you/.claude/coralline/statusline.ps1\""
-  }
-}
+`install.ps1` installs `statusline.ps1` plus all ten themes, then losslessly merges only the
+exact-case top-level `statusLine` member in `$HOME\.claude\settings.json`. It preserves
+`$HOME\.claude\coralline.conf` byte-for-byte and never creates it. Existing runtime and settings
+are backed up with timestamped sibling names when their managed content changes.
+
+Rerun the same command to update. An identical rerun is a true no-op: no directory swap,
+settings rewrite, backup, or timestamp change. PowerShell-only installs do not include a
+wizard; reuse an existing `coralline.conf` or edit one manually.
+
+If the one-line bootstrap cannot run, download a GitHub source archive in the browser, inspect
+it, extract it locally, and run the checked-out installer without network access:
+
+```powershell
+& "$PSHOME\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\path\to\coralline\install.ps1 -SourceDirectory C:\path\to\coralline -InstallRoot "$HOME\.claude\coralline" -SettingsPath "$HOME\.claude\settings.json"
 ```
 
 Run the wizard-written config from a bash install, or write `~/.claude/coralline.conf` by hand
@@ -250,11 +248,12 @@ under `~/.claude/coralline/` (the 3 newest are kept).
 
 #### PowerShell-only update
 
-On a machine without Bash, re-run the PowerShell archive block under
-[Windows without Git Bash](#windows-without-git-bash). The same block is also the native
-update path: it downloads the current `main` archive, backs up an existing
-`statusline.ps1` as `statusline.ps1.bak.<timestamp>`, refreshes the renderer and all themes,
-and leaves `~/.claude/coralline.conf` plus `settings.json` unchanged.
+Re-run the native one-line under [Windows without Git Bash](#windows-without-git-bash), using
+the same `Repo` and `Ref`. It swaps the managed runtime only when bytes changed, merges the
+exact managed settings object only when needed, retains timestamped backups, and always leaves
+`~/.claude/coralline.conf` untouched. Bounded regular files already under the runtime directory,
+including burn/limit history, `float.txt`, and custom themes, survive the swap; unsafe reparse
+points or oversized unmanaged content stop the update before mutation.
 
 #### Ask Claude (recommended)
 
@@ -285,23 +284,22 @@ touch `~/.claude/settings.json`. That shape is exactly what a prompt-injection a
 like, so a Claude that red-flags it before proceeding is behaving correctly. The answer to
 that skepticism is inspection, not trust:
 
-- **Read what runs.** Everything is in this repo: [install.sh](./install.sh) (about 270
-  lines) copies files and merges the core `statusLine` key into `settings.json`; the optional
-  `subagentStatusLine` key is written only after an explicit yes. [INSTALL.md](./INSTALL.md)
-  is the playbook the AI follows. Have your Claude read both before approving anything; that
-  is the intended flow.
+- **Read what runs.** Everything is in this repo. Bash environments use
+  [install.sh](./install.sh); PowerShell-only Windows uses [install.ps1](./install.ps1).
+  [INSTALL.md](./INSTALL.md) routes the AI between them. The PowerShell bootstrap is not
+  `irm | iex`: it bounds and parses a temporary installer, then launches it as a file.
 - **Pin a release.** `... | bash -s -- --ref v0.9.1` installs a tagged release instead of
   `main`, so what you audited is what you run. The interactive installer already offers the
   latest tag by default.
-- **What gets written, exactly:** files under `~/.claude/coralline/`, your choices in
-  `~/.claude/coralline.conf`, and the core `statusLine` entry in
-  `~/.claude/settings.json`. If you explicitly enable themed subagent rows, coralline also
-  writes `subagentStatusLine`. A timestamped `settings.json.bak.*` backup is created before
-  either merge; no other Claude settings are changed.
-- **What runs afterwards:** `statusline.sh` renders on every prompt. It is pure bash and
-  makes zero network requests at runtime. A main render uses one `jq` and at most one `git`;
-  a subagent-panel render uses one `jq`, no `git`, and Bash builtins for local role metadata.
-  Your prompts, keys, and usage data never leave the machine.
+- **What gets written, exactly:** Bash setup writes its runtime, your approved config, and
+  Claude settings as described above. The native installer writes only `statusline.ps1` and
+  ten themes under `~/.claude/coralline`, plus the exact top-level `statusLine` value in
+  `settings.json`. It never creates or edits `coralline.conf` and never writes
+  `subagentStatusLine`. Changed existing runtime/settings get timestamped sibling backups.
+- **What runs afterwards:** the registered Bash or PowerShell renderer runs on every prompt
+  and makes zero network requests. The native command quotes the absolute trusted
+  `$PSHOME\powershell.exe` and the absolute renderer path; it never searches the workspace
+  for `powershell.exe`.
 - **Why INSTALL.md addresses the AI:** humans get the visual wizard, AIs get an interview
   script, so the playbook speaks to the reader that executes it. A document that opens by
   addressing your AI deserves scrutiny, which is why every artifact it references lives in
@@ -340,7 +338,7 @@ Remove-Item -LiteralPath (Join-Path $HOME '.claude\coralline.conf') -Force -Erro
 
 Both Bash setup paths use the same installer. Humans run it with no mode and get the visual
 setup. Claude uses it with `--install-only`, then follows `INSTALL.md` to interview you and
-write config. The native PowerShell archive path does not install a PowerShell wizard; it reads
+write config. The native PowerShell installer has no wizard and never writes config; it reads
 the same `coralline.conf`, which can come from an existing Bash setup or be written manually.
 
 ### Setup modes
@@ -373,6 +371,10 @@ Point the installer at the same fork:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YOU/coralline/main/install.sh | bash -s -- --repo YOU/coralline
 ```
+
+For PowerShell-only Windows, change both `$repo` and `$ref` in the native bootstrap. The
+bootstrap validates and passes those exact values to `install.ps1`, which resolves the ref once
+before downloading the fixed runtime allowlist.
 
 ## Configuration
 

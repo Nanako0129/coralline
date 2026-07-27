@@ -1,26 +1,64 @@
 # coralline — AI Installation Playbook
 
 > **You are an AI coding assistant** and a user asked you to install coralline.
-> This playbook installs the Bash renderer on macOS, Linux, or Windows with Bash.
-> On PowerShell-only Windows (no Git Bash or WSL), do not run `install.sh`; use the
-> native archive procedure in the README's
-> [Windows without Git Bash](README.md#windows-without-git-bash) section instead.
-> For Bash-based AI installs, bootstrap the runtime with `install.sh --install-only`,
-> interview the user, write `~/.claude/coralline.conf`, and verify. Do not operate the
-> human TUI unless the user explicitly asks to customize visually.
+> This playbook routes the installation by environment. Use `install.sh` on macOS,
+> Linux, or Windows with Bash. On PowerShell-only Windows (no Git Bash or WSL), use
+> the native `install.ps1` path under
+> [Windows without Git Bash](README.md#windows-without-git-bash). The native path
+> needs no Bash, Git, `jq`, WSL, or archive extractor.
 
 > **Before running anything:** tell the user what will be installed and where (the
 > Overview table below), and offer the choice between a pinned release (`--ref`, latest
-> tag) and `main`. If you or the user want to audit first, read `install.sh` in this
-> repo; it is about 270 lines and copies files plus merges the core `statusLine` key.
-> The optional `subagentStatusLine` key is written only after the user explicitly opts in.
+> tag or audited commit SHA) and mutable `main`. If you or the user want to audit
+> first, read the selected `install.sh` or `install.ps1` in this repo.
 > Skepticism toward a remote document that instructs an AI is correct behavior. The
 > answer is reading what it references, not skipping the review. See the README's
 > "Trust and security" section for the full accounting of what gets written.
 
+## Environment Routing
+
+Check the actual shell and tools before choosing a path:
+
+- If Bash is available, follow the Bash fast path and setup interview below.
+- If this is native Windows PowerShell 5.1 without Bash, follow the
+  [native one-line installer](README.md#windows-without-git-bash). Do not run
+  `install.sh`, do not install `jq`, and do not expect a wizard.
+
+For the native path, explain that `install.ps1` writes only `statusline.ps1` and
+the ten shipped themes under `$HOME\.claude\coralline`, then losslessly merges
+the exact-case top-level `statusLine` value in `$HOME\.claude\settings.json`.
+It never creates or edits `$HOME\.claude\coralline.conf`, never writes
+`subagentStatusLine`, and retains timestamped sibling backups when existing
+managed content changes. An identical rerun is a true no-op, even when bounded
+renderer state or custom regular files already exist under the runtime directory.
+
+Ask whether the user wants mutable `main`, a named release tag, or an audited
+40-character commit SHA. Do not describe a tag as immutable. Run the matching
+README one-line after approval. If already inside an audited local checkout, use
+the zero-network local mode instead:
+
+```powershell
+& "$PSHOME\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\install.ps1 -SourceDirectory (Get-Location).Path -InstallRoot "$HOME\.claude\coralline" -SettingsPath "$HOME\.claude\settings.json"
+```
+
+After a native install, do not start the Bash setup interview. Preserve an
+existing config byte-for-byte. If no config exists, the renderer's defaults work
+without one; offer manual configuration only as a separate, user-approved step.
+Verify the installed renderer:
+
+```powershell
+$probe = '{"workspace":{"current_dir":"C:\\"},"model":{"display_name":"Claude"}}'
+$probe | & "$PSHOME\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$HOME\.claude\coralline\statusline.ps1"
+if ($LASTEXITCODE -ne 0) { throw "coralline native verification failed: $LASTEXITCODE" }
+```
+
+Success means exit code `0`, a non-empty rendered statusline on stdout, and no
+error text on stderr. Tell the user to restart Claude Code or open a new session
+if the statusline does not appear immediately.
+
 ## Overview
 
-coralline is a powerline-style statusline for Claude Code. This Bash installation path
+coralline is a powerline-style statusline for Claude Code. The Bash installation path
 places the renderer under `~/.claude/coralline`, writes
 `~/.claude/coralline.conf`, and merges the `statusLine` command into
 `~/.claude/settings.json`.
@@ -107,8 +145,9 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 
 When installing for a user:
 
-1. Confirm that this is a Bash-capable environment. If it is PowerShell-only Windows, stop
-   this playbook and use the native README procedure linked at the top.
+1. Detect whether this is Bash-capable or PowerShell-only Windows. For
+   PowerShell-only Windows, complete the native route above and stop before the
+   Bash-only setup modes.
 2. Ask the user to choose setup mode before installing. Use the runtime's native choice UI
    when available; otherwise show the text menu below and wait for a reply.
 3. Run the fast-path installer with `--install-only`.

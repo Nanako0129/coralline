@@ -116,11 +116,10 @@ burn、git 與 runtime segments——都只作用於主列，在 subagent 模式
 
 ## 安裝
 
-在 macOS、Linux，以及具有 Bash 的 Windows 環境中，三種安裝方式都由同一支
-`install.sh` 驅動。每一種都會把 Bash renderer **與設定 wizard** 複製到
-`~/.claude/coralline`、並把 statusline 註冊進 Claude Code，所以之後都能重跑
-wizard。僅有 PowerShell 的 Windows 電腦則使用下方
-[Windows 無 Git Bash](#windows-無-git-bash)的獨立原生 archive 流程。
+在 macOS、Linux，以及具有 Bash 的 Windows 環境中，安裝流程使用 `install.sh`。
+僅有 PowerShell 的 Windows 則使用下方[Windows 無 Git Bash](#windows-無-git-bash)
+推薦的原生 `install.ps1` 流程。它只需要 Windows PowerShell 5.1，不需要 Bash、
+Git、`jq`、WSL 或 archive 解壓工具。
 
 > **Bash 需求：** `jq` 以及 [Nerd Font](https://www.nerdfonts.com/) 終端機字型。
 > 沒有 Nerd Font 的話，在設定檔加上 `VL_ASCII=1` 改用無特殊字符的渲染。下方原生
@@ -136,10 +135,9 @@ fetch https://raw.githubusercontent.com/Nanako0129/coralline/main/INSTALL.md
 and follow the playbook in it.
 ```
 
-在 Bash 環境中，Claude 會先讀 playbook，再用 `install.sh` bootstrap runtime、訪談你的
-外觀偏好、寫入設定並驗證，最後提醒你如果不滿意可以自己重新開啟視覺化 wizard。僅有
-PowerShell 的 Windows 請改用下方原生 archive 流程；這份 Bash playbook 不會安裝
-`statusline.ps1`。
+Claude 會先判斷環境。可使用 Bash 時，它會執行 `install.sh`、訪談外觀偏好，並可開啟
+視覺化 wizard；僅有 PowerShell 的 Windows 則執行 `install.ps1`。原生 installer
+會安裝 renderer 與 themes，但不提供 wizard，也不會建立 `coralline.conf`。
 
 如果你的 Claude 對這份 playbook 亮紅旗、想先檢查內容，那是正確的直覺而不是阻礙：
 見[信任與安全](#信任與安全)。
@@ -193,34 +191,33 @@ renderer 支援相同的 segments、`pill`／`lean`／`classic` styles、
 `fixed`／`auto` layouts、burn history、limit sync 與 float publication。
 只有 `--subagent` 面板列協定仍限定使用 bash；`statusline.ps1 --subagent` 不會輸出內容。
 
-```powershell
-$download = Join-Path $env:TEMP ("coralline-" + [guid]::NewGuid())
-$archive = Join-Path $download "coralline-main.zip"
-New-Item -ItemType Directory -Force $download | Out-Null
-Invoke-WebRequest https://github.com/Nanako0129/coralline/archive/refs/heads/main.zip -UseBasicParsing -OutFile $archive
-Expand-Archive $archive -DestinationPath $download
+以下是會跟隨開發進度的 **mutable `main`** 一行安裝指令。它以有上限的
+`HttpWebRequest` 下載 `install.ps1`，先解析語法，再透過絕對路徑
+`$PSHOME\powershell.exe` 啟動；installer 接著只解析一次 `main`，取得 commit SHA：
 
-$source = Join-Path $download "coralline-main"
-$target = Join-Path $HOME ".claude\coralline"
-New-Item -ItemType Directory -Force (Join-Path $target "themes") | Out-Null
-$runtime = Join-Path $target "statusline.ps1"
-if (Test-Path -LiteralPath $runtime) {
-  Copy-Item -LiteralPath $runtime -Destination ($runtime + ".bak." + (Get-Date -Format "yyyyMMdd-HHmmss"))
-}
-Copy-Item (Join-Path $source "statusline.ps1") $runtime
-Copy-Item (Join-Path $source "themes\*.conf") (Join-Path $target "themes")
-Remove-Item $download -Recurse -Force
+```powershell
+& { $ErrorActionPreference='Stop';$repo='Nanako0129/coralline';$ref='main';if($repo -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$' -or $ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $ref.Length -gt 200 -or $ref.Contains('..') -or $ref.Contains('//') -or $ref.Contains('@{') -or $ref.EndsWith('/') -or $ref.EndsWith('.') -or $ref -match '(?i)(^|/)[^/]*\.lock($|/)'){throw 'invalid Repo or Ref'};$safe={param([string]$p,[string]$label,[bool]$cmd=$false);if([string]::IsNullOrWhiteSpace($p) -or $p -match '[\x00-\x1f\x7f-\x9f]' -or $p.StartsWith('\\') -or $p.StartsWith('//') -or $p.IndexOf(':',2) -ge 0){throw "$label is not a safe local path"};$full=[IO.Path]::GetFullPath($p).Replace('/','\');$root=[IO.Path]::GetPathRoot($full);if($root -notmatch '^[A-Za-z]:\\$'){throw "$label is not on a local drive"};$drive=New-Object IO.DriveInfo($root);if($drive.DriveType -eq [IO.DriveType]::Network){throw "$label is on a network drive"};if($cmd -and ($full.Contains('"') -or $full.Contains('%') -or $full.Contains('!'))){throw "$label is not cmd-safe"};$current=$root;foreach($part in $full.Substring($root.Length).Split(@([char]'\'),[StringSplitOptions]::RemoveEmptyEntries)){$current=[IO.Path]::Combine($current,$part);$item=Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue;if($null -eq $item){break};if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw "$label contains a reparse point"}};if($full.Length -gt $root.Length){$full=$full.TrimEnd('\')};return $full};$old=[Net.ServicePointManager]::SecurityProtocol;$tmp=$null;$made=$false;$response=$null;$code=0;try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$tempRoot=& $safe ([IO.Path]::GetTempPath()) 'TEMP';$tmp=& $safe ([IO.Path]::Combine($tempRoot,('coralline-install-'+[guid]::NewGuid().ToString('N')+'.ps1'))) 'installer temp';$parts=$repo.Split('/');$uri=[uri]('https://raw.githubusercontent.com/'+[uri]::EscapeDataString($parts[0])+'/'+[uri]::EscapeDataString($parts[1])+'/'+[uri]::EscapeDataString($ref)+'/install.ps1');if($uri.Scheme -cne 'https' -or $uri.Host -cne 'raw.githubusercontent.com' -or $uri.UserInfo -or $uri.Query -or $uri.Fragment){throw 'unexpected installer URI'};$request=[Net.HttpWebRequest]::Create($uri);$request.Method='GET';$request.AllowAutoRedirect=$false;$request.Timeout=15000;$request.ReadWriteTimeout=15000;$request.UserAgent='coralline-bootstrap';$response=[Net.HttpWebResponse]$request.GetResponse();if($response.StatusCode -ne [Net.HttpStatusCode]::OK -or $response.ResponseUri.AbsoluteUri -cne $uri.AbsoluteUri){throw 'installer request failed or redirected'};$cap=1MB;if($response.ContentLength -gt $cap){throw 'installer Content-Length exceeds limit'};$input=$response.GetResponseStream();$output=[IO.File]::Open($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$made=$true;try{$buffer=New-Object byte[] 8192;$total=0L;while(($read=$input.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $cap){throw 'installer stream exceeds limit'};$output.Write($buffer,0,$read)};if($response.ContentLength -ge 0 -and $total -ne $response.ContentLength){throw 'installer download was truncated'};$output.Flush($true)}finally{$output.Dispose();$input.Dispose()};$checked=& $safe $tmp 'downloaded installer';if($checked -cne $tmp){throw 'installer temp identity changed'};$tokens=$null;$errors=$null;[void][Management.Automation.Language.Parser]::ParseFile($tmp,[ref]$tokens,[ref]$errors);if($errors.Count -ne 0){throw ('downloaded installer parse failed: '+$errors[0].Message)};$exe=& $safe ([IO.Path]::Combine($PSHOME,'powershell.exe')) 'PowerShell executable' $true;if(-not [IO.File]::Exists($exe)){throw 'trusted powershell.exe is missing'};$psi=New-Object Diagnostics.ProcessStartInfo;$psi.FileName=$exe;$psi.UseShellExecute=$false;$psi.Arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$tmp+'" -Repo "'+$repo+'" -Ref "'+$ref+'"';$process=New-Object Diagnostics.Process;$process.StartInfo=$psi;try{if(-not $process.Start()){throw 'installer child did not start'};$process.WaitForExit();$code=$process.ExitCode}finally{$process.Dispose()}}finally{if($null -ne $response){$response.Dispose()};[Net.ServicePointManager]::SecurityProtocol=$old;if($made -and $null -ne $tmp -and [IO.File]::Exists($tmp)){$checked=& $safe $tmp 'installer cleanup';if($checked -cne $tmp){throw 'refusing unexpected cleanup path'};$item=Get-Item -LiteralPath $tmp -Force;if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'refusing reparse-point cleanup'};[IO.File]::Delete($tmp)}};if($code -ne 0){exit $code} }
 ```
 
-接著在 `~/.claude/settings.json` 加入：
+若要安裝已稽核的 release 或 commit，複製同一行，只把 `$ref='main'` 改成
+`$ref='AUDITED_TAG_OR_40_CHARACTER_COMMIT_SHA'`。tag 代表具名 release，但技術上仍可
+被移動；只有已稽核的 40 字元 commit SHA 能讓 bootstrap URL 不可變。無論選哪一種，
+installer 都只解析 Ref 一次，並從解析出的 commit 下載全部受管理檔案。
 
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:/Users/you/.claude/coralline/statusline.ps1\""
-  }
-}
+`install.ps1` 會安裝 `statusline.ps1` 與全部十個 themes，並只對
+`$HOME\.claude\settings.json` 最上層、大小寫完全相符的 `statusLine` 做無損合併。
+`$HOME\.claude\coralline.conf` 會逐 byte 保留，而且 installer 永遠不會建立它。
+受管理的 runtime 或 settings 確實變更時，舊版本會保留為帶時間戳的同層備份。
+
+更新時重跑同一行即可。內容完全相同時會是 true no-op：不交換目錄、不重寫 settings、
+不建立備份，也不改 timestamp。PowerShell-only 安裝不含 wizard；請沿用既有
+`coralline.conf`，或自行手動編輯。
+
+若一行 bootstrap 無法執行，請在瀏覽器下載 GitHub source archive、先檢查內容並解壓到
+本機，再以零網路的 local mode 執行：
+
+```powershell
+& "$PSHOME\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\path\to\coralline\install.ps1 -SourceDirectory C:\path\to\coralline -InstallRoot "$HOME\.claude\coralline" -SettingsPath "$HOME\.claude\settings.json"
 ```
 
 可以沿用 bash wizard 已寫好的設定，或參考 `themes/` 內任一檔案手動建立
@@ -235,10 +232,12 @@ renderer 在一般 session 預設為 `Restricted` 時仍能啟動；它不會修
 
 #### 僅 PowerShell 的更新方式
 
-沒有 Bash 的電腦請重新執行 [Windows 無 Git Bash](#windows-無-git-bash)
-小節中的 PowerShell archive 指令。該區塊同時就是原生更新流程：下載目前的 `main`
-archive、把既有 `statusline.ps1` 備份為 `statusline.ps1.bak.<timestamp>`、更新
-renderer 與全部 themes，並保留 `~/.claude/coralline.conf` 與 `settings.json`。
+重新執行 [Windows 無 Git Bash](#windows-無-git-bash)的原生一行指令，並使用相同的
+`Repo` 與 `Ref`。只有受管理檔案 byte 不同時才會交換 runtime，只有 managed settings
+值不同時才會合併；變更時保留帶時間戳備份，而且永遠不碰
+`~/.claude/coralline.conf`。runtime 目錄下既有、大小受限的 regular files 也會保留，
+包括 burn／limit history、`float.txt` 與自訂 themes；若遇到不安全的 reparse point
+或過大的非受管理內容，update 會在修改前停止。
 
 #### 請 Claude 更新（推薦）
 
@@ -266,21 +265,21 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 `~/.claude/settings.json`。這個形狀和 prompt-injection 攻擊一模一樣，所以你的 Claude
 如果先亮紅旗、要求檢查，那是它運作正常，不是故障。回應這種懷疑的方式是檢驗，不是信任：
 
-- **先讀會執行的東西。** 全部都在這個 repo 裡：[install.sh](./install.sh)（約 270 行）
-  只做複製檔案和把核心 `statusLine` key 合併進 `settings.json`；選用的
-  `subagentStatusLine` 只有在使用者明確同意後才會寫入。[INSTALL.md](./INSTALL.md) 是 AI
-  遵循的 playbook。讓你的 Claude 先讀完這兩份再請求核可，這是預期流程。
+- **先讀會執行的東西。** 全部都在這個 repo 裡。Bash 環境使用
+  [install.sh](./install.sh)，僅有 PowerShell 的 Windows 使用
+  [install.ps1](./install.ps1)，[INSTALL.md](./INSTALL.md) 負責替 AI 判斷路徑。
+  PowerShell bootstrap 不是 `irm | iex`：它會限制下載大小、先解析暫存 installer，
+  再把它當檔案啟動。
 - **釘選版本。** `... | bash -s -- --ref v0.9.1` 安裝打過 tag 的 release 而非 `main`，
   你審過的就是你跑的。互動式安裝本來就預設建議最新 tag。
-- **確切會寫入什麼：** `~/.claude/coralline/` 底下的檔案、你的選擇存在
-  `~/.claude/coralline.conf`，以及合併進 `~/.claude/settings.json` 的核心
-  `statusLine`。若你明確啟用 subagent 列主題，coralline 也會寫入
-  `subagentStatusLine`。每次合併前都會先建立帶時間戳的 `settings.json.bak.*` 備份；
-  其他 Claude 設定不會變動。
-- **裝完之後跑的是什麼：** `statusline.sh` 在每次 prompt 時渲染。純 bash、執行期零網路
-  請求；主列每次渲染使用一個 `jq` 與最多一個 `git`，subagent 面板渲染則使用一個
-  `jq`、不呼叫 `git`，並以 Bash builtin 讀取本機 role metadata。你的對話、金鑰、用量
-  資料不會離開這台機器。
+- **確切會寫入什麼：** Bash 流程會依前述規則寫入 runtime、經你同意的 config 與
+  Claude settings。原生 installer 只會在 `~/.claude/coralline` 寫入
+  `statusline.ps1` 與十個 themes，並更新 `settings.json` 最上層完全相符的
+  `statusLine` 值。它不建立或修改 `coralline.conf`，也不寫
+  `subagentStatusLine`。既有 runtime/settings 有變更時會留下同層時間戳備份。
+- **裝完之後跑的是什麼：** 每次 prompt 會執行註冊的 Bash 或 PowerShell renderer，
+  runtime 都不會發出網路請求。原生命令會引用絕對路徑的可信
+  `$PSHOME\powershell.exe` 與 renderer，不會從 workspace 搜尋 `powershell.exe`。
 - **INSTALL.md 為什麼對 AI 說話：** 人類走視覺化精靈、AI 走訪談腳本，所以 playbook 對
   「實際執行它的讀者」說話。一份開頭就對你的 AI 下指令的文件本來就該被檢視，這正是它
   引用的每個檔案都放在這個 repo、讓你們倆都能先讀的原因。
@@ -317,8 +316,8 @@ Remove-Item -LiteralPath (Join-Path $HOME '.claude\coralline.conf') -Force -Erro
 ## 設定
 
 兩種 Bash 設定方式都使用同一支 installer。人類不帶模式參數執行時會進入視覺化設定；
-Claude 則使用 `--install-only` bootstrap，接著依照 `INSTALL.md` 訪談並寫入設定。原生
-PowerShell archive 流程目前不會安裝 PowerShell wizard；它讀取同一份
+Claude 則使用 `--install-only` bootstrap，接著依照 `INSTALL.md` 訪談並寫入設定。
+原生 PowerShell installer 沒有 wizard，而且永遠不寫 config；它讀取同一份
 `coralline.conf`，可沿用既有 Bash 設定或手動建立。
 
 ### 設定模式
@@ -351,6 +350,10 @@ PowerShell-only 安裝不含原生 wizard。請先備份再手動編輯
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YOU/coralline/main/install.sh | bash -s -- --repo YOU/coralline
 ```
+
+僅有 PowerShell 的 Windows，請同時修改原生 bootstrap 內的 `$repo` 與 `$ref`。
+bootstrap 會驗證這兩個值並原樣傳給 `install.ps1`；installer 只解析一次 Ref，再下載
+固定的 runtime allowlist。
 
 ## 設定檔
 
