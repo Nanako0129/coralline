@@ -42,10 +42,6 @@ $script:MaxApiBytes = 1MB
 $script:MaxRuntimeBytes = 2MB
 $script:MaxThemeBytes = 256KB
 $script:MaxJsonDepth = 128
-$script:MaxPreservedFiles = 8192
-$script:MaxPreservedDirectories = 512
-$script:MaxPreservedFileBytes = 2MB
-$script:MaxPreservedTotalBytes = 32MB
 $script:ApiOrigin = 'https://api.github.com'
 $script:RawOrigin = 'https://raw.githubusercontent.com'
 $script:LocalMode = $PSCmdlet.ParameterSetName -ceq 'Local'
@@ -418,7 +414,10 @@ function Stage-RemotePayload([string]$Repository, [string]$Revision, [string]$St
     $oldProtocol = [System.Net.ServicePointManager]::SecurityProtocol
     try {
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-        $commit = Resolve-GitHubCommit $Repository $Revision
+        $commit = $Revision
+        if ($commit -cnotmatch '^[0-9a-f]{40}$') {
+            $commit = Resolve-GitHubCommit $Repository $Revision
+        }
         foreach ($relative in $script:ManagedFiles) {
             $maximum = $script:MaxThemeBytes
             if ($relative -ceq 'statusline.ps1') { $maximum = $script:MaxRuntimeBytes }
@@ -503,7 +502,6 @@ function Assert-ValidStagedPayload([string]$StageRoot) {
 
 function Test-ManagedPayloadEqual([string]$StageRoot, [string]$InstalledRoot) {
     if (-not [System.IO.Directory]::Exists($InstalledRoot)) { return $false }
-    [void](Get-SafeTreeInventory $InstalledRoot 'installed payload')
     foreach ($relative in $script:ManagedFiles) {
         $staged = [System.IO.Path]::Combine($StageRoot, $relative)
         $installed = [System.IO.Path]::Combine($InstalledRoot, $relative)
@@ -512,44 +510,6 @@ function Test-ManagedPayloadEqual([string]$StageRoot, [string]$InstalledRoot) {
         if (-not (Test-FilesEqual $staged $installed)) { return $false }
     }
     return $true
-}
-
-function Copy-UnmanagedRuntimeContent([string]$SourceRoot, [string]$StageRoot) {
-    $inventory = Get-SafeTreeInventory $SourceRoot 'existing install'
-    if ($inventory.Directories.Count -gt $script:MaxPreservedDirectories) {
-        throw "existing install has more than $($script:MaxPreservedDirectories) directories"
-    }
-
-    $managed = @{}
-    foreach ($relative in $script:ManagedFiles) { $managed[$relative] = $true }
-    $extraFiles = @($inventory.Files | Where-Object { -not $managed.ContainsKey($_) })
-    if ($extraFiles.Count -gt $script:MaxPreservedFiles) {
-        throw "existing install has more than $($script:MaxPreservedFiles) unmanaged files"
-    }
-
-    foreach ($relative in $inventory.Directories) {
-        $destination = [System.IO.Path]::Combine($StageRoot, $relative)
-        Ensure-SafeDirectory $destination 'preserved runtime directory'
-    }
-
-    $total = 0L
-    foreach ($relative in $extraFiles) {
-        $source = [System.IO.Path]::Combine($SourceRoot, $relative)
-        $length = (New-Object System.IO.FileInfo($source)).Length
-        if ($length -gt $script:MaxPreservedFileBytes) {
-            throw "unmanaged runtime file exceeds the per-file limit: $relative"
-        }
-        $total += $length
-        if ($total -gt $script:MaxPreservedTotalBytes) {
-            throw "unmanaged runtime content exceeds the $($script:MaxPreservedTotalBytes) byte limit"
-        }
-        $destination = [System.IO.Path]::Combine($StageRoot, $relative)
-        Ensure-SafeDirectory ([System.IO.Path]::GetDirectoryName($destination)) 'preserved runtime parent'
-        Copy-BoundedLocalFile $source $destination $script:MaxPreservedFileBytes "unmanaged runtime $relative"
-        if (-not (Test-FilesEqual $source $destination)) {
-            throw "failed to verify preserved runtime file: $relative"
-        }
-    }
 }
 
 function Skip-JsonWhitespace([string]$Text, [ref]$Index) {
@@ -831,8 +791,17 @@ function Get-SettingsPlan([string]$Path, [string]$DesiredValue) {
         $insertion = $prefix + '"statusLine":' + $DesiredValue
         $updated = $text.Substring(0, $closingBrace) + $insertion + $text.Substring($closingBrace)
     }
-    $updatedBytes = $script:Utf8NoBom.GetBytes($updated)
-    $changed = $hadBom -or -not (Test-ByteArraysEqual $original $updatedBytes)
+    $contentBytes = $script:Utf8NoBom.GetBytes($updated)
+    if ($hadBom) {
+        $updatedBytes = New-Object byte[] ($contentBytes.Length + 3)
+        $updatedBytes[0] = 0xef
+        $updatedBytes[1] = 0xbb
+        $updatedBytes[2] = 0xbf
+        [System.Array]::Copy($contentBytes, 0, $updatedBytes, 3, $contentBytes.Length)
+    } else {
+        $updatedBytes = $contentBytes
+    }
+    $changed = -not (Test-ByteArraysEqual $original $updatedBytes)
     return ,([pscustomobject]@{
         Existed = $existed
         OriginalBytes = $original
@@ -941,56 +910,123 @@ function Commit-Settings(
     }
 }
 
+function Test-DirectoryEmpty([string]$Path) {
+    return [System.IO.Directory]::GetFileSystemEntries($Path).Length -eq 0
+}
+
+function Remove-EmptyCreatedRuntime([string]$Destination, [bool]$DestinationExisted) {
+    if ($DestinationExisted) { return }
+    $themes = [System.IO.Path]::Combine($Destination, 'themes')
+    if ([System.IO.Directory]::Exists($themes) -and (Test-DirectoryEmpty $themes)) {
+        [System.IO.Directory]::Delete($themes)
+    }
+    if ([System.IO.Directory]::Exists($Destination) -and (Test-DirectoryEmpty $Destination)) {
+        [System.IO.Directory]::Delete($Destination)
+    }
+}
+
+function Restore-ManagedRuntime(
+    [string]$StageRoot,
+    [string]$Destination,
+    [string]$BackupPath,
+    [string[]]$ChangedFiles,
+    [bool]$DestinationExisted
+) {
+    for ($i = $ChangedFiles.Count - 1; $i -ge 0; $i--) {
+        $relative = $ChangedFiles[$i]
+        $target = [System.IO.Path]::Combine($Destination, $relative)
+        $backup = [System.IO.Path]::Combine($BackupPath, $relative)
+        $discard = [System.IO.Path]::Combine($StageRoot, $relative)
+        Assert-SafeExistingFile $target "runtime rollback target $relative"
+        Ensure-SafeDirectory ([System.IO.Path]::GetDirectoryName($target)) 'runtime rollback target parent'
+        if ([System.IO.File]::Exists($backup)) {
+            $original = [System.IO.File]::ReadAllBytes($backup)
+            Ensure-SafeDirectory ([System.IO.Path]::GetDirectoryName($discard)) 'runtime rollback staging'
+            if ([System.IO.File]::Exists($discard)) {
+                Remove-SafeInstallerFile $discard $discard 'runtime rollback discard'
+            }
+            if ([System.IO.File]::Exists($target)) {
+                [System.IO.File]::Replace($backup, $target, $discard)
+            } else {
+                [System.IO.File]::Move($backup, $target)
+            }
+            if (-not (Test-ByteArraysEqual ([System.IO.File]::ReadAllBytes($target)) $original)) {
+                throw "runtime rollback verification failed: $relative"
+            }
+        } elseif ([System.IO.File]::Exists($target)) {
+            Remove-SafeInstallerFile $target $target "new managed runtime $relative"
+        }
+    }
+    if ([System.IO.Directory]::Exists($BackupPath)) {
+        Remove-SafeInstallerDirectory $BackupPath $BackupPath 'consumed runtime backup'
+    }
+    Remove-EmptyCreatedRuntime $Destination $DestinationExisted
+}
+
 function Install-Runtime(
     [string]$StageRoot,
     [string]$Destination,
     [string]$BackupPath
 ) {
-    $hadOld = [System.IO.Directory]::Exists($Destination)
-    $oldMoved = $false
-    $newMoved = $false
+    $destinationExisted = [System.IO.Directory]::Exists($Destination)
+    $changed = New-Object 'System.Collections.Generic.List[string]'
     try {
-        if ($hadOld) {
-            Copy-UnmanagedRuntimeContent $Destination $StageRoot
-            [System.IO.Directory]::Move($Destination, $BackupPath)
-            $oldMoved = $true
-            [void](Get-SafeTreeInventory $BackupPath 'runtime backup')
+        if ([System.IO.Directory]::Exists($BackupPath) -or [System.IO.File]::Exists($BackupPath)) {
+            throw "runtime backup path already exists: $BackupPath"
         }
-        [System.IO.Directory]::Move($StageRoot, $Destination)
-        $newMoved = $true
+        Ensure-SafeDirectory $Destination 'install root'
+        foreach ($relative in $script:ManagedFiles) {
+            $staged = [System.IO.Path]::Combine($StageRoot, $relative)
+            $target = [System.IO.Path]::Combine($Destination, $relative)
+            $backup = [System.IO.Path]::Combine($BackupPath, $relative)
+            Assert-NoReparsePath $staged "staged $relative"
+            Assert-SafeExistingFile $target "installed $relative"
+            Ensure-SafeDirectory ([System.IO.Path]::GetDirectoryName($target)) 'managed runtime parent'
+            if ([System.IO.File]::Exists($target) -and (Test-FilesEqual $staged $target)) {
+                continue
+            }
+
+            $expected = [System.IO.File]::ReadAllBytes($staged)
+            if ([System.IO.File]::Exists($target)) {
+                Ensure-SafeDirectory ([System.IO.Path]::GetDirectoryName($backup)) 'runtime backup parent'
+                Assert-NoReparsePath $backup "runtime backup $relative"
+                [System.IO.File]::Replace($staged, $target, $backup)
+            } else {
+                [System.IO.File]::Move($staged, $target)
+            }
+            $changed.Add($relative)
+            if (-not (Test-ByteArraysEqual ([System.IO.File]::ReadAllBytes($target)) $expected)) {
+                throw "runtime commit verification failed: $relative"
+            }
+        }
         Assert-ValidManagedPayload $Destination 'installed payload'
-        return $hadOld
+        return ,([pscustomobject]@{
+            DestinationExisted = $destinationExisted
+            ChangedFiles = [string[]]$changed.ToArray()
+            BackupCreated = [System.IO.Directory]::Exists($BackupPath)
+        })
     } catch {
         $failure = $_.Exception.Message
         try {
-            if ($newMoved -and [System.IO.Directory]::Exists($Destination)) {
-                Remove-SafeInstallerDirectory $Destination $Destination 'failed new runtime'
-            }
-            if ($oldMoved -and [System.IO.Directory]::Exists($BackupPath)) {
-                [System.IO.Directory]::Move($BackupPath, $Destination)
-            }
+            Restore-ManagedRuntime (
+                $StageRoot
+            ) $Destination $BackupPath ([string[]]$changed.ToArray()) $destinationExisted
         } catch {
             throw "runtime install failed ($failure); runtime rollback also failed: $($_.Exception.Message)"
         }
-        throw "runtime install failed; previous runtime restored: $failure"
+        throw "runtime install failed; previous managed runtime restored: $failure"
     }
 }
 
 function Undo-RuntimeInstall(
+    [string]$StageRoot,
     [string]$Destination,
     [string]$BackupPath,
-    [bool]$HadOld
+    $Transaction
 ) {
-    if ([System.IO.Directory]::Exists($Destination)) {
-        Remove-SafeInstallerDirectory $Destination $Destination 'new runtime rollback target'
-    }
-    if ($HadOld) {
-        if (-not [System.IO.Directory]::Exists($BackupPath)) {
-            throw 'runtime backup is missing during rollback'
-        }
-        [void](Get-SafeTreeInventory $BackupPath 'runtime rollback backup')
-        [System.IO.Directory]::Move($BackupPath, $Destination)
-    }
+    Restore-ManagedRuntime (
+        $StageRoot
+    ) $Destination $BackupPath ([string[]]$Transaction.ChangedFiles) ([bool]$Transaction.DestinationExisted)
 }
 
 function Invoke-CorallineInstall {
@@ -1080,7 +1116,7 @@ function Invoke-CorallineInstall {
     $runtimeChanged = $false
     $settingsChanged = $false
     $runtimeInstalled = $false
-    $runtimeHadOld = $false
+    $runtimeTransaction = $null
     $settingsBackupMade = $false
     $resolvedCommit = $null
     try {
@@ -1102,8 +1138,7 @@ function Invoke-CorallineInstall {
         }
 
         if ($runtimeChanged) {
-            $runtimeHadOld = Install-Runtime $stage $install $runtimeBackup
-            $stageExists = $false
+            $runtimeTransaction = Install-Runtime $stage $install $runtimeBackup
             $runtimeInstalled = $true
         }
 
@@ -1117,7 +1152,7 @@ function Invoke-CorallineInstall {
                 $settingsFailure = $_.Exception.Message
                 if ($runtimeInstalled) {
                     try {
-                        Undo-RuntimeInstall $install $runtimeBackup $runtimeHadOld
+                        Undo-RuntimeInstall $stage $install $runtimeBackup $runtimeTransaction
                         $runtimeInstalled = $false
                     } catch {
                         throw "settings update failed ($settingsFailure); runtime rollback also failed: $($_.Exception.Message)"
@@ -1131,7 +1166,7 @@ function Invoke-CorallineInstall {
         if ($null -ne $resolvedCommit) {
             [Console]::Out.WriteLine("resolved $Repo@$Ref to $resolvedCommit")
         }
-        if ($runtimeChanged -and $runtimeHadOld) {
+        if ($runtimeChanged -and [bool]$runtimeTransaction.BackupCreated) {
             [Console]::Out.WriteLine("runtime backup retained at $runtimeBackup")
         }
         if ($settingsChanged -and $settingsBackupMade) {

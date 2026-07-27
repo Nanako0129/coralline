@@ -29,8 +29,8 @@ the ten shipped themes under `$HOME\.claude\coralline`, then losslessly merges
 the exact-case top-level `statusLine` value in `$HOME\.claude\settings.json`.
 It never creates or edits `$HOME\.claude\coralline.conf`, never writes
 `subagentStatusLine`, and retains timestamped sibling backups when existing
-managed content changes. An identical rerun is a true no-op, even when bounded
-renderer state or custom regular files already exist under the runtime directory.
+managed content changes. An identical rerun is a true no-op. Renderer state and
+custom files remain in place because updates replace only the managed allowlist.
 
 Ask whether the user wants mutable `main`, a named release tag, or an audited
 40-character commit SHA. Do not describe a tag as immutable. Run the matching

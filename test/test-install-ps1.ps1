@@ -55,6 +55,18 @@ function Write-Utf8([string]$Path, [string]$Text) {
     [IO.File]::WriteAllText($Path, $Text, $Utf8NoBom)
 }
 
+function Write-Utf8Bom([string]$Path, [string]$Text) {
+    $parent = [IO.Path]::GetDirectoryName($Path)
+    if (-not [IO.Directory]::Exists($parent)) { [void][IO.Directory]::CreateDirectory($parent) }
+    $content = $Utf8NoBom.GetBytes($Text)
+    $bytes = New-Object byte[] ($content.Length + 3)
+    $bytes[0] = 0xef
+    $bytes[1] = 0xbb
+    $bytes[2] = 0xbf
+    [Array]::Copy($content, 0, $bytes, 3, $content.Length)
+    [IO.File]::WriteAllBytes($Path, $bytes)
+}
+
 function Quote-ProcessArgument([string]$Value) {
     if ($Value.IndexOf('"') -ge 0) { throw 'test process arguments may not contain quotes' }
     return '"' + $Value + '"'
@@ -421,12 +433,12 @@ try {
         ("`n" + '# state-preserving update' + "`n"),
         $Utf8NoBom
     )
-    $preservedHashesBeforeUpdate = Get-RelativeFileSnapshot $main.Install $preservedFiles $false
+    $preservedSnapshotBeforeUpdate = Get-RelativeFileSnapshot $main.Install $preservedFiles $true
     $stateUpdate = Invoke-Installer $updateSource $main.Install $main.Settings
     Check 'changed runtime update exit 0' ($stateUpdate.ExitCode -eq 0)
-    Check 'changed runtime update preserves runtime state and custom files' (
-        Test-SnapshotsEqual $preservedHashesBeforeUpdate (
-            Get-RelativeFileSnapshot $main.Install $preservedFiles $false
+    Check 'changed runtime update does not touch runtime state and custom files' (
+        Test-SnapshotsEqual $preservedSnapshotBeforeUpdate (
+            Get-RelativeFileSnapshot $main.Install $preservedFiles $true
         )
     )
 
@@ -435,7 +447,6 @@ try {
     Check 'oversized fixture fresh install' ($oversizedFresh.ExitCode -eq 0)
     $oversizedFile = Join-Path $oversized.Install 'oversized-state.bin'
     [IO.File]::WriteAllBytes($oversizedFile, (New-Object byte[] (2MB + 1)))
-    $oversizedBefore = Get-ManagedSnapshot $oversized.Install $oversized.Settings
     $oversizedHash = Get-FileSha256 $oversizedFile
     $oversizedBackups = Get-BackupCount $oversized.Claude 'coralline.bak.*'
     $oversizedSource = Join-Path $TempRoot 'oversized-source'
@@ -446,25 +457,86 @@ try {
         $Utf8NoBom
     )
     $oversizedRun = Invoke-Installer $oversizedSource $oversized.Install $oversized.Settings
-    Check 'oversized unmanaged update rejected' ($oversizedRun.ExitCode -ne 0)
-    Check 'oversized rejection prints no success' (-not $oversizedRun.Stdout.Contains('coralline installed at'))
-    Check 'oversized rejection preserves existing runtime' (
-        Test-SnapshotsEqual $oversizedBefore (
-            Get-ManagedSnapshot $oversized.Install $oversized.Settings
-        )
+    Check 'oversized unmanaged content does not block update' ($oversizedRun.ExitCode -eq 0)
+    Check 'oversized unmanaged update installs changed runtime' (
+        (Get-FileSha256 (Join-Path $oversized.Install 'themes\mono.conf')) -ceq
+        (Get-FileSha256 (Join-Path $oversizedSource 'themes\mono.conf'))
     )
-    Check 'oversized rejection preserves unmanaged bytes' (
+    Check 'oversized unmanaged update preserves unmanaged bytes' (
         (Get-FileSha256 $oversizedFile) -ceq $oversizedHash
     )
-    Check 'oversized rejection creates no runtime backup' (
-        (Get-BackupCount $oversized.Claude 'coralline.bak.*') -eq $oversizedBackups
+    Check 'oversized unmanaged update creates one runtime backup' (
+        (Get-BackupCount $oversized.Claude 'coralline.bak.*') -eq ($oversizedBackups + 1)
     )
+
+    $unmanagedTarget = Join-Path $oversized.Home 'unmanaged-junction-target'
+    $unmanagedJunction = Join-Path $oversized.Install 'unmanaged-junction'
+    [void][IO.Directory]::CreateDirectory($unmanagedTarget)
+    Write-Utf8 (Join-Path $unmanagedTarget 'canary.txt') 'keep'
+    $unmanagedJunctionCreate = Invoke-CapturedProcess $env:ComSpec (
+        '/d /s /c "mklink /J ' + (Quote-ProcessArgument $unmanagedJunction) + ' ' +
+        (Quote-ProcessArgument $unmanagedTarget) + '"'
+    ) '' @{} $TempRoot 10000
+    if ($unmanagedJunctionCreate.ExitCode -eq 0 -and
+        [IO.Directory]::Exists($unmanagedJunction)) {
+        $unmanagedJunctionRun = Invoke-Installer (
+            $oversizedSource
+        ) $oversized.Install $oversized.Settings
+        Check 'unmanaged reparse entry does not block no-op' (
+            $unmanagedJunctionRun.ExitCode -eq 0 -and
+            $unmanagedJunctionRun.Stdout -ceq "coralline is already up to date.`r`n"
+        )
+        Check 'unmanaged reparse entry remains in place' (
+            [IO.Directory]::Exists($unmanagedJunction)
+        )
+        Check 'unmanaged reparse canary preserved' (
+            [IO.File]::ReadAllText(
+                (Join-Path $unmanagedTarget 'canary.txt'),
+                $StrictUtf8
+            ) -ceq 'keep'
+        )
+        [void](Invoke-CapturedProcess $env:ComSpec (
+            '/d /s /c "rmdir ' + (Quote-ProcessArgument $unmanagedJunction) + '"'
+        ) '' @{} $TempRoot 10000)
+    } else {
+        Blocked 'unmanaged reparse no-op' 'mklink /J was unavailable in this Windows environment'
+    }
 
     $noConfig = New-Paths 'no-config'
     $noConfigRun = Invoke-Installer $Repo $noConfig.Install $noConfig.Settings
     Check 'fresh missing-settings install exit 0' ($noConfigRun.ExitCode -eq 0)
     Check 'installer never creates config' (-not [IO.File]::Exists($noConfig.Config))
     Check 'new settings has no backup' ((Get-BackupCount $noConfig.Claude 'settings.json.bak.*') -eq 0)
+
+    $bom = New-Paths 'bom-settings'
+    Write-Utf8Bom $bom.Settings '{"keep":"雪","statusLine":null}'
+    $bomRun = Invoke-Installer $Repo $bom.Install $bom.Settings
+    $bomBytes = [IO.File]::ReadAllBytes($bom.Settings)
+    Check 'UTF-8 BOM settings install exit 0' ($bomRun.ExitCode -eq 0)
+    Check 'UTF-8 BOM preserved during merge' (
+        $bomBytes.Length -ge 3 -and
+        $bomBytes[0] -eq 0xef -and $bomBytes[1] -eq 0xbb -and $bomBytes[2] -eq 0xbf
+    )
+    Check 'UTF-8 BOM merge preserves unrelated content' (
+        $StrictUtf8.GetString($bomBytes, 3, $bomBytes.Length - 3) -ceq
+        ('{"keep":"雪","statusLine":' + (Get-DesiredValue $bom.Install) + '}')
+    )
+    $bomItem = Get-Item -LiteralPath $bom.Settings
+    $bomSnapshot = (Get-FileSha256 $bom.Settings) + ':' + $bomItem.LastWriteTimeUtc.Ticks
+    $bomBackups = Get-BackupCount $bom.Claude 'settings.json.bak.*'
+    Start-Sleep -Milliseconds 1200
+    $bomSecond = Invoke-Installer $Repo $bom.Install $bom.Settings
+    $bomItemAfter = Get-Item -LiteralPath $bom.Settings
+    Check 'UTF-8 BOM identical rerun reports no-op' (
+        $bomSecond.ExitCode -eq 0 -and
+        $bomSecond.Stdout -ceq "coralline is already up to date.`r`n"
+    )
+    Check 'UTF-8 BOM identical rerun changes no bytes or timestamp' (
+        ((Get-FileSha256 $bom.Settings) + ':' + $bomItemAfter.LastWriteTimeUtc.Ticks) -ceq $bomSnapshot
+    )
+    Check 'UTF-8 BOM identical rerun creates no backup' (
+        (Get-BackupCount $bom.Claude 'settings.json.bak.*') -eq $bomBackups
+    )
 
     Test-InvalidSettings 'malformed' '{"x":'
     Test-InvalidSettings 'null-root' 'null'
