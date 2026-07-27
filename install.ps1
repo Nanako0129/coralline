@@ -256,9 +256,11 @@ function Test-FilesEqual([string]$First, [string]$Second) {
     $secondInfo = New-Object System.IO.FileInfo($Second)
     if ($firstInfo.Length -ne $secondInfo.Length) { return $false }
 
-    $firstStream = [System.IO.File]::Open($First, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
-    $secondStream = [System.IO.File]::Open($Second, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    $firstStream = $null
+    $secondStream = $null
     try {
+        $firstStream = [System.IO.File]::Open($First, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+        $secondStream = [System.IO.File]::Open($Second, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
         $firstBuffer = New-Object byte[] 8192
         $secondBuffer = New-Object byte[] 8192
         while ($true) {
@@ -271,8 +273,8 @@ function Test-FilesEqual([string]$First, [string]$Second) {
             }
         }
     } finally {
-        $firstStream.Dispose()
-        $secondStream.Dispose()
+        if ($null -ne $secondStream) { $secondStream.Dispose() }
+        if ($null -ne $firstStream) { $firstStream.Dispose() }
     }
 }
 

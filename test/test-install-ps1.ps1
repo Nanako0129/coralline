@@ -294,6 +294,7 @@ function Get-InstallerTransactionFunctions {
         'Assert-SafeExistingFile',
         'Ensure-SafeDirectory',
         'Remove-SafeInstallerFile',
+        'Test-FilesEqual',
         'Test-ByteArraysEqual',
         'Read-BoundedSharedFileBytes',
         'Write-BytesCreateNew',
@@ -591,6 +592,35 @@ try {
         $driveRelativeSlashRejected = $_.Exception.Message.Contains('local drive')
     }
     Check 'drive-relative slash path rejected before canonicalization' $driveRelativeSlashRejected
+    $compareRoot = Join-Path $TempRoot 'comparison-stream-cleanup'
+    [void][IO.Directory]::CreateDirectory($compareRoot)
+    $compareFirst = Join-Path $compareRoot 'first.txt'
+    $compareSecond = Join-Path $compareRoot 'second.txt'
+    Write-Utf8 $compareFirst 'same-length'
+    Write-Utf8 $compareSecond 'same-length'
+    $compareTargetLock = [IO.File]::Open(
+        $compareSecond,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::None
+    )
+    $compareOpenFailed = $false
+    $compareFirstReleased = $false
+    try {
+        try {
+            [void](Test-FilesEqual $compareFirst $compareSecond)
+        } catch {
+            $compareOpenFailed = $true
+        }
+        try {
+            [IO.File]::Delete($compareFirst)
+            $compareFirstReleased = -not [IO.File]::Exists($compareFirst)
+        } catch {}
+    } finally {
+        $compareTargetLock.Dispose()
+    }
+    Check 'comparison target open failure surfaced' $compareOpenFailed
+    Check 'first comparison stream released after second open failure' $compareFirstReleased
     $lockedPaths = New-Paths 'concurrent-installer-lock'
     $heldMutex = New-Object System.Threading.Mutex(
         $false,
