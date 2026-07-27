@@ -294,6 +294,7 @@ function Get-InstallerCommitFunctions {
         'Assert-SafeExistingFile',
         'Remove-SafeInstallerFile',
         'Test-ByteArraysEqual',
+        'Read-BoundedSharedFileBytes',
         'Write-BytesCreateNew',
         'Restore-SettingsOriginal',
         'Commit-Settings'
@@ -508,6 +509,29 @@ try {
     Check 'installer never creates config' (-not [IO.File]::Exists($noConfig.Config))
     Check 'new settings has no backup' ((Get-BackupCount $noConfig.Claude 'settings.json.bak.*') -eq 0)
 
+    $expandedLimit = New-Paths 'expanded-settings-limit'
+    $limitPrefix = '{"padding":"'
+    $limitSuffix = '"}'
+    $paddingLength = 8MB - $Utf8NoBom.GetByteCount($limitPrefix + $limitSuffix)
+    $limitBuilder = New-Object System.Text.StringBuilder
+    [void]$limitBuilder.Append($limitPrefix)
+    [void]$limitBuilder.Append(([char]'x'), [int]$paddingLength)
+    [void]$limitBuilder.Append($limitSuffix)
+    Write-Utf8 $expandedLimit.Settings $limitBuilder.ToString()
+    [void]$limitBuilder.Clear()
+    $expandedLimitHash = Get-FileSha256 $expandedLimit.Settings
+    $expandedLimitRun = Invoke-Installer $Repo $expandedLimit.Install $expandedLimit.Settings
+    Check 'post-merge settings size limit rejected' ($expandedLimitRun.ExitCode -ne 0)
+    Check 'post-merge size rejection preserves settings bytes' (
+        (Get-FileSha256 $expandedLimit.Settings) -ceq $expandedLimitHash
+    )
+    Check 'post-merge size rejection happens before runtime mutation' (
+        -not [IO.Directory]::Exists($expandedLimit.Install)
+    )
+    Check 'post-merge size rejection creates no backup' (
+        (Get-BackupCount $expandedLimit.Claude 'settings.json.bak.*') -eq 0
+    )
+
     $bom = New-Paths 'bom-settings'
     Write-Utf8Bom $bom.Settings '{"keep":"雪","statusLine":null}'
     $bomRun = Invoke-Installer $Repo $bom.Install $bom.Settings
@@ -544,6 +568,31 @@ try {
     Test-InvalidSettings 'duplicate-exact' '{"statusLine":1,"status\u004cine":2}'
 
     . ([scriptblock]::Create((Get-InstallerCommitFunctions)))
+    $script:MaxSettingsBytes = 8MB
+    $lockedPaths = New-Paths 'concurrent-installer-lock'
+    $heldMutex = New-Object System.Threading.Mutex(
+        $false,
+        'Global\coralline-installer'
+    )
+    $heldMutexAcquired = $false
+    try {
+        $heldMutexAcquired = $heldMutex.WaitOne(0)
+        if (-not $heldMutexAcquired) { throw 'test could not acquire installer mutex' }
+        $lockedRun = Invoke-Installer $Repo $lockedPaths.Install $lockedPaths.Settings
+    } finally {
+        if ($heldMutexAcquired) { $heldMutex.ReleaseMutex() }
+        $heldMutex.Dispose()
+    }
+    Check 'concurrent installer transaction rejected' (
+        $lockedRun.ExitCode -ne 0 -and
+        $lockedRun.Stderr.Contains('another coralline installer is already targeting')
+    )
+    Check 'concurrent installer rejection mutates no targets' (
+        -not [IO.Directory]::Exists($lockedPaths.Install) -and
+        -not [IO.File]::Exists($lockedPaths.Settings) -and
+        (Get-BackupCount $lockedPaths.Claude '*.bak.*') -eq 0
+    )
+
     $concurrentRoot = Join-Path $TempRoot 'concurrent-settings'
     [void][IO.Directory]::CreateDirectory($concurrentRoot)
     $concurrentSettings = Join-Path $concurrentRoot 'settings.json'
@@ -576,6 +625,237 @@ try {
         -not [IO.File]::Exists($concurrentBackup) -and
         -not [IO.File]::Exists($concurrentTemporary) -and
         -not [IO.File]::Exists($concurrentRestore)
+    )
+
+    $newRollbackRoot = Join-Path $TempRoot 'new-settings-rollback'
+    [void][IO.Directory]::CreateDirectory($newRollbackRoot)
+    $newRollbackSettings = Join-Path $newRollbackRoot 'settings.json'
+    $newRollbackRecovery = Join-Path $newRollbackRoot '.settings.json.recovery'
+    $newRollbackRestore = Join-Path $newRollbackRoot '.settings.json.restore'
+    $newRollbackInstaller = $Utf8NoBom.GetBytes('{"value":"installer"}')
+    $newRollbackConcurrent = $Utf8NoBom.GetBytes('{"value":"concurrent"}')
+    [IO.File]::WriteAllBytes($newRollbackSettings, $newRollbackConcurrent)
+    $newRollbackPlan = [pscustomobject]@{
+        Existed = $false
+        OriginalBytes = [byte[]]@()
+        UpdatedBytes = $newRollbackInstaller
+        Changed = $true
+    }
+    $newRollbackReported = $false
+    try {
+        Restore-SettingsOriginal (
+            $newRollbackSettings
+        ) $newRollbackPlan $newRollbackRestore $newRollbackRecovery
+    } catch {
+        $newRollbackReported = (
+            $_.Exception.Message.Contains('recovery copy retained at') -and
+            $_.Exception.Message.Contains($newRollbackRecovery)
+        )
+    }
+    Check 'new settings rollback reports displaced concurrent recovery' $newRollbackReported
+    Check 'new settings rollback never deletes concurrent bytes' (
+        -not [IO.File]::Exists($newRollbackSettings) -and
+        [IO.File]::Exists($newRollbackRecovery) -and
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($newRollbackRecovery)) -ceq
+        [Convert]::ToBase64String($newRollbackConcurrent)
+    )
+
+    $existingRecoveryRoot = Join-Path $TempRoot 'existing-settings-recovery'
+    [void][IO.Directory]::CreateDirectory($existingRecoveryRoot)
+    $existingRecoverySettings = Join-Path $existingRecoveryRoot 'settings.json'
+    $existingRecoveryRestore = Join-Path $existingRecoveryRoot '.settings.json.restore'
+    $existingRecoveryFailed = Join-Path $existingRecoveryRoot '.settings.json.failed'
+    $existingRecoveryOriginal = $Utf8NoBom.GetBytes('{"value":"original"}')
+    $existingRecoveryUpdated = $Utf8NoBom.GetBytes('{"value":"installer"}')
+    $existingRecoveryExternal = $Utf8NoBom.GetBytes('{"value":"external"}')
+    $existingRecoveryPlan = [pscustomobject]@{
+        Existed = $true
+        OriginalBytes = $existingRecoveryOriginal
+        UpdatedBytes = $existingRecoveryUpdated
+        Changed = $true
+    }
+    [IO.File]::WriteAllBytes($existingRecoverySettings, $existingRecoveryUpdated)
+    [IO.File]::WriteAllBytes($existingRecoveryRestore, $existingRecoveryExternal)
+    $unexpectedRestoreReported = $false
+    try {
+        Restore-SettingsOriginal (
+            $existingRecoverySettings
+        ) $existingRecoveryPlan $existingRecoveryRestore $existingRecoveryFailed
+    } catch {
+        $unexpectedRestoreReported = $_.Exception.Message.Contains(
+            $existingRecoveryRestore
+        )
+    }
+    Check 'unexpected rollback source reports exact retained path' $unexpectedRestoreReported
+    Check 'unexpected rollback source bytes remain untouched' (
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($existingRecoverySettings)) -ceq
+        [Convert]::ToBase64String($existingRecoveryUpdated) -and
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($existingRecoveryRestore)) -ceq
+        [Convert]::ToBase64String($existingRecoveryExternal)
+    )
+
+    $failedRecoveryRoot = Join-Path $TempRoot 'failed-settings-recovery'
+    [void][IO.Directory]::CreateDirectory($failedRecoveryRoot)
+    $failedRecoverySettings = Join-Path $failedRecoveryRoot 'settings.json'
+    $failedRecoveryRestore = Join-Path $failedRecoveryRoot '.settings.json.restore'
+    $failedRecoveryPath = Join-Path $failedRecoveryRoot '.settings.json.failed'
+    [IO.File]::WriteAllBytes($failedRecoverySettings, $existingRecoveryUpdated)
+    [IO.File]::WriteAllBytes($failedRecoveryRestore, $existingRecoveryOriginal)
+    [IO.File]::WriteAllBytes($failedRecoveryPath, $existingRecoveryExternal)
+    $unexpectedFailedReported = $false
+    try {
+        Restore-SettingsOriginal (
+            $failedRecoverySettings
+        ) $existingRecoveryPlan $failedRecoveryRestore $failedRecoveryPath
+    } catch {
+        $unexpectedFailedReported = $_.Exception.Message.Contains($failedRecoveryPath)
+    }
+    Check 'unexpected rollback destination reports exact retained path' $unexpectedFailedReported
+    Check 'unexpected rollback destination bytes remain untouched' (
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($failedRecoverySettings)) -ceq
+        [Convert]::ToBase64String($existingRecoveryUpdated) -and
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($failedRecoveryPath)) -ceq
+        [Convert]::ToBase64String($existingRecoveryExternal)
+    )
+
+    $openHandleRoot = Join-Path $TempRoot 'open-handle-settings'
+    [void][IO.Directory]::CreateDirectory($openHandleRoot)
+    $openHandleSettings = Join-Path $openHandleRoot 'settings.json'
+    $openHandleBackup = Join-Path $openHandleRoot 'settings.json.bak'
+    $openHandleTemporary = Join-Path $openHandleRoot '.settings.json.tmp'
+    $openHandleRestore = Join-Path $openHandleRoot '.settings.json.restore'
+    $openHandleOriginal = $Utf8NoBom.GetBytes('{"value":"original"}')
+    $openHandleUpdated = $Utf8NoBom.GetBytes('{"value":"installer"}')
+    $openHandleExternal = $Utf8NoBom.GetBytes('{"value":"external-after-commit"}')
+    [IO.File]::WriteAllBytes($openHandleSettings, $openHandleOriginal)
+    $openHandlePlan = [pscustomobject]@{
+        Existed = $true
+        OriginalBytes = $openHandleOriginal
+        UpdatedBytes = $openHandleUpdated
+        Changed = $true
+    }
+    $sharedHandle = [IO.File]::Open(
+        $openHandleSettings,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::ReadWrite,
+        ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+    )
+    try {
+        $openHandleBackupMade = Commit-Settings (
+            $openHandleSettings
+        ) $openHandlePlan $openHandleBackup $openHandleTemporary $openHandleRestore
+        $sharedHandle.Position = 0
+        $sharedHandle.SetLength(0)
+        $sharedHandle.Write($openHandleExternal, 0, $openHandleExternal.Length)
+        $sharedHandle.Flush($true)
+    } finally {
+        $sharedHandle.Dispose()
+    }
+    Check 'open settings handle commit retains displaced file as backup' (
+        $openHandleBackupMade -and
+        [IO.File]::Exists($openHandleBackup)
+    )
+    Check 'open settings handle post-commit edit survives in retained backup' (
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($openHandleBackup)) -ceq
+        [Convert]::ToBase64String($openHandleExternal)
+    )
+    Check 'open settings handle leaves committed settings intact' (
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($openHandleSettings)) -ceq
+        [Convert]::ToBase64String($openHandleUpdated)
+    )
+    Check 'open settings handle creates no rollback artifact' (
+        -not [IO.File]::Exists($openHandleTemporary) -and
+        -not [IO.File]::Exists($openHandleRestore)
+    )
+
+    $commitRaceRoot = Join-Path $TempRoot 'commit-point-settings'
+    [void][IO.Directory]::CreateDirectory($commitRaceRoot)
+    $commitRaceSettings = Join-Path $commitRaceRoot 'settings.json'
+    $commitRaceBackup = Join-Path $commitRaceRoot 'settings.json.bak'
+    $commitRaceTemporary = Join-Path $commitRaceRoot '.settings.json.tmp'
+    $commitRaceRestore = Join-Path $commitRaceRoot '.settings.json.restore'
+    $commitRacePrefix = '{"padding":"'
+    $commitRaceSuffix = '"}'
+    $commitRacePadding = 8MB - $Utf8NoBom.GetByteCount(
+        $commitRacePrefix + $commitRaceSuffix
+    )
+    $commitRaceBuilder = New-Object System.Text.StringBuilder
+    [void]$commitRaceBuilder.Append($commitRacePrefix)
+    [void]$commitRaceBuilder.Append(([char]'x'), [int]$commitRacePadding)
+    [void]$commitRaceBuilder.Append($commitRaceSuffix)
+    $commitRaceOriginal = $Utf8NoBom.GetBytes($commitRaceBuilder.ToString())
+    [void]$commitRaceBuilder.Clear()
+    $commitRaceUpdated = New-Object byte[] ($commitRaceOriginal.Length)
+    [Array]::Copy(
+        $commitRaceOriginal,
+        0,
+        $commitRaceUpdated,
+        0,
+        $commitRaceOriginal.Length
+    )
+    $commitRaceUpdated[$commitRacePrefix.Length] = [byte][char]'y'
+    [IO.File]::WriteAllBytes($commitRaceSettings, $commitRaceOriginal)
+    $commitRaceConcurrent = $Utf8NoBom.GetBytes('{"value":"concurrent-at-commit"}')
+    $writerSettings = [Convert]::ToBase64String(
+        $Utf8NoBom.GetBytes($commitRaceSettings)
+    )
+    $writerBackup = [Convert]::ToBase64String(
+        $Utf8NoBom.GetBytes($commitRaceBackup)
+    )
+    $writerBytes = [Convert]::ToBase64String($commitRaceConcurrent)
+    $writerCode = (
+        '$ErrorActionPreference="Stop";' +
+        '$u=New-Object System.Text.UTF8Encoding($false);' +
+        '$s=$u.GetString([Convert]::FromBase64String("' + $writerSettings + '"));' +
+        '$k=$u.GetString([Convert]::FromBase64String("' + $writerBackup + '"));' +
+        '$b=[Convert]::FromBase64String("' + $writerBytes + '");' +
+        '$d=[DateTime]::UtcNow.AddSeconds(15);' +
+        'while([DateTime]::UtcNow -lt $d){' +
+        'if([IO.File]::Exists($k)){try{[IO.File]::WriteAllBytes($s,$b);exit 0}' +
+        'catch [IO.IOException]{}}};exit 2'
+    )
+    $unicode = New-Object System.Text.UnicodeEncoding($false, $false)
+    $writerEncoded = [Convert]::ToBase64String($unicode.GetBytes($writerCode))
+    $commitRaceWriter = Start-Process -FilePath $PowerShellExe -ArgumentList @(
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy', 'Bypass',
+        '-EncodedCommand', $writerEncoded
+    ) -WindowStyle Hidden -PassThru
+    $commitRacePlan = [pscustomobject]@{
+        Existed = $true
+        OriginalBytes = $commitRaceOriginal
+        UpdatedBytes = $commitRaceUpdated
+        Changed = $true
+    }
+    $commitRaceRejected = $false
+    $commitRaceSucceeded = $false
+    try {
+        [void](Commit-Settings (
+            $commitRaceSettings
+        ) $commitRacePlan $commitRaceBackup $commitRaceTemporary $commitRaceRestore)
+        $commitRaceSucceeded = $true
+    } catch {
+        $commitRaceRejected = (
+            $_.Exception.Message.Contains('concurrent change') -or
+            $_.Exception.Message.Contains('settings changed')
+        )
+    }
+    $commitRaceWriterFinished = $commitRaceWriter.WaitForExit(15000)
+    if (-not $commitRaceWriterFinished) { $commitRaceWriter.Kill() }
+    $commitRaceWriterExit = -1
+    if ($commitRaceWriterFinished) { $commitRaceWriterExit = $commitRaceWriter.ExitCode }
+    $commitRaceWriter.Dispose()
+    Check 'commit-point concurrent writer completed' (
+        $commitRaceWriterFinished -and $commitRaceWriterExit -eq 0
+    )
+    Check 'commit-point concurrent settings transaction has a safe outcome' (
+        $commitRaceRejected -xor $commitRaceSucceeded
+    )
+    Check 'commit-point concurrent settings bytes preserved' (
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($commitRaceSettings)) -ceq
+        [Convert]::ToBase64String($commitRaceConcurrent)
     )
 
     $overlapLeaf = '.installer-overlap-' + [guid]::NewGuid().ToString('N')

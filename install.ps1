@@ -283,6 +283,38 @@ function Test-ByteArraysEqual([byte[]]$First, [byte[]]$Second) {
     return $true
 }
 
+function Read-BoundedSharedFileBytes(
+    [string]$Path,
+    [long]$MaximumBytes,
+    [string]$Label
+) {
+    Assert-NoReparsePath $Path $Label
+    $sharing = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+    $stream = [System.IO.File]::Open(
+        $Path,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        $sharing
+    )
+    try {
+        $length = $stream.Length
+        if ($length -gt $MaximumBytes) {
+            throw "$Label exceeds the $MaximumBytes byte limit"
+        }
+        $bytes = New-Object byte[] ([int]$length)
+        $offset = 0
+        while ($offset -lt $bytes.Length) {
+            $read = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+            if ($read -eq 0) { throw "$Label changed while being read" }
+            $offset += $read
+        }
+        if ($stream.Length -ne $length) { throw "$Label changed while being read" }
+        return ,$bytes
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 function Copy-BoundedLocalFile([string]$Source, [string]$Destination, [long]$MaximumBytes, [string]$Label) {
     Assert-NoReparsePath $Source $Label
     if (-not [System.IO.File]::Exists($Source)) { throw "$Label is missing: $Source" }
@@ -713,11 +745,9 @@ function Get-SettingsPlan([string]$Path, [string]$DesiredValue) {
     $existed = [System.IO.File]::Exists($Path)
     $original = [byte[]]@()
     if ($existed) {
-        $length = (New-Object System.IO.FileInfo($Path)).Length
-        if ($length -gt $script:MaxSettingsBytes) {
-            throw "settings.json exceeds the $($script:MaxSettingsBytes) byte limit"
-        }
-        $original = [System.IO.File]::ReadAllBytes($Path)
+        $original = Read-BoundedSharedFileBytes (
+            $Path
+        ) $script:MaxSettingsBytes 'settings.json'
     }
 
     $offset = 0
@@ -801,6 +831,9 @@ function Get-SettingsPlan([string]$Path, [string]$DesiredValue) {
     } else {
         $updatedBytes = $contentBytes
     }
+    if ($updatedBytes.LongLength -gt $script:MaxSettingsBytes) {
+        throw "updated settings.json exceeds the $($script:MaxSettingsBytes) byte limit"
+    }
     $changed = -not (Test-ByteArraysEqual $original $updatedBytes)
     return ,([pscustomobject]@{
         Existed = $existed
@@ -817,37 +850,64 @@ function Restore-SettingsOriginal(
     [string]$FailedTemporaryPath
 ) {
     if ($Plan.Existed) {
-        $matches = $false
-        if ([System.IO.File]::Exists($Path)) {
-            Assert-NoReparsePath $Path 'settings rollback target'
-            $matches = Test-ByteArraysEqual ([System.IO.File]::ReadAllBytes($Path)) $Plan.OriginalBytes
+        if (-not [System.IO.File]::Exists($Path)) {
+            throw 'settings target disappeared after installer mutation; refusing rollback'
         }
-        if ($matches) { return }
+        Assert-NoReparsePath $Path 'settings rollback target'
+        $current = Read-BoundedSharedFileBytes (
+            $Path
+        ) $script:MaxSettingsBytes 'settings rollback target'
+        if (Test-ByteArraysEqual $current $Plan.OriginalBytes) {
+            return
+        }
+        if (-not (Test-ByteArraysEqual $current $Plan.UpdatedBytes)) {
+            throw 'settings target no longer contains installer bytes; refusing to overwrite concurrent changes'
+        }
 
-        if ([System.IO.File]::Exists($RestoreTemporaryPath) -and
-            -not (Test-ByteArraysEqual (
-                [System.IO.File]::ReadAllBytes($RestoreTemporaryPath)
-            ) $Plan.OriginalBytes)) {
-            Remove-SafeInstallerFile $RestoreTemporaryPath $RestoreTemporaryPath 'invalid settings rollback file'
-        }
         if (-not [System.IO.File]::Exists($RestoreTemporaryPath)) {
-            Write-BytesCreateNew $RestoreTemporaryPath $Plan.OriginalBytes
+            throw "settings rollback source is missing: $RestoreTemporaryPath"
         }
         Assert-NoReparsePath $RestoreTemporaryPath 'settings rollback temporary file'
-        if ([System.IO.File]::Exists($Path)) {
-            if ([System.IO.File]::Exists($FailedTemporaryPath)) {
-                Remove-SafeInstallerFile $FailedTemporaryPath $FailedTemporaryPath 'failed settings rollback backup'
-            }
-            [System.IO.File]::Replace($RestoreTemporaryPath, $Path, $FailedTemporaryPath)
-        } else {
-            [System.IO.File]::Move($RestoreTemporaryPath, $Path)
+        if (-not (Test-ByteArraysEqual (
+            Read-BoundedSharedFileBytes (
+                $RestoreTemporaryPath
+            ) $script:MaxSettingsBytes 'settings rollback temporary file'
+        ) $Plan.OriginalBytes)) {
+            throw "settings rollback source contains external bytes retained at $RestoreTemporaryPath"
         }
-        if (-not (Test-ByteArraysEqual ([System.IO.File]::ReadAllBytes($Path)) $Plan.OriginalBytes)) {
+        if ([System.IO.File]::Exists($FailedTemporaryPath)) {
+            throw "settings rollback recovery path already exists: $FailedTemporaryPath"
+        }
+        [System.IO.File]::Replace($RestoreTemporaryPath, $Path, $FailedTemporaryPath)
+        Assert-NoReparsePath $FailedTemporaryPath 'failed settings rollback backup'
+        if (-not (Test-ByteArraysEqual (
+            Read-BoundedSharedFileBytes (
+                $FailedTemporaryPath
+            ) $script:MaxSettingsBytes 'failed settings rollback backup'
+        ) $Plan.UpdatedBytes)) {
+            throw "settings changed concurrently during rollback; recovery copy retained at $FailedTemporaryPath"
+        }
+        if (-not (Test-ByteArraysEqual (
+            Read-BoundedSharedFileBytes (
+                $Path
+            ) $script:MaxSettingsBytes 'settings rollback target'
+        ) $Plan.OriginalBytes)) {
             throw 'settings rollback verification failed'
         }
     } elseif ([System.IO.File]::Exists($Path)) {
         Assert-NoReparsePath $Path 'new settings rollback target'
-        [System.IO.File]::Delete($Path)
+        if ([System.IO.File]::Exists($FailedTemporaryPath)) {
+            throw "new settings rollback recovery path already exists: $FailedTemporaryPath"
+        }
+        [System.IO.File]::Move($Path, $FailedTemporaryPath)
+        Assert-NoReparsePath $FailedTemporaryPath 'new settings rollback recovery'
+        if (-not (Test-ByteArraysEqual (
+            Read-BoundedSharedFileBytes (
+                $FailedTemporaryPath
+            ) $script:MaxSettingsBytes 'new settings rollback recovery'
+        ) $Plan.UpdatedBytes)) {
+            throw "new settings changed concurrently during rollback; recovery copy retained at $FailedTemporaryPath"
+        }
     }
 }
 
@@ -860,52 +920,104 @@ function Commit-Settings(
 ) {
     $backupComplete = $false
     $targetMutated = $false
+    $concurrentConflict = $false
+    $concurrentRestored = $false
     try {
         Assert-SafeExistingFile $Path 'settings path'
-        if ($Plan.Existed) {
-            [System.IO.File]::Copy($Path, $BackupPath, $false)
-            Assert-NoReparsePath $BackupPath 'settings backup'
-            if (-not (Test-ByteArraysEqual ([System.IO.File]::ReadAllBytes($BackupPath)) $Plan.OriginalBytes)) {
-                throw 'settings backup verification failed'
-            }
-            $backupComplete = $true
-        }
-
         Write-BytesCreateNew $TemporaryPath $Plan.UpdatedBytes
         Assert-NoReparsePath $TemporaryPath 'settings temporary file'
         if ($Plan.Existed) {
-            [System.IO.File]::Replace($TemporaryPath, $Path, $RestoreTemporaryPath)
+            if (-not (Test-ByteArraysEqual (
+                Read-BoundedSharedFileBytes (
+                    $Path
+                ) $script:MaxSettingsBytes 'settings pre-commit target'
+            ) $Plan.OriginalBytes)) {
+                throw 'settings changed before commit'
+            }
+            [System.IO.File]::Replace($TemporaryPath, $Path, $BackupPath)
+            $targetMutated = $true
+            $backupComplete = $true
+            Assert-NoReparsePath $BackupPath 'displaced settings backup'
+            $displaced = Read-BoundedSharedFileBytes (
+                $BackupPath
+            ) $script:MaxSettingsBytes 'displaced settings backup'
+            if (-not (Test-ByteArraysEqual $displaced $Plan.OriginalBytes)) {
+                $concurrentConflict = $true
+                Assert-NoReparsePath $Path 'concurrent settings restore target'
+                if (-not [System.IO.File]::Exists($Path) -or
+                    -not (Test-ByteArraysEqual (
+                        Read-BoundedSharedFileBytes (
+                            $Path
+                        ) $script:MaxSettingsBytes 'concurrent settings restore target'
+                    ) $Plan.UpdatedBytes)) {
+                    throw "settings changed again after replacement; displaced bytes retained at $BackupPath"
+                }
+                if ([System.IO.File]::Exists($RestoreTemporaryPath)) {
+                    throw "settings recovery path already exists: $RestoreTemporaryPath"
+                }
+                [System.IO.File]::Replace($BackupPath, $Path, $RestoreTemporaryPath)
+                $backupComplete = $false
+                Assert-NoReparsePath $RestoreTemporaryPath 'displaced installer settings'
+                if (-not (Test-ByteArraysEqual (
+                    Read-BoundedSharedFileBytes (
+                        $RestoreTemporaryPath
+                    ) $script:MaxSettingsBytes 'displaced installer settings'
+                ) $Plan.UpdatedBytes)) {
+                    throw "settings changed again during concurrent restoration; recovery copy retained at $RestoreTemporaryPath"
+                }
+                if (-not (Test-ByteArraysEqual (
+                    Read-BoundedSharedFileBytes (
+                        $Path
+                    ) $script:MaxSettingsBytes 'concurrent restored settings'
+                ) $displaced)) {
+                    throw 'concurrent settings restoration verification failed'
+                }
+                $concurrentRestored = $true
+                $targetMutated = $false
+                throw 'settings changed concurrently at commit'
+            }
         } else {
             [System.IO.File]::Move($TemporaryPath, $Path)
+            $targetMutated = $true
         }
-        $targetMutated = $true
         Assert-NoReparsePath $Path 'committed settings'
-        if (-not (Test-ByteArraysEqual ([System.IO.File]::ReadAllBytes($Path)) $Plan.UpdatedBytes)) {
-            throw 'settings commit verification failed'
+        if (-not (Test-ByteArraysEqual (
+            Read-BoundedSharedFileBytes (
+                $Path
+            ) $script:MaxSettingsBytes 'committed settings'
+        ) $Plan.UpdatedBytes)) {
+            $concurrentConflict = $true
+            throw 'settings changed after commit; current bytes preserved'
         }
         return $backupComplete
     } catch {
         $failure = $_.Exception.Message
-        if ($targetMutated) {
+        if ($targetMutated -and -not $concurrentConflict) {
             try {
-                Restore-SettingsOriginal $Path $Plan $RestoreTemporaryPath $TemporaryPath
+                Restore-SettingsOriginal $Path $Plan $BackupPath $RestoreTemporaryPath
+                $backupComplete = $false
             } catch {
                 throw "settings commit failed ($failure); settings rollback also failed: $($_.Exception.Message)"
             }
         }
-        if (-not $backupComplete -and [System.IO.File]::Exists($BackupPath)) {
-            Remove-SafeInstallerFile $BackupPath $BackupPath 'incomplete settings backup'
+        if ($concurrentConflict) {
+            if ($concurrentRestored) {
+                throw "settings commit failed; concurrent settings restored; displaced installer bytes retained at ${RestoreTemporaryPath}: $failure"
+            }
+            throw "settings commit failed after concurrent change; recovery artifacts retained: $failure"
         }
         if ($targetMutated) {
-            throw "settings commit failed; original settings restored: $failure"
+            throw "settings commit failed; original settings restored; displaced bytes retained at ${RestoreTemporaryPath}: $failure"
         }
         throw "settings commit failed before target mutation: $failure"
     } finally {
         if ([System.IO.File]::Exists($TemporaryPath)) {
-            Remove-SafeInstallerFile $TemporaryPath $TemporaryPath 'settings temporary file'
-        }
-        if ([System.IO.File]::Exists($RestoreTemporaryPath)) {
-            Remove-SafeInstallerFile $RestoreTemporaryPath $RestoreTemporaryPath 'settings rollback temporary file'
+            Assert-NoReparsePath $TemporaryPath 'settings temporary cleanup'
+            if (Test-ByteArraysEqual (
+                [System.IO.File]::ReadAllBytes($TemporaryPath)
+            ) $Plan.UpdatedBytes) {
+                Remove-SafeInstallerFile $TemporaryPath $TemporaryPath 'settings temporary file'
+            }
         }
     }
 }
@@ -1106,13 +1218,12 @@ function Invoke-CorallineInstall {
     $command = '"' + $powershell + '" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $runtimePath + '"'
     $desiredStatusLine = '{"type":"command","command":' + (ConvertTo-JsonString $command) + ',"refreshInterval":1}'
 
-    Ensure-SafeDirectory $installParent 'install parent'
-    if ([System.IO.Directory]::Exists($stage) -or [System.IO.File]::Exists($stage)) {
-        throw "staging path already exists: $stage"
-    }
-    [void][System.IO.Directory]::CreateDirectory($stage)
-    Assert-NoReparsePath $stage 'staging path'
-    $stageExists = $true
+    $installMutex = New-Object System.Threading.Mutex(
+        $false,
+        'Global\coralline-installer'
+    )
+    $mutexHeld = $false
+    $stageExists = $false
     $runtimeChanged = $false
     $settingsChanged = $false
     $runtimeInstalled = $false
@@ -1120,6 +1231,23 @@ function Invoke-CorallineInstall {
     $settingsBackupMade = $false
     $resolvedCommit = $null
     try {
+        try {
+            $mutexHeld = $installMutex.WaitOne(0)
+        } catch [System.Threading.AbandonedMutexException] {
+            $mutexHeld = $true
+        }
+        if (-not $mutexHeld) {
+            throw 'another coralline installer is already targeting these paths'
+        }
+
+        Ensure-SafeDirectory $installParent 'install parent'
+        if ([System.IO.Directory]::Exists($stage) -or [System.IO.File]::Exists($stage)) {
+            throw "staging path already exists: $stage"
+        }
+        [void][System.IO.Directory]::CreateDirectory($stage)
+        Assert-NoReparsePath $stage 'staging path'
+        $stageExists = $true
+
         if ($localMode) {
             Stage-LocalPayload $sourceRoot $stage
         } else {
@@ -1176,8 +1304,15 @@ function Invoke-CorallineInstall {
             [Console]::Out.WriteLine("config preserved at $config")
         }
     } finally {
-        if ($stageExists -and [System.IO.Directory]::Exists($stage)) {
-            Remove-SafeInstallerDirectory $stage $stage 'staging path'
+        try {
+            if ($stageExists -and [System.IO.Directory]::Exists($stage)) {
+                Remove-SafeInstallerDirectory $stage $stage 'staging path'
+            }
+        } finally {
+            if ($mutexHeld) {
+                $installMutex.ReleaseMutex()
+            }
+            $installMutex.Dispose()
         }
     }
 }
