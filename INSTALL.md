@@ -34,9 +34,9 @@ custom files remain in place because updates replace only the managed allowlist.
 Installer invocations are serialized. Single-file runtime rollback rejects
 concurrent edits and retains displaced installer bytes; multi-file rollback fails
 closed with current files and backups left for manual recovery. The exact allowlist
-is rechecked before success. The atomic settings backup is the actual displaced
-file, so writes through an already-open editor handle remain in that backup;
-conflicts observed during commit fail without overwriting external bytes.
+and merged settings bytes are rechecked before success. The atomic settings backup
+is the actual displaced file, so writes through an already-open editor handle remain
+in that backup; conflicts observed during commit fail without overwriting external bytes.
 
 Ask whether the user wants mutable `main`, a named release tag, or an audited
 40-character commit SHA. Do not describe a tag as immutable. Run the matching
@@ -46,6 +46,9 @@ the zero-network local mode instead:
 ```powershell
 & "$PSHOME\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\install.ps1 -SourceDirectory (Get-Location).Path -InstallRoot "$HOME\.claude\coralline" -SettingsPath "$HOME\.claude\settings.json"
 ```
+
+Pass only drive-absolute local-mode paths (`C:\...` or `C:/...`), never
+drive-relative forms such as `C:folder`.
 
 After a native install, do not start the Bash setup interview. Preserve an
 existing config byte-for-byte. If no config exists, the renderer's defaults work

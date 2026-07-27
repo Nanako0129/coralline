@@ -297,6 +297,7 @@ function Get-InstallerTransactionFunctions {
         'Test-ByteArraysEqual',
         'Read-BoundedSharedFileBytes',
         'Write-BytesCreateNew',
+        'Assert-SettingsBytes',
         'Restore-SettingsOriginal',
         'Commit-Settings',
         'Test-DirectoryEmpty',
@@ -576,6 +577,20 @@ try {
     $script:MaxSettingsBytes = 8MB
     $script:MaxRuntimeBytes = 2MB
     $script:MaxThemeBytes = 256KB
+    $driveRelativeRejected = $false
+    try {
+        [void](Resolve-CanonicalLocalPath 'C:settings.json' 'drive-relative test path')
+    } catch {
+        $driveRelativeRejected = $_.Exception.Message.Contains('local drive')
+    }
+    Check 'drive-relative local path rejected before canonicalization' $driveRelativeRejected
+    $driveRelativeSlashRejected = $false
+    try {
+        [void](Resolve-CanonicalLocalPath 'C:folder/settings.json' 'drive-relative slash test path')
+    } catch {
+        $driveRelativeSlashRejected = $_.Exception.Message.Contains('local drive')
+    }
+    Check 'drive-relative slash path rejected before canonicalization' $driveRelativeSlashRejected
     $lockedPaths = New-Paths 'concurrent-installer-lock'
     $heldMutex = New-Object System.Threading.Mutex(
         $false,
@@ -924,6 +939,24 @@ try {
     Check 'final runtime byte validation preserves external content' (
         [Convert]::ToBase64String([IO.File]::ReadAllBytes($runtimeRestoreTarget)) -ceq
         [Convert]::ToBase64String($runtimeConflictExternal)
+    )
+
+    $settingsFinalPath = Join-Path $TempRoot 'settings-final-validation.json'
+    $settingsFinalExpected = $Utf8NoBom.GetBytes('{"value":"installer"}')
+    $settingsFinalExternal = $Utf8NoBom.GetBytes('{"value":"external-before-success"}')
+    [IO.File]::WriteAllBytes($settingsFinalPath, $settingsFinalExternal)
+    $settingsFinalRejected = $false
+    try {
+        Assert-SettingsBytes (
+            $settingsFinalPath
+        ) $settingsFinalExpected 'settings before success'
+    } catch {
+        $settingsFinalRejected = $_.Exception.Message.Contains('changed concurrently')
+    }
+    Check 'final settings byte validation rejects valid external content' $settingsFinalRejected
+    Check 'final settings byte validation preserves external content' (
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($settingsFinalPath)) -ceq
+        [Convert]::ToBase64String($settingsFinalExternal)
     )
 
     $commitRaceRoot = Join-Path $TempRoot 'commit-point-settings'

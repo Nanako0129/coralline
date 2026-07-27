@@ -224,7 +224,8 @@ exact-case top-level `statusLine` member in `$HOME\.claude\settings.json`. It pr
 are backed up with timestamped sibling names when their managed content changes. Installer
 invocations are serialized. Single-file runtime rollback refuses to overwrite concurrent edits and
 retains displaced installer bytes; multi-file rollback fails closed with current files and backups
-left for manual recovery. The exact 11-file payload is rechecked before reporting success.
+left for manual recovery. The exact 11-file payload and merged settings bytes are rechecked before
+reporting success.
 The atomic settings backup is the actual displaced file, so even an open editor handle that writes
 after replacement updates the retained backup instead of losing data. Conflicts observed during
 commit make the installer fail without overwriting the external bytes.
@@ -239,6 +240,9 @@ it, extract it locally, and run the checked-out installer without network access
 ```powershell
 & "$PSHOME\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\path\to\coralline\install.ps1 -SourceDirectory C:\path\to\coralline -InstallRoot "$HOME\.claude\coralline" -SettingsPath "$HOME\.claude\settings.json"
 ```
+
+All three local-mode paths must be drive-absolute (`C:\...` or `C:/...`); drive-relative forms
+such as `C:folder` are rejected.
 
 Run the wizard-written config from a bash install, or write `~/.claude/coralline.conf` by hand
 (see any file under `themes/` for the shape); both work with `statusline.ps1` unchanged. The

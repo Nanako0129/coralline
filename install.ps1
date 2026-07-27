@@ -96,7 +96,8 @@ function Resolve-CanonicalLocalPath([string]$Path, [string]$Label) {
         throw "$Label must not use a UNC or device path"
     }
     if (-not [System.IO.Path]::IsPathRooted($Path)) { throw "$Label must be absolute" }
-    if ($Path.Length -lt 3 -or $Path[1] -ne ':' -or -not [char]::IsLetter($Path[0])) {
+    if ($Path.Length -lt 3 -or $Path[1] -ne ':' -or -not [char]::IsLetter($Path[0]) -or
+        ($Path[2] -ne '\' -and $Path[2] -ne '/')) {
         throw "$Label must be on a local drive"
     }
     if ($Path.IndexOf(':', 2) -ge 0) { throw "$Label must not contain an alternate data stream" }
@@ -869,6 +870,15 @@ function Get-SettingsPlan([string]$Path, [string]$DesiredValue) {
     })
 }
 
+function Assert-SettingsBytes([string]$Path, [byte[]]$Expected, [string]$Label) {
+    Assert-SafeExistingFile $Path $Label
+    if (-not [System.IO.File]::Exists($Path)) { throw "$Label is missing" }
+    $actual = Read-BoundedSharedFileBytes $Path $script:MaxSettingsBytes $Label
+    if (-not (Test-ByteArraysEqual $actual $Expected)) {
+        throw "$Label changed concurrently"
+    }
+}
+
 function Restore-SettingsOriginal(
     [string]$Path,
     $Plan,
@@ -1350,6 +1360,7 @@ function Invoke-CorallineInstall {
 
         if (-not $runtimeChanged -and -not $settingsChanged) {
             Assert-ManagedPayloadBytes $install $runtimeExpected 'installed payload'
+            Assert-SettingsBytes $settings $settingsPlan.UpdatedBytes 'settings before no-op'
             Remove-SafeInstallerDirectory $stage $stage 'staging path'
             $stageExists = $false
             [Console]::Out.WriteLine('coralline is already up to date.')
@@ -1385,6 +1396,7 @@ function Invoke-CorallineInstall {
         }
 
         Assert-ManagedPayloadBytes $install $runtimeExpected 'installed payload before success'
+        Assert-SettingsBytes $settings $settingsPlan.UpdatedBytes 'settings before success'
         [Console]::Out.WriteLine("coralline installed at $install")
         if ($null -ne $resolvedCommit) {
             [Console]::Out.WriteLine("resolved $Repo@$Ref to $resolvedCommit")

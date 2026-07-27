@@ -211,7 +211,7 @@ commit 下載全部受管理檔案。
 受管理的 runtime 或 settings 確實變更時，舊版本會保留為帶時間戳的同層備份。
 Installer 會序列化執行。單檔 runtime rollback 不會覆寫同時發生的編輯，並會保留
 被移出的 installer bytes；多檔 rollback 會 fail closed，保留現有檔案與備份供手動
-復原。Installer 會在回報成功前重新逐 byte 檢查 11 個檔案。
+復原。Installer 會在回報成功前重新逐 byte 檢查 11 個檔案與合併後的 settings。
 Atomic settings backup 就是實際被移出的檔案，因此即使 editor 的 open handle 在
 replace 後才寫入，內容仍會進入保留的備份，不會遺失。Installer 在 commit 期間
 觀察到衝突時會回報失敗，不會覆寫外部內容。
@@ -226,6 +226,9 @@ settings、不建立備份，也不改 timestamp。PowerShell-only 安裝不含 
 ```powershell
 & "$PSHOME\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\path\to\coralline\install.ps1 -SourceDirectory C:\path\to\coralline -InstallRoot "$HOME\.claude\coralline" -SettingsPath "$HOME\.claude\settings.json"
 ```
+
+Local mode 的三個路徑都必須是 drive-absolute（`C:\...` 或 `C:/...`）；`C:folder`
+這類 drive-relative 寫法會被拒絕。
 
 可以沿用 bash wizard 已寫好的設定，或參考 `themes/` 內任一檔案手動建立
 `~/.claude/coralline.conf`。per-process `ExecutionPolicy Bypass` 讓未簽章的本機
