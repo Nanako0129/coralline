@@ -50,11 +50,10 @@ Claude Code 在 subagent 執行時會於 prompt 下方顯示 agent 面板；每�
 
 Claude Code v2.1.211 沒有把內部的 `agentType` role 放進
 `subagentStatusLine` payload，但本機 Agent task 會在 session transcript
-旁留下小型 metadata sidecar。coralline 以 Bash builtin 直接讀取，不會增加
-process，因此可恢復 `scout`、`executor` 等 role。列上會同時保留 identity
-與 task label：若另有明確的 per-task `name`，會和 role 一起顯示，後面再接
-`label` 或 `description`。sidecar 不存在或無法讀取時，payload 原有欄位仍會
-正常顯示。
+旁留下小型 metadata sidecar。coralline 會直接讀取這個本機檔案，不會再啟動
+process，因此可恢復 `scout`、`executor` 等 role。列上會同時保留 identity 與
+task label：若另有明確的 per-task `name`，會和 role 一起顯示，後面再接 `label`
+或 `description`。sidecar 不存在或無法讀取時，payload 原有欄位仍會正常顯示。
 
 model 直接取自 Claude Code 傳入的 per-task `model` 欄位；coralline 不會從
 主 session model 或 agent role 推測。已知的 Claude ID 會縮短顯示
@@ -70,6 +69,9 @@ bash ~/.claude/coralline/configure.sh --subagent-rows=off
 
 設定 wizard 提供相同的開關。停用時只會移除 `subagentStatusLine`，其他 Claude
 設定都會保留。
+僅有 PowerShell 的 Windows 請重跑下方原生一行安裝指令，並把
+`$subagentRows` 設為 `"on"` 或 `"off"`。預設的 `"preserve"` 不會改動現有
+`subagentStatusLine`。
 
 每個 task 的 `model` 與 `contextWindowSize` 需要 Claude Code **v2.1.205+**。
 缺少欄位時會逐一降級：沒有 model 只會隱藏 model segment；沒有
@@ -111,8 +113,10 @@ subagent renderer 與主列共用同一份 config，但只讀取與「單列外�
 把 `VL_BG_SUB_NAME=""` 設空即可換回亮色 pill。其餘參數——`VL_SEGMENTS*`、版面（`VL_LAYOUT`、
 `VL_MAX_LINES`、`VL_WRAP_MARGIN`）、clock、cost、lines、float、limit-sync、
 burn、git 與 runtime segments——都只作用於主列，在 subagent 模式一律忽略。
-想讓面板列使用與主列不同的主題，把註冊的 command 指向獨立 config 即可：
+想讓面板列使用與主列不同的主題，把註冊的 command 指向獨立 config 即可。例如
+Bash 註冊可以使用：
 `CORALLINE_CONFIG=~/.claude/coralline-subagent.conf bash ~/.claude/coralline/statusline.sh --subagent`。
+原生 renderer 也會讀取相同的 `CORALLINE_CONFIG` 環境變數。
 
 ## 安裝
 
@@ -188,15 +192,15 @@ cp ~/.claude/coralline-src/themes/claude-coral.conf ~/.claude/coralline/themes/
 
 它會讀取 bash 版本相同的 `~/.claude/coralline.conf` 與 theme 檔。原生主列與 bash
 renderer 支援相同的 segments、`pill`／`lean`／`classic` styles、
-`fixed`／`auto` layouts、burn history、limit sync 與 float publication。
-只有 `--subagent` 面板列協定仍限定使用 bash；`statusline.ps1 --subagent` 不會輸出內容。
+`fixed`／`auto` layouts、burn history、limit sync、float publication 與套用主題的
+`--subagent` 面板列。
 
 以下是會跟隨開發進度的 **mutable `main`** 一行安裝指令。它先把 `main` 解析成
 commit SHA，再以有上限的 `HttpWebRequest` 從該 SHA 下載 `install.ps1`，先解析語法，
 最後透過絕對路徑 `$PSHOME\powershell.exe` 啟動，並傳入相同 SHA：
 
 ```powershell
-& { $ErrorActionPreference='Stop';$repo='Nanako0129/coralline';$ref='main';if($repo -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$' -or $ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $ref.Length -gt 200 -or $ref.Contains('..') -or $ref.Contains('//') -or $ref.Contains('@{') -or $ref.EndsWith('/') -or $ref.EndsWith('.') -or $ref -match '(?i)(^|/)[^/]*\.lock($|/)'){throw 'invalid Repo or Ref'};$safe={param([string]$p,[string]$label,[bool]$cmd=$false);if([string]::IsNullOrWhiteSpace($p) -or $p -match '[\x00-\x1f\x7f-\x9f]' -or $p.StartsWith('\\') -or $p.StartsWith('//') -or $p.IndexOf(':',2) -ge 0){throw "$label is not a safe local path"};$full=[IO.Path]::GetFullPath($p).Replace('/','\');$root=[IO.Path]::GetPathRoot($full);if($root -notmatch '^[A-Za-z]:\\$'){throw "$label is not on a local drive"};$drive=New-Object IO.DriveInfo($root);if($drive.DriveType -eq [IO.DriveType]::Network){throw "$label is on a network drive"};if($cmd -and ($full.Contains('"') -or $full.Contains('%') -or $full.Contains('!'))){throw "$label is not cmd-safe"};$current=$root;foreach($part in $full.Substring($root.Length).Split(@([char]'\'),[StringSplitOptions]::RemoveEmptyEntries)){$current=[IO.Path]::Combine($current,$part);$item=Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue;if($null -eq $item){break};if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw "$label contains a reparse point"}};if($full.Length -gt $root.Length){$full=$full.TrimEnd('\')};return $full};$fetch={param([uri]$uri,[long]$cap,[string]$label);if($uri.Scheme -cne 'https' -or ($uri.Host -cne 'api.github.com' -and $uri.Host -cne 'raw.githubusercontent.com') -or $uri.UserInfo -or $uri.Query -or $uri.Fragment){throw "unexpected $label URI"};$request=[Net.HttpWebRequest]::Create($uri);$request.Method='GET';$request.AllowAutoRedirect=$false;$request.Timeout=15000;$request.ReadWriteTimeout=15000;$request.UserAgent='coralline-bootstrap';$response=$null;try{$response=[Net.HttpWebResponse]$request.GetResponse();if($response.StatusCode -ne [Net.HttpStatusCode]::OK -or $response.ResponseUri.AbsoluteUri -cne $uri.AbsoluteUri){throw "$label request failed or redirected"};if($response.ContentLength -gt $cap){throw "$label Content-Length exceeds limit"};$input=$response.GetResponseStream();$memory=New-Object IO.MemoryStream;try{$buffer=New-Object byte[] 8192;$total=0L;while(($read=$input.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $cap){throw "$label stream exceeds limit"};$memory.Write($buffer,0,$read)};if($response.ContentLength -ge 0 -and $total -ne $response.ContentLength){throw "$label download was truncated"};return ,$memory.ToArray()}finally{if($null -ne $input){$input.Dispose()};$memory.Dispose()}}finally{if($null -ne $response){$response.Dispose()}}};$old=[Net.ServicePointManager]::SecurityProtocol;$tmp=$null;$made=$false;$code=0;try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$parts=$repo.Split('/');$commit=$ref;if($commit -cnotmatch '^[0-9a-f]{40}$'){$api=[uri]('https://api.github.com/repos/'+[uri]::EscapeDataString($parts[0])+'/'+[uri]::EscapeDataString($parts[1])+'/commits/'+[uri]::EscapeDataString($ref));$strict=New-Object Text.UTF8Encoding($false,$true);try{$payload=$strict.GetString((& $fetch $api 1MB 'commit resolution'))|ConvertFrom-Json}catch{throw ('commit resolution response is invalid: '+$_.Exception.Message)};if($null -eq $payload -or $payload.PSObject.Properties.Name -notcontains 'sha'){throw 'commit resolution response has no sha'};$commit=[string]$payload.sha;if($commit -cnotmatch '^[0-9a-f]{40}$'){throw 'commit resolution returned an invalid sha'}};$uri=[uri]('https://raw.githubusercontent.com/'+[uri]::EscapeDataString($parts[0])+'/'+[uri]::EscapeDataString($parts[1])+'/'+$commit+'/install.ps1');$bytes=& $fetch $uri 1MB 'installer';$tempRoot=& $safe ([IO.Path]::GetTempPath()) 'TEMP';$tmp=& $safe ([IO.Path]::Combine($tempRoot,('coralline-install-'+[guid]::NewGuid().ToString('N')+'.ps1'))) 'installer temp';$output=[IO.File]::Open($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$made=$true;try{$output.Write($bytes,0,$bytes.Length);$output.Flush($true)}finally{$output.Dispose()};$checked=& $safe $tmp 'downloaded installer';if($checked -cne $tmp){throw 'installer temp identity changed'};$tokens=$null;$errors=$null;[void][Management.Automation.Language.Parser]::ParseFile($tmp,[ref]$tokens,[ref]$errors);if($errors.Count -ne 0){throw ('downloaded installer parse failed: '+$errors[0].Message)};$exe=& $safe ([IO.Path]::Combine($PSHOME,'powershell.exe')) 'PowerShell executable' $true;if(-not [IO.File]::Exists($exe)){throw 'trusted powershell.exe is missing'};$psi=New-Object Diagnostics.ProcessStartInfo;$psi.FileName=$exe;$psi.UseShellExecute=$false;$psi.Arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$tmp+'" -Repo "'+$repo+'" -Ref "'+$commit+'"';$process=New-Object Diagnostics.Process;$process.StartInfo=$psi;try{if(-not $process.Start()){throw 'installer child did not start'};$process.WaitForExit();$code=$process.ExitCode}finally{$process.Dispose()}}finally{[Net.ServicePointManager]::SecurityProtocol=$old;if($made -and $null -ne $tmp -and [IO.File]::Exists($tmp)){$checked=& $safe $tmp 'installer cleanup';if($checked -cne $tmp){throw 'refusing unexpected cleanup path'};$item=Get-Item -LiteralPath $tmp -Force;if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'refusing reparse-point cleanup'};[IO.File]::Delete($tmp)}};if($code -ne 0){exit $code} }
+& { $ErrorActionPreference='Stop';$repo='Nanako0129/coralline';$ref='main';$subagentRows="preserve";if($subagentRows -cnotin @("preserve","on","off")){throw "invalid SubagentRows"};if($repo -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$' -or $ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $ref.Length -gt 200 -or $ref.Contains('..') -or $ref.Contains('//') -or $ref.Contains('@{') -or $ref.EndsWith('/') -or $ref.EndsWith('.') -or $ref -match '(?i)(^|/)[^/]*\.lock($|/)'){throw 'invalid Repo or Ref'};$safe={param([string]$p,[string]$label,[bool]$cmd=$false);if([string]::IsNullOrWhiteSpace($p) -or $p -match '[\x00-\x1f\x7f-\x9f]' -or $p.StartsWith('\\') -or $p.StartsWith('//') -or $p.IndexOf(':',2) -ge 0){throw "$label is not a safe local path"};$full=[IO.Path]::GetFullPath($p).Replace('/','\');$root=[IO.Path]::GetPathRoot($full);if($root -notmatch '^[A-Za-z]:\\$'){throw "$label is not on a local drive"};$drive=New-Object IO.DriveInfo($root);if($drive.DriveType -eq [IO.DriveType]::Network){throw "$label is on a network drive"};if($cmd -and ($full.Contains('"') -or $full.Contains('%') -or $full.Contains('!'))){throw "$label is not cmd-safe"};$current=$root;foreach($part in $full.Substring($root.Length).Split(@([char]'\'),[StringSplitOptions]::RemoveEmptyEntries)){$current=[IO.Path]::Combine($current,$part);$item=Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue;if($null -eq $item){break};if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw "$label contains a reparse point"}};if($full.Length -gt $root.Length){$full=$full.TrimEnd('\')};return $full};$fetch={param([uri]$uri,[long]$cap,[string]$label);if($uri.Scheme -cne 'https' -or ($uri.Host -cne 'api.github.com' -and $uri.Host -cne 'raw.githubusercontent.com') -or $uri.UserInfo -or $uri.Query -or $uri.Fragment){throw "unexpected $label URI"};$request=[Net.HttpWebRequest]::Create($uri);$request.Method='GET';$request.AllowAutoRedirect=$false;$request.Timeout=15000;$request.ReadWriteTimeout=15000;$request.UserAgent='coralline-bootstrap';$response=$null;try{$response=[Net.HttpWebResponse]$request.GetResponse();if($response.StatusCode -ne [Net.HttpStatusCode]::OK -or $response.ResponseUri.AbsoluteUri -cne $uri.AbsoluteUri){throw "$label request failed or redirected"};if($response.ContentLength -gt $cap){throw "$label Content-Length exceeds limit"};$input=$response.GetResponseStream();$memory=New-Object IO.MemoryStream;try{$buffer=New-Object byte[] 8192;$total=0L;while(($read=$input.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $cap){throw "$label stream exceeds limit"};$memory.Write($buffer,0,$read)};if($response.ContentLength -ge 0 -and $total -ne $response.ContentLength){throw "$label download was truncated"};return ,$memory.ToArray()}finally{if($null -ne $input){$input.Dispose()};$memory.Dispose()}}finally{if($null -ne $response){$response.Dispose()}}};$old=[Net.ServicePointManager]::SecurityProtocol;$tmp=$null;$made=$false;$code=0;try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$parts=$repo.Split('/');$commit=$ref;if($commit -cnotmatch '^[0-9a-f]{40}$'){$api=[uri]('https://api.github.com/repos/'+[uri]::EscapeDataString($parts[0])+'/'+[uri]::EscapeDataString($parts[1])+'/commits/'+[uri]::EscapeDataString($ref));$strict=New-Object Text.UTF8Encoding($false,$true);try{$payload=$strict.GetString((& $fetch $api 1MB 'commit resolution'))|ConvertFrom-Json}catch{throw ('commit resolution response is invalid: '+$_.Exception.Message)};if($null -eq $payload -or $payload.PSObject.Properties.Name -notcontains 'sha'){throw 'commit resolution response has no sha'};$commit=[string]$payload.sha;if($commit -cnotmatch '^[0-9a-f]{40}$'){throw 'commit resolution returned an invalid sha'}};$uri=[uri]('https://raw.githubusercontent.com/'+[uri]::EscapeDataString($parts[0])+'/'+[uri]::EscapeDataString($parts[1])+'/'+$commit+'/install.ps1');$bytes=& $fetch $uri 1MB 'installer';$tempRoot=& $safe ([IO.Path]::GetTempPath()) 'TEMP';$tmp=& $safe ([IO.Path]::Combine($tempRoot,('coralline-install-'+[guid]::NewGuid().ToString('N')+'.ps1'))) 'installer temp';$output=[IO.File]::Open($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$made=$true;try{$output.Write($bytes,0,$bytes.Length);$output.Flush($true)}finally{$output.Dispose()};$checked=& $safe $tmp 'downloaded installer';if($checked -cne $tmp){throw 'installer temp identity changed'};$tokens=$null;$errors=$null;[void][Management.Automation.Language.Parser]::ParseFile($tmp,[ref]$tokens,[ref]$errors);if($errors.Count -ne 0){throw ('downloaded installer parse failed: '+$errors[0].Message)};$exe=& $safe ([IO.Path]::Combine($PSHOME,'powershell.exe')) 'PowerShell executable' $true;if(-not [IO.File]::Exists($exe)){throw 'trusted powershell.exe is missing'};$psi=New-Object Diagnostics.ProcessStartInfo;$psi.FileName=$exe;$psi.UseShellExecute=$false;$psi.Arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$tmp+'" -Repo "'+$repo+'" -Ref "'+$commit+'"';$psi.Arguments+=" -SubagentRows "+[char]34+$subagentRows+[char]34;$process=New-Object Diagnostics.Process;$process.StartInfo=$psi;try{if(-not $process.Start()){throw 'installer child did not start'};$process.WaitForExit();$code=$process.ExitCode}finally{$process.Dispose()}}finally{[Net.ServicePointManager]::SecurityProtocol=$old;if($made -and $null -ne $tmp -and [IO.File]::Exists($tmp)){$checked=& $safe $tmp 'installer cleanup';if($checked -cne $tmp){throw 'refusing unexpected cleanup path'};$item=Get-Item -LiteralPath $tmp -Force;if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'refusing reparse-point cleanup'};[IO.File]::Delete($tmp)}};if($code -ne 0){exit $code} }
 ```
 
 若要安裝已稽核的 release 或 commit，複製同一行，只把 `$ref='main'` 改成
@@ -205,8 +209,10 @@ commit SHA，再以有上限的 `HttpWebRequest` 從該 SHA 下載 `install.ps1`
 bootstrap 都會在下載可執行程式碼前先解析可變名稱或 tag，再由 installer 從同一個
 commit 下載全部受管理檔案。
 
-`install.ps1` 會安裝 `statusline.ps1` 與全部十個 themes，並只對
+`install.ps1` 會安裝 `statusline.ps1` 與全部十個 themes，並對
 `$HOME\.claude\settings.json` 最上層、大小寫完全相符的 `statusLine` 做無損合併。
+`-SubagentRows preserve|on|off` 預設保留 `subagentStatusLine`；設為 `on` 才註冊原生
+`statusline.ps1 --subagent` command，設為 `off` 只移除大小寫完全相符的最上層欄位。
 `$HOME\.claude\coralline.conf` 會逐 byte 保留，而且 installer 永遠不會建立它。
 受管理的 runtime 或 settings 確實變更時，舊版本會保留為帶時間戳的同層備份。
 Installer 會序列化執行。單檔 runtime rollback 不會覆寫同時發生的編輯，並會保留
@@ -224,7 +230,7 @@ settings、不建立備份，也不改 timestamp。PowerShell-only 安裝不含 
 本機，再以零網路的 local mode 執行：
 
 ```powershell
-& "$PSHOME\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\path\to\coralline\install.ps1 -SourceDirectory C:\path\to\coralline -InstallRoot "$HOME\.claude\coralline" -SettingsPath "$HOME\.claude\settings.json"
+& "$PSHOME\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\path\to\coralline\install.ps1 -SourceDirectory C:\path\to\coralline -InstallRoot "$HOME\.claude\coralline" -SettingsPath "$HOME\.claude\settings.json" -SubagentRows preserve
 ```
 
 Local mode 的三個路徑都必須是 drive-absolute（`C:\...` 或 `C:/...`）；`C:folder`
@@ -284,8 +290,9 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 - **確切會寫入什麼：** Bash 流程會依前述規則寫入 runtime、經你同意的 config 與
   Claude settings。原生 installer 只會在 `~/.claude/coralline` 寫入
   `statusline.ps1` 與十個 themes，並更新 `settings.json` 最上層完全相符的
-  `statusLine` 值。它不建立或修改 `coralline.conf`，也不寫
-  `subagentStatusLine`。既有 runtime/settings 有變更時會留下同層時間戳備份。
+  `statusLine` 值。它不建立或修改 `coralline.conf`；除非明確選擇原生 opt-in 或
+  opt-out，否則會保留 `subagentStatusLine`。既有 runtime/settings 有變更時會留下
+  同層時間戳備份。
 - **裝完之後跑的是什麼：** 每次 prompt 會執行註冊的 Bash 或 PowerShell renderer，
   runtime 都不會發出網路請求。原生命令會引用絕對路徑的可信
   `$PSHOME\powershell.exe` 與 renderer，不會從 workspace 搜尋 `powershell.exe`。
@@ -524,21 +531,21 @@ wizard 會自動掃描 `themes/*.conf` 與 `themes/best-themes/*.conf` 這類巢
 | macOS | ✅ 支援（內建 bash 3.2 即可） |
 | Linux | ✅ 支援 |
 | Windows + Git Bash | ✅ 支援——有裝 Git Bash 時，Claude Code 會用它執行 statusline |
-| Windows 無 Git Bash | ✅ 原生 Windows PowerShell 5.1 支援主列 |
+| Windows 無 Git Bash | ✅ 原生 Windows PowerShell 5.1 支援 |
 
 > **Windows 提醒：** 原生 PowerShell renderer 不需要 Git Bash 或 `jq`。`git.exe`
-> 是選用項目，只用來啟用 `git`、`stash`、`project` segments。互動式 wizard 與套用
-> theme 的 `--subagent` 列仍限定使用 bash。
+> 是選用項目，只用來啟用 `git`、`stash`、`project` segments。互動式 wizard 仍限定
+> 使用 bash；主列與套用 theme 的 `--subagent` 列都有原生版本。
 
 ## 為什麼很快
 
-statusline 就是一支本地 shell 腳本：完全不打網路、不呼叫任何 API、不消耗任何 token。
+statusline 就是一個本地 renderer：完全不打網路、不呼叫任何 API、不消耗任何 token。
 Claude Code 只是把 session 的 JSON 從 stdin 餵給它，再顯示它印出的內容。
 
-它每秒執行一次（`refreshInterval: 1`），所以腳本在 CPU 上必須夠便宜：
-單次 `jq` 呼叫一口氣取出所有欄位，單次 `git status --porcelain=v2 --branch`
-同時拿到分支、檔案狀態與領先/落後數。不依賴 `bc`，也沒有逐欄位的子程序開銷。
-macOS 內建的 bash 3.2 和任何 Linux bash 都能跑。
+主列每秒執行一次（`refreshInterval: 1`），subagent 列則由 panel event 觸發重繪。
+Bash renderer 以單次 `jq` 呼叫取出所有欄位，原生 PowerShell renderer 在程序內解析；
+兩者每次 render 最多呼叫一次 `git status --porcelain=v2 --branch`，都不會為每個欄位
+個別啟動子程序。
 
 ## 致敬與致謝
 

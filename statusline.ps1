@@ -5,14 +5,10 @@
   This runtime implements the main bar and optional float producer without Bash,
   jq, WSL, or PowerShell 7. Config is read from the same coralline.conf through a
   narrow, non-executing Bash-word parser. Burn and synced limit state share the
-  same immutable store as Bash; subagent rows remain a later protocol slice.
+  same immutable store as Bash; --subagent renders native panel rows.
 #>
 
-# Claude Code registers this exact literal. It must leave before stdin, config,
-# executable discovery, or any other main-bar work.
-if ($args.Count -gt 0 -and [string]$args[0] -ceq '--subagent') {
-    [Environment]::Exit(0)
-}
+$SubagentMode = $args.Count -gt 0 -and [string]$args[0] -ceq '--subagent'
 
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
@@ -20,9 +16,26 @@ $ProgressPreference = 'SilentlyContinue'
 $StrictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $InputStream = [Console]::OpenStandardInput()
-$InputReader = New-Object System.IO.StreamReader($InputStream, $StrictUtf8, $false, 4096, $false)
-try { $rawInput = $InputReader.ReadToEnd() } catch { $rawInput = '' }
-$InputReader.Dispose()
+if ($SubagentMode) {
+    # Read one byte beyond the limit before allocating a decoded string. This
+    # distinguishes an exact-cap stream from a longer one without unbounded I/O.
+    $inputCap = 4194304
+    $inputBytes = New-Object byte[] ($inputCap + 1)
+    $inputLength = 0
+    try {
+        while ($inputLength -lt $inputBytes.Length) {
+            $read = $InputStream.Read($inputBytes, $inputLength, $inputBytes.Length - $inputLength)
+            if ($read -le 0) { break }
+            $inputLength += $read
+        }
+        if ($inputLength -gt $inputCap) { [Environment]::Exit(0) }
+        $rawInput = $StrictUtf8.GetString($inputBytes, 0, $inputLength)
+    } catch { [Environment]::Exit(0) }
+} else {
+    $InputReader = New-Object System.IO.StreamReader($InputStream, $StrictUtf8, $false, 4096, $false)
+    try { $rawInput = $InputReader.ReadToEnd() } catch { $rawInput = '' }
+    $InputReader.Dispose()
+}
 
 $OutputStream = [Console]::OpenStandardOutput()
 $OutputWriter = New-Object System.IO.StreamWriter($OutputStream, $Utf8NoBom, 4096, $false)
@@ -101,6 +114,17 @@ $Defaults = [ordered]@{
     VL_BG_SUB_MODEL = ''
     VL_BG_SUB_CTX = ''
     VL_BG_SUB_ELAPSED = ''
+    VL_FG_SUB_TEXT = ''
+    VL_FG_SUB_OK = ''
+    VL_FG_SUB_HOT = ''
+    VL_FG_SUB_DIM = ''
+    _VL_SUB_BG_NAME = ''
+    _VL_SUB_FG_TEXT = ''
+    _VL_SUB_FG_OK = ''
+    _VL_SUB_FG_HOT = ''
+    _VL_SUB_FG_DIM = ''
+    _VL_SUB_FP = ''
+    _VL_SUB_BAR = ''
 
     CORALLINE_BURN_WINDOW = '600'
     VL_BURN_GLYPH = (Glyph 0x2197)
@@ -480,11 +504,12 @@ function Read-StrictUtf8File([string]$Path) {
 function Import-ConfigFile(
     [string]$Path,
     [System.Collections.IDictionary]$BaseConfig,
+    [System.Collections.Generic.HashSet[string]]$BaseAssignments,
     [hashtable]$State,
     [int]$Depth,
     [string[]]$ApprovedRoots
 ) {
-    $failed = [pscustomobject]@{ Success = $false; Config = $BaseConfig }
+    $failed = [pscustomobject]@{ Success = $false; Config = $BaseConfig; Assignments = $BaseAssignments }
     if ($Depth -gt 8) { return $failed }
     if ($State.Visited.Contains($Path)) { return $failed }
     [void]$State.Visited.Add($Path)
@@ -493,6 +518,8 @@ function Import-ConfigFile(
     if ($null -eq $text) { return $failed }
 
     $candidate = Copy-Config $BaseConfig
+    $candidateAssignments = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($assignedName in $BaseAssignments) { [void]$candidateAssignments.Add($assignedName) }
     $rootFloatAuthorized = $false
     $stack = New-Object System.Collections.ArrayList
     $active = $true
@@ -549,8 +576,11 @@ function Import-ConfigFile(
                 if (Test-PathInside $includePath $root) { $inside = $true; break }
             }
             if (-not $inside) { continue }
-            $child = Import-ConfigFile $includePath $candidate $State ($Depth + 1) $ApprovedRoots
-            if ($child.Success) { $candidate = $child.Config }
+            $child = Import-ConfigFile $includePath $candidate $candidateAssignments $State ($Depth + 1) $ApprovedRoots
+            if ($child.Success) {
+                $candidate = $child.Config
+                $candidateAssignments = $child.Assignments
+            }
             continue
         }
 
@@ -564,6 +594,7 @@ function Import-ConfigFile(
             if ($name -ieq 'VL_FLOAT_FILE') {
                 if ($Depth -eq 0 -and $name -ceq 'VL_FLOAT_FILE') {
                     $candidate['VL_FLOAT_FILE'] = $decoded.Value
+                    [void]$candidateAssignments.Add($name)
                     $rootFloatAuthorized = $true
                 }
                 continue
@@ -571,7 +602,10 @@ function Import-ConfigFile(
             # Bash variable names are case-sensitive. OrderedDictionary is not,
             # so ignore unknown and case-variant keys instead of letting them
             # overwrite a supported setting.
-            if ($ConfigKeys.Contains($name)) { $candidate[$name] = $decoded.Value }
+            if ($ConfigKeys.Contains($name)) {
+                $candidate[$name] = $decoded.Value
+                [void]$candidateAssignments.Add($name)
+            }
             continue
         }
 
@@ -581,10 +615,16 @@ function Import-ConfigFile(
 
     if ($stack.Count -ne 0) { $valid = $false }
     if (-not $valid) { return $failed }
-    return [pscustomobject]@{ Success = $true; Config = $candidate; FloatFileAuthorized = ($Depth -eq 0 -and $rootFloatAuthorized) }
+    return [pscustomobject]@{
+        Success = $true
+        Config = $candidate
+        Assignments = $candidateAssignments
+        FloatFileAuthorized = ($Depth -eq 0 -and $rootFloatAuthorized)
+    }
 }
 
 $Cfg = Copy-Config $Defaults
+$ConfigAssignments = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
 $FloatFileRootAuthorized = $false
 $ConfigInput = [string]$env:CORALLINE_CONFIG
 if ([string]::IsNullOrEmpty($ConfigInput)) { $ConfigInput = [System.IO.Path]::Combine($HomeDir, '.claude\coralline.conf') }
@@ -596,9 +636,10 @@ if (-not [string]::IsNullOrEmpty($ConfigPath)) {
     if (-not [string]::IsNullOrEmpty($ThemesRoot)) { $approved += $ThemesRoot }
     $visited = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $state = @{ IncludeCount = 0; Visited = $visited }
-    $parsed = Import-ConfigFile $ConfigPath $Cfg $state 0 $approved
+    $parsed = Import-ConfigFile $ConfigPath $Cfg $ConfigAssignments $state 0 $approved
     if ($parsed.Success) {
         $Cfg = $parsed.Config
+        $ConfigAssignments = $parsed.Assignments
         $FloatFileRootAuthorized = [bool]$parsed.FloatFileAuthorized
     }
 }
@@ -661,6 +702,9 @@ if ([int]$Cfg.VL_HOT_PCT -lt [int]$Cfg.VL_WARN_PCT) {
 foreach ($key in @($Cfg.Keys | Where-Object { $_ -like 'VL_BG_*' -or $_ -like 'VL_FG_*' })) {
     if (-not (Test-Color $Cfg[$key])) { $Cfg[$key] = $Defaults[$key] }
 }
+foreach ($key in @('_VL_SUB_BG_NAME', '_VL_SUB_FG_TEXT', '_VL_SUB_FG_OK', '_VL_SUB_FG_HOT', '_VL_SUB_FG_DIM')) {
+    if (-not (Test-Color $Cfg[$key])) { $Cfg[$key] = '' }
+}
 if (-not (Test-Color $Cfg.VL_LEAN_BG)) { $Cfg.VL_LEAN_BG = '' }
 if (-not (Test-Color $Cfg.VL_LEAN_FG)) { $Cfg.VL_LEAN_FG = '' }
 
@@ -674,6 +718,42 @@ $Cfg.VL_LAYOUT = switch -CaseSensitive ([string]$Cfg.VL_LAYOUT) {
     'fixed' { 'fixed'; break }
     'auto' { 'auto'; break }
     default { 'fixed' }
+}
+
+# Adopt bundled subagent inks only while the palette and painted ground still
+# match the theme that supplied them. Exact assignment tracking preserves Bash's
+# distinction between an unset public knob and an explicitly empty override.
+$stockSubFingerprint = '81,166,199|231|114|167|245'
+$stockSubBar = '|'
+$candidateFingerprint = $stockSubFingerprint
+$candidateBar = $stockSubBar
+if ($ConfigAssignments.Contains('_VL_SUB_FP')) { $candidateFingerprint = [string]$Cfg._VL_SUB_FP }
+if ($ConfigAssignments.Contains('_VL_SUB_BAR')) { $candidateBar = [string]$Cfg._VL_SUB_BAR }
+$adoptSubPalette = -not $ConfigAssignments.Contains('VL_BG_SUB_NAME') -and [string]::IsNullOrEmpty([string]$Cfg.VL_LEAN_FG)
+if ($Cfg.VL_STYLE -ceq 'lean') {
+    if ([string]::IsNullOrEmpty([string]$Cfg.VL_LEAN_BG)) { $adoptSubPalette = $false }
+    if (([string]$Cfg.VL_BG_BAR + '|' + [string]$Cfg.VL_LEAN_BG) -cne $candidateBar) { $adoptSubPalette = $false }
+} elseif ($Cfg.VL_STYLE -ceq 'classic') {
+    if (([string]$Cfg.VL_BG_BAR + '|' + [string]$Cfg.VL_LEAN_BG) -cne $candidateBar) { $adoptSubPalette = $false }
+}
+$liveSubFingerprint = [string]$Cfg.VL_BG_DIR + '|' + [string]$Cfg.VL_FG_TEXT + '|' + [string]$Cfg.VL_FG_OK + '|' + [string]$Cfg.VL_FG_HOT + '|' + [string]$Cfg.VL_FG_DIM
+if ($liveSubFingerprint -cne $candidateFingerprint) { $adoptSubPalette = $false }
+if ($adoptSubPalette) {
+    if (-not $ConfigAssignments.Contains('VL_BG_SUB_NAME')) {
+        $Cfg.VL_BG_SUB_NAME = if ($ConfigAssignments.Contains('_VL_SUB_BG_NAME')) { $Cfg._VL_SUB_BG_NAME } else { '68,68,68' }
+    }
+    if (-not $ConfigAssignments.Contains('VL_FG_SUB_TEXT')) {
+        $Cfg.VL_FG_SUB_TEXT = if ($ConfigAssignments.Contains('_VL_SUB_FG_TEXT')) { $Cfg._VL_SUB_FG_TEXT } else { '255,255,255' }
+    }
+    if (-not $ConfigAssignments.Contains('VL_FG_SUB_OK')) {
+        $Cfg.VL_FG_SUB_OK = if ($ConfigAssignments.Contains('_VL_SUB_FG_OK')) { $Cfg._VL_SUB_FG_OK } else { '' }
+    }
+    if (-not $ConfigAssignments.Contains('VL_FG_SUB_HOT')) {
+        $Cfg.VL_FG_SUB_HOT = if ($ConfigAssignments.Contains('_VL_SUB_FG_HOT')) { $Cfg._VL_SUB_FG_HOT } else { '231,157,157' }
+    }
+    if (-not $ConfigAssignments.Contains('VL_FG_SUB_DIM')) {
+        $Cfg.VL_FG_SUB_DIM = if ($ConfigAssignments.Contains('_VL_SUB_FG_DIM')) { $Cfg._VL_SUB_FG_DIM } else { '177,177,177' }
+    }
 }
 
 # Bash applies ASCII first, then classic's lean defaults, then lean overrides.
@@ -796,6 +876,682 @@ function Get-Trunc([string]$S, [int]$Max) {
     $headEnd = if ($head -lt $count) { $offsets[$head] } else { $S.Length }
     $tailStart = $offsets[$count - $tail]
     return $S.Substring(0, $headEnd) + $G.Ellipsis + $S.Substring($tailStart)
+}
+
+function New-StrictJsonNode([string]$Kind, $Value) {
+    return [pscustomobject]@{ Kind = $Kind; Value = $Value }
+}
+
+function Skip-StrictJsonWhitespace([hashtable]$State) {
+    while ($State.Index -lt $State.Text.Length) {
+        $ch = $State.Text[$State.Index]
+        if ($ch -ne ' ' -and $ch -ne "`t" -and $ch -ne "`n" -and $ch -ne "`r") { break }
+        $State.Index++
+    }
+}
+
+function Read-StrictJsonString([hashtable]$State) {
+    if ($State.Index -ge $State.Text.Length -or $State.Text[$State.Index] -ne '"') {
+        $State.Valid = $false
+        return $null
+    }
+    $State.Index++
+    $builder = New-Object System.Text.StringBuilder
+    :jsonStringCharacters while ($State.Index -lt $State.Text.Length) {
+        $ch = $State.Text[$State.Index]
+        $State.Index++
+        if ($ch -eq '"') { return $builder.ToString() }
+        if ($ch -eq '\') {
+            if ($State.Index -ge $State.Text.Length) { $State.Valid = $false; return $null }
+            $escape = $State.Text[$State.Index]
+            $State.Index++
+            switch -CaseSensitive ([string]$escape) {
+                '"' { [void]$builder.Append('"'); continue jsonStringCharacters }
+                '\' { [void]$builder.Append('\'); continue jsonStringCharacters }
+                '/' { [void]$builder.Append('/'); continue jsonStringCharacters }
+                'b' { [void]$builder.Append([char]8); continue jsonStringCharacters }
+                'f' { [void]$builder.Append([char]12); continue jsonStringCharacters }
+                'n' { [void]$builder.Append([char]10); continue jsonStringCharacters }
+                'r' { [void]$builder.Append([char]13); continue jsonStringCharacters }
+                't' { [void]$builder.Append([char]9); continue jsonStringCharacters }
+                'u' {
+                    if (($State.Index + 4) -gt $State.Text.Length) { $State.Valid = $false; return $null }
+                    $hex = $State.Text.Substring($State.Index, 4)
+                    if ($hex -notmatch '\A[0-9A-Fa-f]{4}\z') { $State.Valid = $false; return $null }
+                    $State.Index += 4
+                    try { $code = [Convert]::ToInt32($hex, 16) } catch { $State.Valid = $false; return $null }
+                    if ($code -ge 0xD800 -and $code -le 0xDBFF) {
+                        if (($State.Index + 6) -gt $State.Text.Length -or $State.Text[$State.Index] -ne '\' -or $State.Text[$State.Index + 1] -cne 'u') {
+                            $State.Valid = $false
+                            return $null
+                        }
+                        $lowHex = $State.Text.Substring($State.Index + 2, 4)
+                        if ($lowHex -notmatch '\A[0-9A-Fa-f]{4}\z') { $State.Valid = $false; return $null }
+                        try { $low = [Convert]::ToInt32($lowHex, 16) } catch { $State.Valid = $false; return $null }
+                        if ($low -lt 0xDC00 -or $low -gt 0xDFFF) { $State.Valid = $false; return $null }
+                        [void]$builder.Append([char]$code)
+                        [void]$builder.Append([char]$low)
+                        $State.Index += 6
+                        continue jsonStringCharacters
+                    }
+                    if ($code -ge 0xDC00 -and $code -le 0xDFFF) { $State.Valid = $false; return $null }
+                    [void]$builder.Append([char]$code)
+                    continue jsonStringCharacters
+                }
+                default { $State.Valid = $false; return $null }
+            }
+        }
+        $codepoint = [int][char]$ch
+        if ($codepoint -le 0x1F) { $State.Valid = $false; return $null }
+        if ([char]::IsHighSurrogate($ch)) {
+            if ($State.Index -ge $State.Text.Length -or -not [char]::IsLowSurrogate($State.Text[$State.Index])) {
+                $State.Valid = $false
+                return $null
+            }
+            [void]$builder.Append($ch)
+            [void]$builder.Append($State.Text[$State.Index])
+            $State.Index++
+            continue jsonStringCharacters
+        }
+        if ([char]::IsLowSurrogate($ch)) { $State.Valid = $false; return $null }
+        [void]$builder.Append($ch)
+    }
+    $State.Valid = $false
+    return $null
+}
+
+function Read-StrictJsonNumber([hashtable]$State) {
+    $start = [int]$State.Index
+    if ($State.Text[$State.Index] -eq '-') {
+        $State.Index++
+        if ($State.Index -ge $State.Text.Length) { $State.Valid = $false; return $null }
+    }
+    if ($State.Text[$State.Index] -eq '0') {
+        $State.Index++
+    } elseif ($State.Text[$State.Index] -ge '1' -and $State.Text[$State.Index] -le '9') {
+        $State.Index++
+        while ($State.Index -lt $State.Text.Length -and $State.Text[$State.Index] -ge '0' -and $State.Text[$State.Index] -le '9') { $State.Index++ }
+    } else {
+        $State.Valid = $false
+        return $null
+    }
+    if ($State.Index -lt $State.Text.Length -and $State.Text[$State.Index] -eq '.') {
+        $State.Index++
+        $fractionStart = [int]$State.Index
+        while ($State.Index -lt $State.Text.Length -and $State.Text[$State.Index] -ge '0' -and $State.Text[$State.Index] -le '9') { $State.Index++ }
+        if ($State.Index -eq $fractionStart) { $State.Valid = $false; return $null }
+    }
+    if ($State.Index -lt $State.Text.Length -and ($State.Text[$State.Index] -eq 'e' -or $State.Text[$State.Index] -eq 'E')) {
+        $State.Index++
+        if ($State.Index -lt $State.Text.Length -and ($State.Text[$State.Index] -eq '+' -or $State.Text[$State.Index] -eq '-')) { $State.Index++ }
+        $exponentStart = [int]$State.Index
+        while ($State.Index -lt $State.Text.Length -and $State.Text[$State.Index] -ge '0' -and $State.Text[$State.Index] -le '9') { $State.Index++ }
+        if ($State.Index -eq $exponentStart) { $State.Valid = $false; return $null }
+    }
+    return $State.Text.Substring($start, $State.Index - $start)
+}
+
+function Read-StrictJsonValueStart(
+    [hashtable]$State,
+    [System.Collections.Generic.List[object]]$Stack
+) {
+    if ($State.Index -ge $State.Text.Length) { $State.Valid = $false; return $null }
+    if ([int]$State.NodeCount -ge 32768) { $State.Valid = $false; return $null }
+    $State.NodeCount = [int]$State.NodeCount + 1
+    $ch = $State.Text[$State.Index]
+    if ($ch -eq '"') {
+        $value = Read-StrictJsonString $State
+        if (-not $State.Valid) { return $null }
+        return New-StrictJsonNode 'string' $value
+    }
+    if ($ch -eq '{') {
+        if ($Stack.Count -ge 128) { $State.Valid = $false; return $null }
+        $State.Index++
+        $members = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+        $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        $node = New-StrictJsonNode 'object' $members
+        [void]$Stack.Add([pscustomobject]@{ Type='object'; State='keyOrEnd'; Node=$node; Seen=$seen; Key='' })
+        return $node
+    }
+    if ($ch -eq '[') {
+        if ($Stack.Count -ge 128) { $State.Valid = $false; return $null }
+        $State.Index++
+        $items = New-Object 'System.Collections.Generic.List[object]'
+        $node = New-StrictJsonNode 'array' $items
+        [void]$Stack.Add([pscustomobject]@{ Type='array'; State='valueOrEnd'; Node=$node })
+        return $node
+    }
+    if ($ch -eq '-' -or ($ch -ge '0' -and $ch -le '9')) {
+        $number = Read-StrictJsonNumber $State
+        if (-not $State.Valid) { return $null }
+        return New-StrictJsonNode 'number' $number
+    }
+    if (($State.Index + 4) -le $State.Text.Length -and $State.Text.Substring($State.Index, 4) -ceq 'true') {
+        $State.Index += 4
+        return New-StrictJsonNode 'bool' $true
+    }
+    if (($State.Index + 5) -le $State.Text.Length -and $State.Text.Substring($State.Index, 5) -ceq 'false') {
+        $State.Index += 5
+        return New-StrictJsonNode 'bool' $false
+    }
+    if (($State.Index + 4) -le $State.Text.Length -and $State.Text.Substring($State.Index, 4) -ceq 'null') {
+        $State.Index += 4
+        return New-StrictJsonNode 'null' $null
+    }
+    $State.Valid = $false
+    return $null
+}
+
+function Read-StrictJsonValue([hashtable]$State) {
+    $stack = New-Object 'System.Collections.Generic.List[object]'
+    $root = Read-StrictJsonValueStart $State $stack
+    if (-not $State.Valid) { return $null }
+    while ($stack.Count -gt 0 -and $State.Valid) {
+        $frame = $stack[$stack.Count - 1]
+        Skip-StrictJsonWhitespace $State
+        if ($frame.Type -ceq 'object') {
+            if ($frame.State -ceq 'keyOrEnd' -or $frame.State -ceq 'key') {
+                if ($frame.State -ceq 'keyOrEnd' -and $State.Index -lt $State.Text.Length -and $State.Text[$State.Index] -eq '}') {
+                    $State.Index++
+                    $stack.RemoveAt($stack.Count - 1)
+                    continue
+                }
+                if ($State.Index -ge $State.Text.Length -or $State.Text[$State.Index] -ne '"') { $State.Valid = $false; break }
+                $key = Read-StrictJsonString $State
+                if (-not $State.Valid -or -not $frame.Seen.Add($key)) { $State.Valid = $false; break }
+                $frame.Key = $key
+                $frame.State = 'colon'
+                continue
+            }
+            if ($frame.State -ceq 'colon') {
+                if ($State.Index -ge $State.Text.Length -or $State.Text[$State.Index] -ne ':') { $State.Valid = $false; break }
+                $State.Index++
+                $frame.State = 'value'
+                continue
+            }
+            if ($frame.State -ceq 'value') {
+                Skip-StrictJsonWhitespace $State
+                $node = Read-StrictJsonValueStart $State $stack
+                if (-not $State.Valid) { break }
+                $frame.Node.Value.Add([string]$frame.Key, $node)
+                $frame.State = 'commaOrEnd'
+                continue
+            }
+            if ($State.Index -lt $State.Text.Length -and $State.Text[$State.Index] -eq ',') {
+                $State.Index++
+                $frame.State = 'key'
+                continue
+            }
+            if ($State.Index -lt $State.Text.Length -and $State.Text[$State.Index] -eq '}') {
+                $State.Index++
+                $stack.RemoveAt($stack.Count - 1)
+                continue
+            }
+            $State.Valid = $false
+            break
+        }
+
+        if ($frame.State -ceq 'valueOrEnd' -or $frame.State -ceq 'value') {
+            if ($frame.State -ceq 'valueOrEnd' -and $State.Index -lt $State.Text.Length -and $State.Text[$State.Index] -eq ']') {
+                $State.Index++
+                $stack.RemoveAt($stack.Count - 1)
+                continue
+            }
+            $node = Read-StrictJsonValueStart $State $stack
+            if (-not $State.Valid) { break }
+            [void]$frame.Node.Value.Add($node)
+            $frame.State = 'commaOrEnd'
+            continue
+        }
+        if ($State.Index -lt $State.Text.Length -and $State.Text[$State.Index] -eq ',') {
+            $State.Index++
+            $frame.State = 'value'
+            continue
+        }
+        if ($State.Index -lt $State.Text.Length -and $State.Text[$State.Index] -eq ']') {
+            $State.Index++
+            $stack.RemoveAt($stack.Count - 1)
+            continue
+        }
+        $State.Valid = $false
+    }
+    if (-not $State.Valid) { return $null }
+    return $root
+}
+
+function Read-StrictJsonStream([string]$Text) {
+    $state = @{ Text=$Text; Index=0; Valid=$true; NodeCount=0 }
+    $last = $null
+    $count = 0
+    Skip-StrictJsonWhitespace $state
+    while ($state.Index -lt $state.Text.Length -and $state.Valid) {
+        $last = Read-StrictJsonValue $state
+        if (-not $state.Valid) { break }
+        $count++
+        Skip-StrictJsonWhitespace $state
+    }
+    return [pscustomobject]@{ Success=($state.Valid -and $count -gt 0 -and $state.Index -eq $state.Text.Length); Count=$count; Last=$last }
+}
+
+function Get-StrictJsonMember($Node, [string]$Name) {
+    if ($null -eq $Node -or $Node.Kind -cne 'object') { return $null }
+    $value = $null
+    if (-not $Node.Value.TryGetValue($Name, [ref]$value)) { return $null }
+    return $value
+}
+
+function Convert-StrictJsonNumber([string]$Raw) {
+    # jq's decimal tostring preserves coefficient scale. It switches to
+    # scientific form when the decimal quantum is positive or adjusts below -6.
+    $match = [regex]::Match($Raw, '\A(-?)([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?\z')
+    if (-not $match.Success) { return $null }
+    $sign = $match.Groups[1].Value
+    $fraction = $match.Groups[3].Value
+    $exponentText = if ($match.Groups[4].Success) { $match.Groups[4].Value } else { '0' }
+    $explicitExponent = [bigint]::Zero
+    if (-not [bigint]::TryParse($exponentText, $IntegerStyle, $Invariant, [ref]$explicitExponent)) { return $null }
+
+    $quantum = $explicitExponent - [bigint]([int]$fraction.Length)
+    $coefficient = ($match.Groups[2].Value + $fraction).TrimStart('0')
+    if ([string]::IsNullOrEmpty($coefficient)) { $coefficient = '0' }
+    $maxAdjusted = [bigint]999999999
+    $minQuantum = [bigint](-1147483646)
+    $adjusted = $quantum + [bigint]([int]$coefficient.Length - 1)
+
+    if ($coefficient -ceq '0') {
+        if ($quantum -gt $maxAdjusted) { $quantum = $maxAdjusted }
+        elseif ($quantum -lt $minQuantum) { $quantum = $minQuantum }
+        $adjusted = $quantum
+    } else {
+        if ($adjusted -gt $maxAdjusted) { return $sign + '1.7976931348623157e+308' }
+        if ($quantum -lt $minQuantum) {
+            $discard = $minQuantum - $quantum
+            if ($discard -gt [bigint]([int]$coefficient.Length)) {
+                $coefficient = '0'
+            } else {
+                $discardCount = [int]$discard
+                $retainedCount = $coefficient.Length - $discardCount
+                $retainedText = if ($retainedCount -gt 0) { $coefficient.Substring(0, $retainedCount) } else { '0' }
+                $rounded = [bigint]::Zero
+                if (-not [bigint]::TryParse($retainedText, $IntegerStyle, $Invariant, [ref]$rounded)) { return $null }
+                if ($coefficient[$retainedCount] -ge '5') { $rounded += [bigint]::One }
+                $coefficient = $rounded.ToString($Invariant)
+            }
+            $quantum = $minQuantum
+            $adjusted = $quantum + [bigint]([int]$coefficient.Length - 1)
+        }
+    }
+
+    if ($quantum -gt [bigint]::Zero -or $adjusted -lt [bigint](-6)) {
+        $mantissa = [string]$coefficient[0]
+        if ($coefficient.Length -gt 1) { $mantissa += '.' + $coefficient.Substring(1) }
+        $shownExponent = $adjusted.ToString($Invariant)
+        if ($adjusted -ge [bigint]::Zero) { $shownExponent = '+' + $shownExponent }
+        return $sign + $mantissa + 'E' + $shownExponent
+    }
+
+    $point = [int]([bigint]([int]$coefficient.Length) + $quantum)
+    if ($point -eq $coefficient.Length) { return $sign + $coefficient }
+    if ($point -gt 0) {
+        return $sign + $coefficient.Substring(0, $point) + '.' + $coefficient.Substring($point)
+    }
+    return $sign + '0.' + (('0' * (-$point)) -join '') + $coefficient
+}
+
+function Convert-StrictJsonScalar($Node, [int]$ByteCap) {
+    if ($null -eq $Node) { return [pscustomobject]@{ Valid=$false; Value='' } }
+    switch -CaseSensitive ([string]$Node.Kind) {
+        'null' { $value = ''; break }
+        'string' { $value = [string]$Node.Value; break }
+        'number' {
+            $rawNumber = [string]$Node.Value
+            try {
+                if ($StrictUtf8.GetByteCount($rawNumber) -gt $ByteCap) { return [pscustomobject]@{ Valid=$false; Value='' } }
+            } catch { return [pscustomobject]@{ Valid=$false; Value='' } }
+            $value = Convert-StrictJsonNumber $rawNumber
+            if ($null -eq $value) { return [pscustomobject]@{ Valid=$false; Value='' } }
+            break
+        }
+        'bool' { $value = if ([bool]$Node.Value) { 'true' } else { 'false' }; break }
+        default { return [pscustomobject]@{ Valid=$false; Value='' } }
+    }
+    $value = Remove-ControlChars $value
+    try {
+        if ($StrictUtf8.GetByteCount($value) -gt $ByteCap) { return [pscustomobject]@{ Valid=$false; Value='' } }
+    } catch { return [pscustomobject]@{ Valid=$false; Value='' } }
+    return [pscustomobject]@{ Valid=$true; Value=$value }
+}
+
+function ConvertTo-StrictJsonString([string]$Value) {
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    :jsonEscapeCharacters for ($i = 0; $i -lt $Value.Length; $i++) {
+        $ch = $Value[$i]
+        $code = [int][char]$ch
+        switch ($code) {
+            8 { [void]$builder.Append('\b'); continue jsonEscapeCharacters }
+            9 { [void]$builder.Append('\t'); continue jsonEscapeCharacters }
+            10 { [void]$builder.Append('\n'); continue jsonEscapeCharacters }
+            12 { [void]$builder.Append('\f'); continue jsonEscapeCharacters }
+            13 { [void]$builder.Append('\r'); continue jsonEscapeCharacters }
+            34 { [void]$builder.Append('\"'); continue jsonEscapeCharacters }
+            92 { [void]$builder.Append('\\'); continue jsonEscapeCharacters }
+        }
+        if ($code -lt 0x20) {
+            [void]$builder.Append(('\u{0:x4}' -f $code))
+            continue
+        }
+        [void]$builder.Append($ch)
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Read-BoundedStrictUtf8RegularFile([string]$Path, [int]$ByteCap) {
+    if (-not (Test-SafeRegularFile $Path)) { return $null }
+    try {
+        $info = New-Object System.IO.FileInfo($Path)
+        if ($info.Length -gt $ByteCap) { return $null }
+        $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+        try {
+            $bytes = New-Object byte[] ($ByteCap + 1)
+            $length = 0
+            while ($length -lt $bytes.Length) {
+                $read = $stream.Read($bytes, $length, $bytes.Length - $length)
+                if ($read -le 0) { break }
+                $length += $read
+            }
+            if ($length -gt $ByteCap) { return $null }
+            return $StrictUtf8.GetString($bytes, 0, $length)
+        } finally { $stream.Dispose() }
+    } catch { return $null }
+}
+
+function Get-SubagentSidecarPath([string]$Transcript, [string]$Id) {
+    if ([string]::IsNullOrEmpty($Transcript) -or $Transcript.Length -gt 4096) { return $null }
+    if ([string]::IsNullOrEmpty($Id) -or $Id -match '[<>:"/\\|?*]') { return $null }
+    $path = $Transcript.Replace('/', '\')
+    if ($path -notmatch '\A[A-Za-z]:\\') { return $null }
+    if (-not $path.EndsWith('.jsonl', [System.StringComparison]::Ordinal)) { return $null }
+    if ($path.StartsWith('\\', [System.StringComparison]::Ordinal) -or $path.StartsWith('\\?\', [System.StringComparison]::Ordinal) -or $path.StartsWith('\\.\', [System.StringComparison]::Ordinal)) { return $null }
+    if ($path.IndexOf(':', 2) -ge 0 -or $path -match '[\u0000-\u001f\u007f-\u009f]') { return $null }
+    $rest = $path.Substring(3)
+    if ([string]::IsNullOrEmpty($rest)) { return $null }
+    $components = $rest.Split('\')
+    foreach ($component in $components) {
+        if ([string]::IsNullOrEmpty($component) -or $component -eq '.' -or $component -eq '..') { return $null }
+        if ($component.EndsWith('.') -or $component.EndsWith(' ') -or ($component -match '[<>":|?*]')) { return $null }
+        if (Test-DosDeviceComponent $component) { return $null }
+    }
+    try {
+        $fullTranscript = [System.IO.Path]::GetFullPath($path)
+        if ($fullTranscript.Length -gt 4096 -or [System.IO.Path]::GetPathRoot($fullTranscript).Length -ne 3) { return $null }
+        $base = $fullTranscript.Substring(0, $fullTranscript.Length - 6)
+        if ([string]::IsNullOrEmpty($base)) { return $null }
+        $expectedDir = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($base, 'subagents'))
+        $candidate = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($expectedDir, ('agent-' + $Id + '.meta.json')))
+    } catch { return $null }
+    if ($expectedDir.Length -gt 4096 -or $candidate.Length -gt 4096) { return $null }
+    if (-not [System.IO.Path]::GetDirectoryName($candidate).Equals($expectedDir, [System.StringComparison]::OrdinalIgnoreCase)) { return $null }
+    if (-not (Test-PathInside $candidate $expectedDir) -or $candidate.Equals($expectedDir, [System.StringComparison]::OrdinalIgnoreCase)) { return $null }
+    if (-not (Test-NoReparseComponents $fullTranscript) -or -not (Test-NoReparseComponents $expectedDir) -or -not (Test-NoReparseComponents $candidate)) { return $null }
+    return $candidate
+}
+
+function Get-SubagentRole([string]$Transcript, [string]$Id) {
+    $path = Get-SubagentSidecarPath $Transcript $Id
+    if ([string]::IsNullOrEmpty($path)) { return '' }
+    $text = Read-BoundedStrictUtf8RegularFile $path 65536
+    if ($null -eq $text) { return '' }
+    $parsed = Read-StrictJsonStream $text
+    if (-not $parsed.Success -or $parsed.Count -ne 1 -or $null -eq $parsed.Last -or $parsed.Last.Kind -cne 'object') { return '' }
+    $roleResult = Convert-StrictJsonScalar (Get-StrictJsonMember $parsed.Last 'agentType') 16384
+    if (-not $roleResult.Valid -or $roleResult.Value -notmatch '\A[A-Za-z0-9._:]+\z') { return '' }
+    return [string]$roleResult.Value
+}
+
+function Get-SubagentModelShort([string]$Model) {
+    if (-not $Model.StartsWith('claude-', [System.StringComparison]::Ordinal)) { return $Model }
+    $value = $Model.Substring(7)
+    if ($value -match '-[0-9]{8}\z') { $value = $value.Substring(0, $value.Length - 9) }
+    $dash = $value.IndexOf('-')
+    if ($dash -le 0 -or $dash -ge ($value.Length - 1)) { return $Model }
+    $family = $value.Substring(0, $dash)
+    $version = $value.Substring($dash + 1)
+    if ($version -notmatch '\A[0-9-]+\z') { return $Model }
+    switch -CaseSensitive ($family) {
+        'fable' { $family = 'Fable'; break }
+        'opus' { $family = 'Opus'; break }
+        'sonnet' { $family = 'Sonnet'; break }
+        'haiku' { $family = 'Haiku'; break }
+        default { return $Model }
+    }
+    return $family + ' ' + $version.Replace('-', '.')
+}
+
+function Try-SubagentUnsigned([string]$Raw, [ref]$Value) {
+    if ($Raw -notmatch '\A[0-9]{1,16}\z') { return $false }
+    $parsed = 0L
+    if (-not [long]::TryParse($Raw, $IntegerStyle, $Invariant, [ref]$parsed) -or $parsed -gt 9999999999999999L) { return $false }
+    $Value.Value = $parsed
+    return $true
+}
+
+function Get-SubagentEpoch([string]$Raw) {
+    if ($Raw -match '\A[0-9]{1,16}\z') {
+        $value = 0L
+        if (-not [long]::TryParse($Raw, $IntegerStyle, $Invariant, [ref]$value)) { return $null }
+        if ($Raw.Length -ge 13) {
+            $unused = 0L
+            $value = [Math]::DivRem($value, 1000L, [ref]$unused)
+        }
+        if ($value -lt 0 -or $value -gt 253402300799L) { return $null }
+        return $value
+    }
+    # Canonical grammar is YYYY-MM-DDTHH:mm:ss[.digits]Z. Fractions are
+    # validated but intentionally discarded because elapsed renders seconds.
+    if ($Raw -cnotmatch '\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?Z\z') { return $null }
+    $year = 0
+    $month = 0
+    $day = 0
+    $hour = 0
+    $minute = 0
+    $second = 0
+    if (
+        -not [int]::TryParse($Raw.Substring(0, 4), $IntegerStyle, $Invariant, [ref]$year) -or
+        -not [int]::TryParse($Raw.Substring(5, 2), $IntegerStyle, $Invariant, [ref]$month) -or
+        -not [int]::TryParse($Raw.Substring(8, 2), $IntegerStyle, $Invariant, [ref]$day) -or
+        -not [int]::TryParse($Raw.Substring(11, 2), $IntegerStyle, $Invariant, [ref]$hour) -or
+        -not [int]::TryParse($Raw.Substring(14, 2), $IntegerStyle, $Invariant, [ref]$minute) -or
+        -not [int]::TryParse($Raw.Substring(17, 2), $IntegerStyle, $Invariant, [ref]$second)
+    ) { return $null }
+    if ($month -lt 1 -or $month -gt 12 -or $hour -gt 23 -or $minute -gt 59 -or $second -gt 59) { return $null }
+    $monthDays = @(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    if (($year % 4) -eq 0 -and (($year % 100) -ne 0 -or ($year % 400) -eq 0)) {
+        $monthDays[1] = 29
+    }
+    if ($day -lt 1 -or $day -gt $monthDays[$month - 1]) { return $null }
+
+    $shiftedYear = [long]$year
+    if ($month -le 2) { $shiftedYear-- }
+    $eraNumerator = $shiftedYear
+    if ($shiftedYear -lt 0) { $eraNumerator -= 399L }
+    $unused = 0L
+    $era = [Math]::DivRem($eraNumerator, 400L, [ref]$unused)
+    $yearOfEra = $shiftedYear - ($era * 400L)
+    $adjustedMonth = [long]$month + 9L
+    if ($month -gt 2) { $adjustedMonth = [long]$month - 3L }
+    $dayOfYear = [Math]::DivRem((153L * $adjustedMonth) + 2L, 5L, [ref]$unused) + [long]$day - 1L
+    $quarters = [Math]::DivRem($yearOfEra, 4L, [ref]$unused)
+    $centuries = [Math]::DivRem($yearOfEra, 100L, [ref]$unused)
+    $dayOfEra = ($yearOfEra * 365L) + $quarters - $centuries + $dayOfYear
+    $days = ($era * 146097L) + $dayOfEra - 719468L
+    $epoch = ($days * 86400L) + ([long]$hour * 3600L) + ([long]$minute * 60L) + [long]$second
+    if ($epoch -gt 253402300799L) { return $null }
+    return $epoch
+}
+
+function Format-SubagentDuration([long]$Seconds) {
+    $hours = [Math]::Floor($Seconds / 3600)
+    $minutes = [Math]::Floor(($Seconds % 3600) / 60)
+    $secondsLeft = $Seconds % 60
+    if ($hours -gt 0) { return ('{0}h{1:00}m{2:00}s' -f $hours, $minutes, $secondsLeft) }
+    if ($minutes -gt 0) { return ('{0}m{1:00}s' -f $minutes, $secondsLeft) }
+    return "${Seconds}s"
+}
+
+function Add-SubagentSegment(
+    [System.Collections.Generic.List[string]]$Backgrounds,
+    [System.Collections.Generic.List[string]]$Texts,
+    [string]$Background,
+    [string]$Text
+) {
+    [void]$Backgrounds.Add($Background)
+    [void]$Texts.Add($Text)
+}
+
+function Render-SubagentSegments(
+    [System.Collections.Generic.List[string]]$Backgrounds,
+    [System.Collections.Generic.List[string]]$Texts
+) {
+    if ($Backgrounds.Count -eq 0) { return '' }
+    if ($Cfg.VL_STYLE -ceq 'lean') {
+        $leanBackground = ''
+        if (-not [string]::IsNullOrEmpty([string]$Cfg.VL_LEAN_BG)) { $leanBackground = Get-Bg $Cfg.VL_LEAN_BG }
+        $out = ''
+        if (-not [string]::IsNullOrEmpty($leanBackground) -and -not [string]::IsNullOrEmpty([string]$Cfg.VL_LEAN_CAP_L)) {
+            $out = $Rst + (Get-Fg $Cfg.VL_LEAN_BG) + $Cfg.VL_LEAN_CAP_L
+        }
+        for ($i = 0; $i -lt $Backgrounds.Count; $i++) {
+            $out += $Rst + $leanBackground + (Get-Fg $Backgrounds[$i]) + $Texts[$i]
+            if ($i -lt ($Backgrounds.Count - 1)) { $out += $Rst + $leanBackground + $Cfg.VL_LEAN_SEP }
+        }
+        if (-not [string]::IsNullOrEmpty($leanBackground) -and -not [string]::IsNullOrEmpty([string]$Cfg.VL_LEAN_CAP_R)) {
+            $out += $Rst + (Get-Fg $Cfg.VL_LEAN_BG) + $Cfg.VL_LEAN_CAP_R
+        }
+        return $out + $Rst
+    }
+    $out = $Rst + (Get-Fg $Backgrounds[0]) + $Cfg.VL_CAP_L
+    for ($i = 0; $i -lt $Backgrounds.Count; $i++) {
+        $out += (Get-Bg $Backgrounds[$i]) + $Texts[$i]
+        if ($i -lt ($Backgrounds.Count - 1)) {
+            $out += (Get-Bg $Backgrounds[$i + 1]) + (Get-Fg $Backgrounds[$i]) + $Cfg.VL_SEP
+        }
+    }
+    return $out + $Rst + (Get-Fg $Backgrounds[$Backgrounds.Count - 1]) + $Cfg.VL_CAP_R + $Rst
+}
+
+function Invoke-SubagentMode([string]$InputText) {
+    $stream = Read-StrictJsonStream $InputText
+    if (-not $stream.Success -or $null -eq $stream.Last -or $stream.Last.Kind -cne 'object') { return }
+    $tasks = Get-StrictJsonMember $stream.Last 'tasks'
+    if ($null -eq $tasks -or $tasks.Kind -cne 'array' -or $tasks.Value.Count -gt 1024) { return }
+    $transcriptResult = Convert-StrictJsonScalar (Get-StrictJsonMember $stream.Last 'transcript_path') 16384
+    $transcript = ''
+    if ($transcriptResult.Valid -and $transcriptResult.Value.Length -le 4096) { $transcript = [string]$transcriptResult.Value }
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+
+    foreach ($task in $tasks.Value) {
+        if ($null -eq $task -or $task.Kind -cne 'object') { continue }
+        $idResult = Convert-StrictJsonScalar (Get-StrictJsonMember $task 'id') 16384
+        if (-not $idResult.Valid -or [string]::IsNullOrEmpty([string]$idResult.Value)) { continue }
+        $id = [string]$idResult.Value
+        $fields = @{}
+        foreach ($fieldName in @('name','label','description','type','status','startTime','model','contextWindowSize','tokenCount')) {
+            $result = Convert-StrictJsonScalar (Get-StrictJsonMember $task $fieldName) 16384
+            if ($result.Valid) { $fields[$fieldName] = [string]$result.Value } else { $fields[$fieldName] = '' }
+        }
+        $role = ''
+        if ($fields.type -ceq 'local_agent') { $role = Get-SubagentRole $transcript $id }
+        $backgrounds = New-Object 'System.Collections.Generic.List[string]'
+        $texts = New-Object 'System.Collections.Generic.List[string]'
+        $segmentList = [string]$Cfg.VL_SUB_SEGMENTS
+        $segmentNames = @()
+        if (-not [string]::IsNullOrWhiteSpace($segmentList)) { $segmentNames = @([regex]::Split($segmentList.Trim(), '\s+')) }
+
+        foreach ($segmentName in $segmentNames) {
+            switch -CaseSensitive ($segmentName) {
+                'name' {
+                    $identity = if (-not [string]::IsNullOrEmpty($fields.name)) { $fields.name } else { $role }
+                    $detail = if (-not [string]::IsNullOrEmpty($fields.label)) { $fields.label } else { $fields.description }
+                    if (-not [string]::IsNullOrEmpty($fields.name) -and -not [string]::IsNullOrEmpty($role) -and $fields.name -cne $role) {
+                        $identity = $fields.name + ' (' + $role + ')'
+                    }
+                    if (-not [string]::IsNullOrEmpty($identity)) {
+                        $label = $identity
+                        if (-not [string]::IsNullOrEmpty($detail) -and $detail -cne $fields.name -and $detail -cne $role) { $label += ' ' + [char]0x00B7 + ' ' + $detail }
+                    } elseif (-not [string]::IsNullOrEmpty($detail)) { $label = $detail }
+                    else { $label = $fields.type }
+                    if ([string]::IsNullOrEmpty($label)) { break }
+                    switch -CaseSensitive ($fields.status) {
+                        { $_ -ceq 'running' -or $_ -ceq 'in_progress' -or $_ -ceq 'active' } {
+                            $color = if ([string]::IsNullOrEmpty([string]$Cfg.VL_FG_SUB_TEXT)) { $Cfg.VL_FG_TEXT } else { $Cfg.VL_FG_SUB_TEXT }
+                            break
+                        }
+                        { $_ -ceq 'completed' -or $_ -ceq 'success' -or $_ -ceq 'done' } {
+                            $color = if ([string]::IsNullOrEmpty([string]$Cfg.VL_FG_SUB_OK)) { $Cfg.VL_FG_OK } else { $Cfg.VL_FG_SUB_OK }
+                            break
+                        }
+                        { $_ -ceq 'failed' -or $_ -ceq 'error' -or $_ -ceq 'cancelled' } {
+                            $color = if ([string]::IsNullOrEmpty([string]$Cfg.VL_FG_SUB_HOT)) { $Cfg.VL_FG_HOT } else { $Cfg.VL_FG_SUB_HOT }
+                            break
+                        }
+                        default { $color = if ([string]::IsNullOrEmpty([string]$Cfg.VL_FG_SUB_DIM)) { $Cfg.VL_FG_DIM } else { $Cfg.VL_FG_SUB_DIM } }
+                    }
+                    $shown = Get-Trunc $label ([int]$Cfg.VL_NAME_MAX)
+                    $background = if ([string]::IsNullOrEmpty([string]$Cfg.VL_BG_SUB_NAME)) { $Cfg.VL_BG_DIR } else { $Cfg.VL_BG_SUB_NAME }
+                    Add-SubagentSegment $backgrounds $texts $background ($Bold + (Get-Fg $color) + ' ' + $shown + ' ' + $Norm)
+                    break
+                }
+                'model' {
+                    if ([string]::IsNullOrEmpty($fields.model)) { break }
+                    $background = if ([string]::IsNullOrEmpty([string]$Cfg.VL_BG_SUB_MODEL)) { $Cfg.VL_BG_MODEL } else { $Cfg.VL_BG_SUB_MODEL }
+                    Add-SubagentSegment $backgrounds $texts $background ($Bold + (Get-Fg $Cfg.VL_FG_TEXT) + ' ' + $G.Diamond + ' ' + (Get-SubagentModelShort $fields.model) + ' ' + $Norm)
+                    break
+                }
+                'ctx' {
+                    $token = 0L
+                    if (-not (Try-SubagentUnsigned $fields.tokenCount ([ref]$token))) { break }
+                    $tokenText = Format-Tok ($token.ToString($Invariant))
+                    $window = 0L
+                    $background = if ([string]::IsNullOrEmpty([string]$Cfg.VL_BG_SUB_CTX)) { $Cfg.VL_BG_CTX } else { $Cfg.VL_BG_SUB_CTX }
+                    if ((Try-SubagentUnsigned $fields.contextWindowSize ([ref]$window)) -and $window -gt 0) {
+                        $percentage = [long][Math]::Floor(($token * 100L) / $window)
+                        if ($percentage -gt 100) { $percentage = 100 }
+                        $bar = New-Bar ([int]$percentage) ([int]$Cfg.VL_BAR_WIDTH)
+                        Add-SubagentSegment $backgrounds $texts $background ((Get-Fg (Get-PctFg ([int]$percentage))) + ' ' + $Cfg.VL_CTX_GLYPH + ' ' + $bar + ' ' + $percentage + '% ' + (Get-Fg $Cfg.VL_FG_DIM) + $tokenText + ' ')
+                    } else {
+                        Add-SubagentSegment $backgrounds $texts $background ((Get-Fg $Cfg.VL_FG_DIM) + ' ' + $Cfg.VL_CTX_GLYPH + ' ' + $tokenText + ' ')
+                    }
+                    break
+                }
+                'elapsed' {
+                    if ([string]::IsNullOrEmpty($fields.startTime)) { break }
+                    $epoch = Get-SubagentEpoch $fields.startTime
+                    if ($null -eq $epoch -or $epoch -gt $now) { break }
+                    $background = if ([string]::IsNullOrEmpty([string]$Cfg.VL_BG_SUB_ELAPSED)) { $Cfg.VL_BG_DURATION } else { $Cfg.VL_BG_SUB_ELAPSED }
+                    Add-SubagentSegment $backgrounds $texts $background ((Get-Fg $Cfg.VL_FG_TEXT) + ' ' + [char]0x29D6 + ' ' + (Format-SubagentDuration ($now - [long]$epoch)) + ' ')
+                    break
+                }
+            }
+        }
+        if ($backgrounds.Count -eq 0) { continue }
+        $content = Render-SubagentSegments $backgrounds $texts
+        try { if ($StrictUtf8.GetByteCount($content) -gt 65536) { continue } } catch { continue }
+        $line = '{"id":' + (ConvertTo-StrictJsonString $id) + ',"content":' + (ConvertTo-StrictJsonString $content) + '}'
+        try { if (($StrictUtf8.GetByteCount($line) + 1) -gt 524288) { continue } } catch { continue }
+        [void]$lines.Add($line)
+    }
+    foreach ($line in $lines) { $OutputWriter.WriteLine($line) }
+}
+
+if ($SubagentMode) {
+    try { Invoke-SubagentMode $rawInput } catch { }
+    $OutputWriter.Flush()
+    $OutputWriter.Dispose()
+    exit 0
 }
 
 function ConvertTo-Epoch([string]$Raw) {

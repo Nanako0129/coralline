@@ -15,7 +15,7 @@ $Installer = Join-Path $Repo 'install.ps1'
 $PowerShellExe = (Get-Process -Id $PID).Path
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $StrictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
-$TempRoot = Join-Path ([IO.Path]::GetTempPath()) ('coralline install 測試 & (ps51)-' + [guid]::NewGuid().ToString('N'))
+$TempRoot = Join-Path ([IO.Path]::GetTempPath()) ('c 雪&(p)-' + [guid]::NewGuid().ToString('N'))
 $script:Pass = 0
 $script:Fail = 0
 $script:Blocked = 0
@@ -144,8 +144,13 @@ function Invoke-CapturedProcess(
     }
 }
 
-function Invoke-Installer([string]$Source, [string]$Install, [string]$Settings) {
-    $arguments = @(
+function Invoke-Installer(
+    [string]$Source,
+    [string]$Install,
+    [string]$Settings,
+    [string]$SubagentRows = ''
+) {
+    $argumentParts = @(
         '-NoLogo',
         '-NoProfile',
         '-NonInteractive',
@@ -154,7 +159,11 @@ function Invoke-Installer([string]$Source, [string]$Install, [string]$Settings) 
         '-SourceDirectory ' + (Quote-ProcessArgument $Source),
         '-InstallRoot ' + (Quote-ProcessArgument $Install),
         '-SettingsPath ' + (Quote-ProcessArgument $Settings)
-    ) -join ' '
+    )
+    if (-not [string]::IsNullOrEmpty($SubagentRows)) {
+        $argumentParts += '-SubagentRows ' + (Quote-ProcessArgument $SubagentRows)
+    }
+    $arguments = $argumentParts -join ' '
     $environment = @{
         CORALLINE_REPO = 'must-not-be-read'
         CORALLINE_REF = 'must-not-be-read'
@@ -212,6 +221,16 @@ function Get-DesiredValue([string]$Install) {
         ',"refreshInterval":1}'
 }
 
+function Get-DesiredSubagentCommand([string]$Install) {
+    return (Get-DesiredCommand $Install) + ' --subagent'
+}
+
+function Get-DesiredSubagentValue([string]$Install) {
+    return '{"type":"command","command":' +
+        (ConvertTo-TestJsonString (Get-DesiredSubagentCommand $Install)) +
+        '}'
+}
+
 function Get-FileSha256([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
 }
@@ -260,12 +279,16 @@ function Get-BackupCount([string]$Directory, [string]$Pattern) {
     return @([IO.Directory]::GetFileSystemEntries($Directory, $Pattern)).Count
 }
 
-function Test-InvalidSettings([string]$Name, [string]$Text) {
+function Test-InvalidSettings(
+    [string]$Name,
+    [string]$Text,
+    [string]$SubagentRows = ''
+) {
     $paths = New-Paths ('invalid-' + $Name)
     [void][IO.Directory]::CreateDirectory($paths.Claude)
     Write-Utf8 $paths.Settings $Text
     $before = [IO.File]::ReadAllBytes($paths.Settings)
-    $run = Invoke-Installer $Repo $paths.Install $paths.Settings
+    $run = Invoke-Installer $Repo $paths.Install $paths.Settings $SubagentRows
     Check "$Name rejected" (-not $run.TimedOut -and $run.ExitCode -ne 0)
     Check "$Name settings unchanged" (
         [Convert]::ToBase64String($before) -ceq
@@ -378,6 +401,7 @@ try {
     )
 
     $desiredCommand = Get-DesiredCommand $main.Install
+    $desiredSubagentCommand = Get-DesiredSubagentCommand $main.Install
     $desiredValue = Get-DesiredValue $main.Install
     $settingsText = $StrictUtf8.GetString([IO.File]::ReadAllBytes($main.Settings))
     Check 'lossless raw settings merge' ($settingsText -ceq ($prefix + $desiredValue + $suffix))
@@ -396,6 +420,9 @@ try {
     Check 'settings command exact absolute trusted executable' ($managedObject.command -ceq $desiredCommand)
     Check 'settings command contains Bypass' ($managedObject.command.Contains('-ExecutionPolicy Bypass'))
     Check 'settings refreshInterval 1' ($managedObject.refreshInterval -eq 1)
+    Check 'ordinary install preserves missing subagent target' (
+        -not $settingsText.Contains('"subagentStatusLine"')
+    )
     Check 'config hash preserved' ((Get-FileSha256 $main.Config) -ceq $configHash)
 
     $preservedFiles = @(
@@ -515,6 +542,285 @@ try {
     Check 'fresh missing-settings install exit 0' ($noConfigRun.ExitCode -eq 0)
     Check 'installer never creates config' (-not [IO.File]::Exists($noConfig.Config))
     Check 'new settings has no backup' ((Get-BackupCount $noConfig.Claude 'settings.json.bak.*') -eq 0)
+    Check 'missing-settings default creates only main statusLine' (
+        $StrictUtf8.GetString([IO.File]::ReadAllBytes($noConfig.Settings)) -ceq
+        ('{"statusLine":' + (Get-DesiredValue $noConfig.Install) + '}')
+    )
+
+    $preserve = New-Paths 'subagent-preserve'
+    [void][IO.Directory]::CreateDirectory($preserve.Claude)
+    $preserveCustom = '{"owner":"user","refreshInterval":17}'
+    $preserveText = (
+        '{"statusLine":' + (Get-DesiredValue $preserve.Install) +
+        ',"subagentStatusLine":' + $preserveCustom +
+        ',"nested":{"subagentStatusLine":{"keep":"nested"}}}'
+    )
+    Write-Utf8 $preserve.Settings $preserveText
+    $preserveFirst = Invoke-Installer $Repo $preserve.Install $preserve.Settings
+    Check 'default preserve installs runtime' ($preserveFirst.ExitCode -eq 0)
+    Check 'default preserve keeps exact custom and nested subagent bytes' (
+        $StrictUtf8.GetString([IO.File]::ReadAllBytes($preserve.Settings)) -ceq $preserveText
+    )
+    Check 'runtime-only preserve creates no settings backup' (
+        (Get-BackupCount $preserve.Claude 'settings.json.bak.*') -eq 0
+    )
+    $preserveSnapshot = Get-ManagedSnapshot $preserve.Install $preserve.Settings
+    $preserveBackups = Get-BackupCount $preserve.Claude 'settings.json.bak.*'
+    Start-Sleep -Milliseconds 1200
+    $preserveSecond = Invoke-Installer (
+        $Repo
+    ) $preserve.Install $preserve.Settings 'preserve'
+    Check 'explicit preserve idempotent rerun reports no-op' (
+        $preserveSecond.ExitCode -eq 0 -and
+        $preserveSecond.Stdout -ceq "coralline is already up to date.`r`n"
+    )
+    Check 'explicit preserve rerun keeps settings and runtime timestamps' (
+        Test-SnapshotsEqual $preserveSnapshot (
+            Get-ManagedSnapshot $preserve.Install $preserve.Settings
+        )
+    )
+    Check 'explicit preserve rerun creates no backup' (
+        (Get-BackupCount $preserve.Claude 'settings.json.bak.*') -eq $preserveBackups
+    )
+
+    $variant = New-Paths 'subagent-case-variant'
+    [void][IO.Directory]::CreateDirectory($variant.Claude)
+    $variantText = (
+        '{"statusLine":' + (Get-DesiredValue $variant.Install) +
+        ',"SubagentStatus\u004cine":{"variant":"keep"},' +
+        '"nested":{"subagentStatusLine":{"keep":"nested"}}}'
+    )
+    Write-Utf8 $variant.Settings $variantText
+    $variantPreserve = Invoke-Installer (
+        $Repo
+    ) $variant.Install $variant.Settings 'preserve'
+    Check 'single decoded case variant preserve exit 0' ($variantPreserve.ExitCode -eq 0)
+    Check 'single decoded case variant preserve keeps exact bytes' (
+        $StrictUtf8.GetString([IO.File]::ReadAllBytes($variant.Settings)) -ceq $variantText
+    )
+    $variantOff = Invoke-Installer $Repo $variant.Install $variant.Settings 'off'
+    Check 'off ignores case variant and nested exact target' (
+        $variantOff.ExitCode -eq 0 -and
+        $variantOff.Stdout -ceq "coralline is already up to date.`r`n" -and
+        $StrictUtf8.GetString([IO.File]::ReadAllBytes($variant.Settings)) -ceq $variantText
+    )
+    $variantSnapshot = Get-ManagedSnapshot $variant.Install $variant.Settings
+    $variantBackups = Get-BackupCount $variant.Claude 'settings.json.bak.*'
+    $variantOn = Invoke-Installer $Repo $variant.Install $variant.Settings 'on'
+    Check 'on rejects a case variant instead of creating an ambiguous pair' (
+        $variantOn.ExitCode -ne 0 -and
+        $variantOn.Stderr.Contains('case-variant subagentStatusLine')
+    )
+    Check 'case-variant on rejection mutates no settings or runtime' (
+        Test-SnapshotsEqual $variantSnapshot (
+            Get-ManagedSnapshot $variant.Install $variant.Settings
+        )
+    )
+    Check 'case-variant on rejection creates no backup' (
+        (Get-BackupCount $variant.Claude 'settings.json.bak.*') -eq $variantBackups
+    )
+
+    $upperMode = New-Paths 'subagent-uppercase-mode'
+    $upperModeRun = Invoke-Installer (
+        $Repo
+    ) $upperMode.Install $upperMode.Settings 'ON'
+    Check 'SubagentRows values are exact lowercase' (
+        $upperModeRun.ExitCode -ne 0 -and
+        $upperModeRun.Stderr.Contains('SubagentRows')
+    )
+    Check 'invalid SubagentRows mode mutates nothing' (
+        -not [IO.Directory]::Exists($upperMode.Install) -and
+        -not [IO.File]::Exists($upperMode.Settings) -and
+        (Get-BackupCount $upperMode.Claude '*.bak.*') -eq 0
+    )
+
+    $onMissing = New-Paths 'subagent-on-missing-settings'
+    $onMissingRun = Invoke-Installer (
+        $Repo
+    ) $onMissing.Install $onMissing.Settings 'on'
+    $onMissingText = $StrictUtf8.GetString([IO.File]::ReadAllBytes($onMissing.Settings))
+    $onMissingExpected = (
+        '{"statusLine":' + (Get-DesiredValue $onMissing.Install) +
+        ',"subagentStatusLine":' + (Get-DesiredSubagentValue $onMissing.Install) + '}'
+    )
+    Check 'subagent on missing settings exit 0' ($onMissingRun.ExitCode -eq 0)
+    Check 'subagent on missing settings creates both managed members once' (
+        $onMissingText -ceq $onMissingExpected
+    )
+    $onMissingObject = $onMissingText | ConvertFrom-Json
+    $onMissingProperties = @(
+        $onMissingObject.PSObject.Properties |
+            Where-Object { $_.Name -ceq 'subagentStatusLine' }
+    )
+    $onMissingSubagent = $null
+    if ($onMissingProperties.Count -eq 1) {
+        $onMissingSubagent = $onMissingProperties[0].Value
+    }
+    $onMissingNames = @()
+    $onMissingCommand = ''
+    $onMissingType = ''
+    if ($null -ne $onMissingSubagent) {
+        $onMissingNames = @($onMissingSubagent.PSObject.Properties.Name | Sort-Object)
+        $onMissingCommand = [string]$onMissingSubagent.command
+        $onMissingType = [string]$onMissingSubagent.type
+    }
+    $expectedPowerShell = [IO.Path]::GetFullPath((Join-Path $PSHOME 'powershell.exe'))
+    $expectedRenderer = [IO.Path]::GetFullPath((Join-Path $onMissing.Install 'statusline.ps1'))
+    Check 'subagent command object has exactly type and command' (
+        ($onMissingNames -join ',') -ceq 'command,type' -and
+        $onMissingType -ceq 'command'
+    )
+    Check 'subagent command has no refreshInterval or extra properties' (
+        $onMissingNames.Count -eq 2 -and
+        -not ($onMissingNames -contains 'refreshInterval')
+    )
+    Check 'subagent command is exact native absolute command' (
+        $onMissingCommand -ceq (Get-DesiredSubagentCommand $onMissing.Install) -and
+        $onMissingCommand.StartsWith(
+            '"' + $expectedPowerShell + '" ',
+            [StringComparison]::Ordinal
+        ) -and
+        $onMissingCommand.Contains('-File "' + $expectedRenderer + '"')
+    )
+    Check 'subagent command appends literal --subagent' (
+        $onMissingCommand.EndsWith(' --subagent', [StringComparison]::Ordinal)
+    )
+    Check 'new settings with explicit on has no displaced-file backup' (
+        (Get-BackupCount $onMissing.Claude 'settings.json.bak.*') -eq 0
+    )
+    $onMissingSnapshot = Get-ManagedSnapshot $onMissing.Install $onMissing.Settings
+    $onMissingBackups = Get-BackupCount $onMissing.Claude 'settings.json.bak.*'
+    Start-Sleep -Milliseconds 1200
+    $onMissingSecond = Invoke-Installer (
+        $Repo
+    ) $onMissing.Install $onMissing.Settings 'on'
+    Check 'subagent on idempotent rerun reports no-op' (
+        $onMissingSecond.ExitCode -eq 0 -and
+        $onMissingSecond.Stdout -ceq "coralline is already up to date.`r`n"
+    )
+    Check 'subagent on idempotent rerun preserves timestamps' (
+        Test-SnapshotsEqual $onMissingSnapshot (
+            Get-ManagedSnapshot $onMissing.Install $onMissing.Settings
+        )
+    )
+    Check 'subagent on idempotent rerun creates no backup' (
+        (Get-BackupCount $onMissing.Claude 'settings.json.bak.*') -eq $onMissingBackups
+    )
+
+    $combined = New-Paths 'subagent-combined-plan'
+    [void][IO.Directory]::CreateDirectory($combined.Claude)
+    $combinedBefore = (
+        '{' + "`r`n" +
+        '  "statusLine": {"old":"main"},' + "`r`n" +
+        '  "subagentStatusLine": {"old":"sub","refreshInterval":88},' + "`r`n" +
+        '  "nested": {"subagentStatusLine":{"keep":true}}' + "`r`n" +
+        '}' + "`r`n"
+    )
+    Write-Utf8 $combined.Settings $combinedBefore
+    $combinedBeforeBytes = [IO.File]::ReadAllBytes($combined.Settings)
+    $combinedRun = Invoke-Installer $Repo $combined.Install $combined.Settings 'on'
+    $combinedExpected = (
+        '{' + "`r`n" +
+        '  "statusLine": ' + (Get-DesiredValue $combined.Install) + ',' + "`r`n" +
+        '  "subagentStatusLine": ' + (Get-DesiredSubagentValue $combined.Install) + ',' + "`r`n" +
+        '  "nested": {"subagentStatusLine":{"keep":true}}' + "`r`n" +
+        '}' + "`r`n"
+    )
+    $combinedBackups = @(
+        [IO.Directory]::GetFiles($combined.Claude, 'settings.json.bak.*')
+    )
+    Check 'combined main and subagent update exit 0' ($combinedRun.ExitCode -eq 0)
+    Check 'combined main and subagent values use one lossless plan' (
+        $StrictUtf8.GetString([IO.File]::ReadAllBytes($combined.Settings)) -ceq
+        $combinedExpected
+    )
+    Check 'combined settings change creates exactly one backup' ($combinedBackups.Count -eq 1)
+    Check 'combined settings backup contains both original values' (
+        $combinedBackups.Count -eq 1 -and
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($combinedBackups[0])) -ceq
+        [Convert]::ToBase64String($combinedBeforeBytes)
+    )
+
+    $offCases = @(
+        [pscustomobject]@{
+            Name = 'sole'
+            Before = "{`r`n  `"subagentStatusLine`" : {`"old`":1}`t`r`n}`n"
+            Expected = "{`r`n  `t`r`n`"statusLine`":__STATUS__}`n"
+        },
+        [pscustomobject]@{
+            Name = 'first'
+            Before = (
+                '{"subagentStatusLine":1 ' + "`t" + ',' + "`r`n" +
+                '  "keep":true,"statusLine":__STATUS__}'
+            )
+            Expected = "{`r`n  `"keep`":true,`"statusLine`":__STATUS__}"
+        },
+        [pscustomobject]@{
+            Name = 'middle'
+            Before = (
+                '{"keep":1, ' + "`r`n" +
+                '"subagentStatus\u004cine":2,' + "`t" + '"statusLine":__STATUS__}'
+            )
+            Expected = (
+                '{"keep":1, ' + "`r`n" + "`t" + '"statusLine":__STATUS__}'
+            )
+        },
+        [pscustomobject]@{
+            Name = 'last'
+            Before = (
+                '{"keep":1,"statusLine":__STATUS__ ' + "`t" + ',' + "`r`n" +
+                ' "subagentStatusLine":2 ' + "`r`n" + '}'
+            )
+            Expected = (
+                '{"keep":1,"statusLine":__STATUS__ ' + "`t" + ' ' + "`r`n" + '}'
+            )
+        }
+    )
+    foreach ($offCase in $offCases) {
+        $off = New-Paths ('subagent-off-' + $offCase.Name)
+        [void][IO.Directory]::CreateDirectory($off.Claude)
+        $caseDesired = Get-DesiredValue $off.Install
+        $caseBefore = ([string]$offCase.Before).Replace('__STATUS__', $caseDesired)
+        $caseExpected = ([string]$offCase.Expected).Replace('__STATUS__', $caseDesired)
+        Write-Utf8 $off.Settings $caseBefore
+        $caseRun = Invoke-Installer $Repo $off.Install $off.Settings 'off'
+        $caseActual = $StrictUtf8.GetString([IO.File]::ReadAllBytes($off.Settings))
+        $caseValid = $false
+        $caseExactAbsent = $false
+        try {
+            $caseObject = $caseActual | ConvertFrom-Json
+            $caseValid = $null -ne $caseObject
+            $caseExactAbsent = @(
+                $caseObject.PSObject.Properties |
+                    Where-Object { $_.Name -ceq 'subagentStatusLine' }
+            ).Count -eq 0
+        } catch {}
+        Check ('subagent off ' + $offCase.Name + ' exit 0') ($caseRun.ExitCode -eq 0)
+        Check ('subagent off ' + $offCase.Name + ' preserves lossless separators') (
+            $caseActual -ceq $caseExpected
+        )
+        Check ('subagent off ' + $offCase.Name + ' leaves valid JSON') (
+            $caseValid -and $caseExactAbsent
+        )
+        if ($offCase.Name -ceq 'last') {
+            $offSnapshot = Get-ManagedSnapshot $off.Install $off.Settings
+            $offBackups = Get-BackupCount $off.Claude 'settings.json.bak.*'
+            Start-Sleep -Milliseconds 1200
+            $offSecond = Invoke-Installer $Repo $off.Install $off.Settings 'off'
+            Check 'subagent off idempotent rerun reports no-op' (
+                $offSecond.ExitCode -eq 0 -and
+                $offSecond.Stdout -ceq "coralline is already up to date.`r`n"
+            )
+            Check 'subagent off idempotent rerun preserves timestamps' (
+                Test-SnapshotsEqual $offSnapshot (
+                    Get-ManagedSnapshot $off.Install $off.Settings
+                )
+            )
+            Check 'subagent off idempotent rerun creates no backup' (
+                (Get-BackupCount $off.Claude 'settings.json.bak.*') -eq $offBackups
+            )
+        }
+    }
 
     $expandedLimit = New-Paths 'expanded-settings-limit'
     $limitPrefix = '{"padding":"'
@@ -527,8 +833,10 @@ try {
     Write-Utf8 $expandedLimit.Settings $limitBuilder.ToString()
     [void]$limitBuilder.Clear()
     $expandedLimitHash = Get-FileSha256 $expandedLimit.Settings
-    $expandedLimitRun = Invoke-Installer $Repo $expandedLimit.Install $expandedLimit.Settings
-    Check 'post-merge settings size limit rejected' ($expandedLimitRun.ExitCode -ne 0)
+    $expandedLimitRun = Invoke-Installer (
+        $Repo
+    ) $expandedLimit.Install $expandedLimit.Settings 'on'
+    Check 'post-merge combined settings size limit rejected' ($expandedLimitRun.ExitCode -ne 0)
     Check 'post-merge size rejection preserves settings bytes' (
         (Get-FileSha256 $expandedLimit.Settings) -ceq $expandedLimitHash
     )
@@ -540,7 +848,10 @@ try {
     )
 
     $bom = New-Paths 'bom-settings'
-    Write-Utf8Bom $bom.Settings '{"keep":"雪","statusLine":null}'
+    $bomCustomSubagent = '{"custom":"保持","refreshInterval":17}'
+    Write-Utf8Bom $bom.Settings (
+        '{"keep":"雪","statusLine":null,"subagentStatusLine":' + $bomCustomSubagent + '}'
+    )
     $bomRun = Invoke-Installer $Repo $bom.Install $bom.Settings
     $bomBytes = [IO.File]::ReadAllBytes($bom.Settings)
     Check 'UTF-8 BOM settings install exit 0' ($bomRun.ExitCode -eq 0)
@@ -550,7 +861,10 @@ try {
     )
     Check 'UTF-8 BOM merge preserves unrelated content' (
         $StrictUtf8.GetString($bomBytes, 3, $bomBytes.Length - 3) -ceq
-        ('{"keep":"雪","statusLine":' + (Get-DesiredValue $bom.Install) + '}')
+        (
+            '{"keep":"雪","statusLine":' + (Get-DesiredValue $bom.Install) +
+            ',"subagentStatusLine":' + $bomCustomSubagent + '}'
+        )
     )
     $bomItem = Get-Item -LiteralPath $bom.Settings
     $bomSnapshot = (Get-FileSha256 $bom.Settings) + ':' + $bomItem.LastWriteTimeUtc.Ticks
@@ -569,10 +883,43 @@ try {
         (Get-BackupCount $bom.Claude 'settings.json.bak.*') -eq $bomBackups
     )
 
+    $bomOn = Invoke-Installer $Repo $bom.Install $bom.Settings 'on'
+    $bomOnBytes = [IO.File]::ReadAllBytes($bom.Settings)
+    Check 'UTF-8 BOM subagent on exit 0' ($bomOn.ExitCode -eq 0)
+    Check 'UTF-8 BOM retained for subagent on' (
+        $bomOnBytes[0] -eq 0xef -and $bomOnBytes[1] -eq 0xbb -and $bomOnBytes[2] -eq 0xbf
+    )
+    Check 'UTF-8 BOM subagent on replaces only exact target value' (
+        $StrictUtf8.GetString($bomOnBytes, 3, $bomOnBytes.Length - 3) -ceq
+        (
+            '{"keep":"雪","statusLine":' + (Get-DesiredValue $bom.Install) +
+            ',"subagentStatusLine":' + (Get-DesiredSubagentValue $bom.Install) + '}'
+        )
+    )
+    $bomOff = Invoke-Installer $Repo $bom.Install $bom.Settings 'off'
+    $bomOffBytes = [IO.File]::ReadAllBytes($bom.Settings)
+    Check 'UTF-8 BOM subagent off exit 0' ($bomOff.ExitCode -eq 0)
+    Check 'UTF-8 BOM retained for subagent off' (
+        $bomOffBytes[0] -eq 0xef -and $bomOffBytes[1] -eq 0xbb -and $bomOffBytes[2] -eq 0xbf
+    )
+    Check 'UTF-8 BOM subagent off removes only exact target member' (
+        $StrictUtf8.GetString($bomOffBytes, 3, $bomOffBytes.Length - 3) -ceq
+        ('{"keep":"雪","statusLine":' + (Get-DesiredValue $bom.Install) + '}')
+    )
+
     Test-InvalidSettings 'malformed' '{"x":'
     Test-InvalidSettings 'null-root' 'null'
     Test-InvalidSettings 'array-root' '[1,2,3]'
     Test-InvalidSettings 'duplicate-exact' '{"statusLine":1,"status\u004cine":2}'
+    Test-InvalidSettings (
+        'subagent-duplicate-exact'
+    ) '{"subagentStatusLine":1,"subagentStatus\u004cine":2}'
+    Test-InvalidSettings (
+        'subagent-case-collision'
+    ) '{"SubagentStatusLine":1,"subagentStatus\u004cine":2}'
+    Test-InvalidSettings (
+        'subagent-case-variant-on'
+    ) '{"SubagentStatus\u004cine":{"keep":true}}' 'on'
 
     . ([scriptblock]::Create((Get-InstallerTransactionFunctions)))
     $script:MaxSettingsBytes = 8MB
@@ -654,7 +1001,9 @@ try {
     $concurrentPlan = [pscustomobject]@{
         Existed = $true
         OriginalBytes = $plannedBytes
-        UpdatedBytes = $Utf8NoBom.GetBytes('{"value":"installer"}')
+        UpdatedBytes = $Utf8NoBom.GetBytes(
+            '{"statusLine":"installer","subagentStatusLine":"installer"}'
+        )
         Changed = $true
     }
     $concurrentBackup = Join-Path $concurrentRoot 'settings.json.bak'
@@ -668,7 +1017,7 @@ try {
     } catch {
         $concurrentRejected = $_.Exception.Message.Contains('before target mutation')
     }
-    Check 'pre-commit concurrent settings change rejected' $concurrentRejected
+    Check 'pre-commit concurrent combined settings change rejected' $concurrentRejected
     Check 'pre-commit concurrent settings bytes preserved' (
         [Convert]::ToBase64String([IO.File]::ReadAllBytes($concurrentSettings)) -ceq
         [Convert]::ToBase64String($concurrentBytes)
@@ -777,7 +1126,9 @@ try {
     $openHandleTemporary = Join-Path $openHandleRoot '.settings.json.tmp'
     $openHandleRestore = Join-Path $openHandleRoot '.settings.json.restore'
     $openHandleOriginal = $Utf8NoBom.GetBytes('{"value":"original"}')
-    $openHandleUpdated = $Utf8NoBom.GetBytes('{"value":"installer"}')
+    $openHandleUpdated = $Utf8NoBom.GetBytes(
+        '{"statusLine":"installer","subagentStatusLine":"installer"}'
+    )
     $openHandleExternal = $Utf8NoBom.GetBytes('{"value":"external-after-commit"}')
     [IO.File]::WriteAllBytes($openHandleSettings, $openHandleOriginal)
     $openHandlePlan = [pscustomobject]@{
@@ -811,7 +1162,7 @@ try {
         [Convert]::ToBase64String([IO.File]::ReadAllBytes($openHandleBackup)) -ceq
         [Convert]::ToBase64String($openHandleExternal)
     )
-    Check 'open settings handle leaves committed settings intact' (
+    Check 'open settings handle leaves combined committed settings intact' (
         [Convert]::ToBase64String([IO.File]::ReadAllBytes($openHandleSettings)) -ceq
         [Convert]::ToBase64String($openHandleUpdated)
     )
@@ -972,7 +1323,9 @@ try {
     )
 
     $settingsFinalPath = Join-Path $TempRoot 'settings-final-validation.json'
-    $settingsFinalExpected = $Utf8NoBom.GetBytes('{"value":"installer"}')
+    $settingsFinalExpected = $Utf8NoBom.GetBytes(
+        '{"statusLine":"installer","subagentStatusLine":"installer"}'
+    )
     $settingsFinalExternal = $Utf8NoBom.GetBytes('{"value":"external-before-success"}')
     [IO.File]::WriteAllBytes($settingsFinalPath, $settingsFinalExternal)
     $settingsFinalRejected = $false
@@ -983,8 +1336,8 @@ try {
     } catch {
         $settingsFinalRejected = $_.Exception.Message.Contains('changed concurrently')
     }
-    Check 'final settings byte validation rejects valid external content' $settingsFinalRejected
-    Check 'final settings byte validation preserves external content' (
+    Check 'final combined settings byte validation rejects valid external content' $settingsFinalRejected
+    Check 'final combined settings byte validation preserves external content' (
         [Convert]::ToBase64String([IO.File]::ReadAllBytes($settingsFinalPath)) -ceq
         [Convert]::ToBase64String($settingsFinalExternal)
     )
@@ -1113,6 +1466,14 @@ try {
         $null -ne $render.Stdout -and $render.StdoutBytes.Length -gt 0
     )
     Check 'registered command cmd.exe E2E no stderr' ($render.StderrBytes.Length -eq 0)
+    $subagentCmdArguments = '/d /s /c "' + $desiredSubagentCommand + '"'
+    $subagentRender = Invoke-CapturedProcess (
+        $env:ComSpec
+    ) $subagentCmdArguments $sample $renderEnvironment $fakeWorkspace 30000
+    Check 'subagent command cmd.exe E2E exit 0' ($subagentRender.ExitCode -eq 0)
+    Check 'subagent command cmd.exe E2E no stderr' (
+        $subagentRender.StderrBytes.Length -eq 0
+    )
     Check 'fake workspace executables never ran' (-not [IO.File]::Exists($marker))
     Check 'fake workspace executable untouched' (
         (Get-FileSha256 (Join-Path $fakeWorkspace 'powershell.exe')) -ceq $fakeExeHash
@@ -1130,7 +1491,10 @@ try {
         $Utf8NoBom
     )
     $runtimeBefore = Get-FileSha256 (Join-Path $rollback.Install 'themes\mono.conf')
-    $rollbackSettingsText = '{"keep":"original","statusLine":null}'
+    $rollbackSettingsText = (
+        '{"keep":"original","statusLine":null,' +
+        '"subagentStatusLine":{"custom":"original"}}'
+    )
     Write-Utf8 $rollback.Settings $rollbackSettingsText
     $rollbackSettingsBytes = [IO.File]::ReadAllBytes($rollback.Settings)
     $lock = [IO.File]::Open(
@@ -1140,7 +1504,9 @@ try {
         [IO.FileShare]::Read
     )
     try {
-        $rollbackRun = Invoke-Installer $rollbackSource $rollback.Install $rollback.Settings
+        $rollbackRun = Invoke-Installer (
+            $rollbackSource
+        ) $rollback.Install $rollback.Settings 'on'
     } finally {
         $lock.Dispose()
     }
@@ -1149,7 +1515,7 @@ try {
     Check 'settings failure restores previous runtime' (
         (Get-FileSha256 (Join-Path $rollback.Install 'themes\mono.conf')) -ceq $runtimeBefore
     )
-    Check 'settings failure leaves settings byte-identical' (
+    Check 'combined settings failure leaves both managed values byte-identical' (
         [Convert]::ToBase64String([IO.File]::ReadAllBytes($rollback.Settings)) -ceq
         [Convert]::ToBase64String($rollbackSettingsBytes)
     )
@@ -1180,7 +1546,7 @@ try {
         $canonicalTemp = [IO.Path]::GetFullPath($TempRoot)
         $canonicalSystemTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
         if ($canonicalTemp.StartsWith($canonicalSystemTemp, [StringComparison]::OrdinalIgnoreCase) -and
-            [IO.Path]::GetFileName($canonicalTemp).StartsWith('coralline install 測試 & (ps51)-')) {
+            [IO.Path]::GetFileName($canonicalTemp).StartsWith('c 雪&(p)-')) {
             Remove-Item -LiteralPath $canonicalTemp -Recurse -Force
         } else {
             [Console]::Error.WriteLine("refusing unexpected test cleanup path: $canonicalTemp")

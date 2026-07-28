@@ -50,7 +50,8 @@ function Invoke-CapturedProcess(
     [string]$InputText,
     [hashtable]$Environment,
     [string]$WorkingDirectory,
-    [int]$TimeoutMs
+    [int]$TimeoutMs,
+    [byte[]]$InputBytes
 ) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $FileName
@@ -75,8 +76,8 @@ function Invoke-CapturedProcess(
         $stderr = New-Object System.IO.MemoryStream
         $outTask = $process.StandardOutput.BaseStream.CopyToAsync($stdout)
         $errTask = $process.StandardError.BaseStream.CopyToAsync($stderr)
-        $inputBytes = $Utf8NoBom.GetBytes($InputText)
-        if ($inputBytes.Length -gt 0) { $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length) }
+        if ($null -eq $InputBytes) { $InputBytes = $Utf8NoBom.GetBytes($InputText) }
+        if ($InputBytes.Length -gt 0) { $process.StandardInput.BaseStream.Write($InputBytes, 0, $InputBytes.Length) }
         $process.StandardInput.Close()
         $timedOut = -not $process.WaitForExit($TimeoutMs)
         if ($timedOut) {
@@ -198,12 +199,60 @@ function Invoke-Statusline(
     return Invoke-CapturedProcess $PowerShellExe $psArgs $Json (Runtime-Environment $ConfigPath $ExtraEnvironment) $Repo $TimeoutMs
 }
 
+function Invoke-StatuslineBytes(
+    [byte[]]$Bytes,
+    [string]$ConfigPath,
+    [hashtable]$ExtraEnvironment,
+    [string]$Arguments,
+    [int]$TimeoutMs
+) {
+    $psArgs = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $Script + '"'
+    if (-not [string]::IsNullOrEmpty($Arguments)) { $psArgs += ' ' + $Arguments }
+    return Invoke-CapturedProcess $PowerShellExe $psArgs '' (Runtime-Environment $ConfigPath $ExtraEnvironment) $Repo $TimeoutMs $Bytes
+}
+
 function Invoke-BashStatusline([string]$Json, [string]$ConfigPath, [hashtable]$ExtraEnvironment) {
     $environment = Runtime-Environment $ConfigPath $ExtraEnvironment
     $runtimeScript = $BashScript
     if ($ExtraEnvironment.ContainsKey('CORALLINE_TEST_NOW') -and $null -ne $ExtraEnvironment.CORALLINE_TEST_NOW) { $runtimeScript = $script:StateBashScript }
     $args = '--noprofile --norc "' + (Forward-Path $runtimeScript) + '"'
     return Invoke-CapturedProcess $script:BashExe $args $Json $environment $Repo 10000
+}
+
+function Invoke-BashSubagent([string]$Json, [string]$ConfigPath, [hashtable]$ExtraEnvironment) {
+    $environment = Runtime-Environment $ConfigPath $ExtraEnvironment
+    $args = '--noprofile --norc "' + (Forward-Path $BashScript) + '" --subagent'
+    return Invoke-CapturedProcess $script:BashExe $args $Json $environment $Repo 10000
+}
+
+function Invoke-Subagent([string]$Json, [string]$ConfigPath, [hashtable]$ExtraEnvironment) {
+    return Invoke-Statusline $Json $ConfigPath $ExtraEnvironment '--subagent' 15000
+}
+
+function Get-SubagentRows($Run) {
+    $rows = New-Object 'System.Collections.Generic.List[object]'
+    if ([string]::IsNullOrEmpty($Run.Stdout)) { return }
+    foreach ($line in $Run.Stdout.Split(@("`n"), [System.StringSplitOptions]::RemoveEmptyEntries)) {
+        [void]$rows.Add(($line | ConvertFrom-Json -ErrorAction Stop))
+    }
+    return $rows.ToArray()
+}
+
+function New-SubagentNodePayload([int]$JunkCount) {
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('{"junk":[')
+    for ($i=0; $i -lt $JunkCount; $i++) {
+        if ($i -gt 0) { [void]$builder.Append(',') }
+        [void]$builder.Append('null')
+    }
+    [void]$builder.Append('],"tasks":[{"id":"node-cap","name":"node-cap"}]}')
+    return $builder.ToString()
+}
+
+function New-SubagentDepthPayload([int]$ArrayDepth) {
+    $open = (('[' * $ArrayDepth) -join '')
+    $close = ((']' * $ArrayDepth) -join '')
+    return '{"junk":' + $open + 'null' + $close + ',"tasks":[{"id":"depth-cap","name":"depth-cap"}]}'
 }
 
 function Check-Run([string]$Name, $Run) {
@@ -548,6 +597,9 @@ fi
     Check 'static source forbids Invoke-Expression' (-not $source.Contains('Invoke-Expression'))
     Check 'static source forbids dynamic ScriptBlock creation' (-not $source.Contains('ScriptBlock]::Create'))
     Check 'literal subagent route precedes stdin open' ($source.IndexOf("-ceq '--subagent'") -ge 0 -and $source.IndexOf("-ceq '--subagent'") -lt $source.IndexOf('OpenStandardInput'))
+    Check 'subagent byte cap precedes strict UTF-8 decode' ($source.IndexOf('$inputCap = 4194304') -ge 0 -and $source.IndexOf('$inputCap = 4194304') -lt $source.IndexOf('$StrictUtf8.GetString($inputBytes'))
+    Check 'subagent exits before main JSON parse and state paths' ($source.IndexOf('Invoke-SubagentMode $rawInput') -lt $source.IndexOf('ConvertFrom-Json -ErrorAction Stop') -and $source.IndexOf('Invoke-SubagentMode $rawInput') -lt $source.IndexOf('$AllStatePaths'))
+    Check 'subagent row and serialized-line caps are explicit' ($source.Contains('GetByteCount($content) -gt 65536') -and $source.Contains('GetByteCount($line) + 1) -gt 524288'))
     Check 'UNC lexical rejection precedes canonicalization' ($source.IndexOf("StartsWith('\\'") -ge 0 -and $source.IndexOf("StartsWith('\\'") -lt $source.IndexOf('GetFullPath($p)'))
     Check 'reparse validation precedes config read' ($source.IndexOf('Test-SafeRegularFile $Path') -lt $source.IndexOf('Read-StrictUtf8File $Path'))
     Check 'Bash oracle main extraction contains central scrub' ($bashSource.Contains('] | map(scrub) | join('))
@@ -668,6 +720,370 @@ fi
 eval "$(sed -n '/^shell_quote()/,/^}/p' "$CORALLINE_CONFIGURE")"
 shell_quote "$CORALLINE_Q_VALUE"
 '@
+
+    $subTask = [ordered]@{
+        id='row-1'
+        name='Builder'
+        label='Compile tests'
+        description='fallback detail'
+        type='local_agent'
+        status='running'
+        model='claude-haiku-4-5-20251001'
+        contextWindowSize='200000'
+        tokenCount='50000'
+    }
+    $subPayload = [ordered]@{ transcript_path=''; tasks=@($subTask) }
+    $subJson = Json $subPayload
+    $subDefault = Invoke-Subagent $subJson '' @{}
+    $subDefaultBash = Invoke-BashSubagent $subJson '' @{}
+    Check-Run 'WIN-PS1 subagent default' $subDefault
+    Check-Run 'WIN-PS1 Bash subagent default oracle' $subDefaultBash
+    Check-Exact 'WIN-PS1 default subagent row is byte exact to Bash' $subDefault $subDefaultBash
+    $subRows = @(Get-SubagentRows $subDefault)
+    Check 'WIN-PS1 compact row parses with exact id/content members' ($subRows.Count -eq 1 -and $subRows[0].id -ceq 'row-1' -and $subRows[0].content.Contains('Builder') -and $subRows[0].content.Contains('Haiku 4.5') -and $subRows[0].content.Contains('25%'))
+    Check 'WIN-PS1 row stdout is LF UTF-8 without BOM' ($subDefault.StdoutBytes.Length -gt 0 -and $subDefault.StdoutBytes[$subDefault.StdoutBytes.Length - 1] -eq 10 -and -not ($subDefault.StdoutBytes[0] -eq 0xEF -and $subDefault.StdoutBytes[1] -eq 0xBB -and $subDefault.StdoutBytes[2] -eq 0xBF))
+
+    foreach ($theme in @(Get-ChildItem -LiteralPath (Join-Path $Repo 'themes') -Filter '*.conf' -File | Sort-Object Name)) {
+        $themeConfig = New-Config ('sub-theme-' + $theme.BaseName) @(
+            ('. ' + (Quote-FromConfigure (Forward-Path $theme.FullName))),
+            ('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'name model ctx'))
+        )
+        $themePs = Invoke-Subagent $subJson $themeConfig @{}
+        $themeBash = Invoke-BashSubagent $subJson $themeConfig @{}
+        Check-Run ('WIN-PS1 theme ' + $theme.BaseName) $themePs
+        Check-Exact ('WIN-PS1 theme parity ' + $theme.BaseName) $themePs $themeBash
+    }
+
+    $themePath = Forward-Path (Join-Path $Repo 'themes\claude-coral.conf')
+    $subStyleCases = @(
+        [pscustomobject]@{ Name='ascii'; Lines=@('VL_ASCII=1') },
+        [pscustomobject]@{ Name='classic'; Lines=@('VL_STYLE=classic') },
+        [pscustomobject]@{ Name='bare-lean'; Lines=@('VL_STYLE=lean') },
+        [pscustomobject]@{ Name='fingerprint-retint'; Lines=@('VL_FG_OK=0,0,0') },
+        [pscustomobject]@{ Name='explicit-empty-name'; Lines=@("VL_BG_SUB_NAME=''") },
+        [pscustomobject]@{ Name='explicit-empty-ok'; Lines=@("VL_FG_SUB_OK=''"; 'VL_STYLE=classic') },
+        [pscustomobject]@{ Name='custom-order'; Lines=@(('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'ctx name model'))) }
+    )
+    foreach ($styleCase in $subStyleCases) {
+        $lines = @(('. ' + (Quote-FromConfigure $themePath))) + $styleCase.Lines
+        $config = New-Config ('sub-style-' + $styleCase.Name) $lines
+        $psRun = Invoke-Subagent $subJson $config @{}
+        $bashRun = Invoke-BashSubagent $subJson $config @{}
+        Check-Run ('WIN-PS1 style gate ' + $styleCase.Name) $psRun
+        Check-Exact ('WIN-PS1 style gate parity ' + $styleCase.Name) $psRun $bashRun
+    }
+
+    $nameOnlyConfig = New-Config 'sub-name-only' @(('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'name')))
+    $oldDoc = '{"tasks":[{"id":"old","name":"old"}]}'
+    $newDoc = '{"tasks":[{"id":"new","name":"new"}]}'
+    foreach ($validStream in @($oldDoc + $newDoc, $oldDoc + " `t`r`n" + $newDoc)) {
+        $run = Invoke-Subagent $validStream $nameOnlyConfig @{}
+        Check-Run 'WIN-PS1 valid concatenated stream' $run
+        $rows = @(Get-SubagentRows $run)
+        Check 'WIN-PS1 renders only the last complete JSON value' ($rows.Count -eq 1 -and $rows[0].id -ceq 'new')
+    }
+    $invalidStreams = @(
+        'x' + $newDoc,
+        $oldDoc + 'x' + $newDoc,
+        $newDoc + 'x',
+        '{"tasks":[',
+        $oldDoc + [char]12 + $newDoc,
+        $oldDoc + [char]11 + $newDoc,
+        $oldDoc + [char]0 + $newDoc,
+        '{"tasks":[],"tasks":[]}',
+        '{"tasks":[],"Tasks":[]}',
+        '{"tasks":[],"\u0074asks":[]}',
+        '{"tasks":[],"nested":{"id":1,"ID":2}}',
+        '{"tasks":[{"id":"x","id":"y"}]}'
+    )
+    $invalidIndex = 0
+    foreach ($invalidStream in $invalidStreams) {
+        $run = Invoke-Subagent $invalidStream $nameOnlyConfig @{}
+        Check-Run ('WIN-PS1 rejected stream ' + $invalidIndex) $run
+        Check ('WIN-PS1 rejected stream is silent ' + $invalidIndex) ($run.StdoutBytes.Length -eq 0)
+        $invalidIndex++
+    }
+    foreach ($noTasks in @('{"Tasks":[{"id":"x","name":"x"}]}','{"tasks":{}}','{"tasks":null}','[]','true')) {
+        $run = Invoke-Subagent $noTasks $nameOnlyConfig @{}
+        Check-Run 'WIN-PS1 exact tasks array gate' $run
+        Check 'WIN-PS1 non-array or case-variant tasks is silent' ($run.StdoutBytes.Length -eq 0)
+    }
+    $nodeCap = Invoke-Subagent (New-SubagentNodePayload 32762) $nameOnlyConfig @{}
+    Check-Run 'WIN-PS1 32768-node boundary' $nodeCap
+    Check 'WIN-PS1 32768 nodes retain the valid task' (@(Get-SubagentRows $nodeCap).Count -eq 1)
+    $nodeOver = Invoke-Subagent (New-SubagentNodePayload 32763) $nameOnlyConfig @{}
+    Check-Run 'WIN-PS1 32769-node boundary' $nodeOver
+    Check 'WIN-PS1 32769 nodes reject the entire input' ($nodeOver.StdoutBytes.Length -eq 0)
+    $depthCap = Invoke-Subagent (New-SubagentDepthPayload 127) $nameOnlyConfig @{}
+    Check-Run 'WIN-PS1 128-level nesting boundary' $depthCap
+    Check 'WIN-PS1 128-level nesting retains the valid task' (@(Get-SubagentRows $depthCap).Count -eq 1)
+    $depthOver = Invoke-Subagent (New-SubagentDepthPayload 128) $nameOnlyConfig @{}
+    Check-Run 'WIN-PS1 129-level nesting boundary' $depthOver
+    Check 'WIN-PS1 129-level nesting rejects the entire input' ($depthOver.StdoutBytes.Length -eq 0)
+    $mixedTasks = Invoke-Subagent '{"tasks":[null,1,[],{"id":"kept","name":"kept"},{}]}' $nameOnlyConfig @{}
+    Check-Run 'WIN-PS1 skips non-object tasks' $mixedTasks
+    Check 'WIN-PS1 non-object tasks leave the valid row' (@(Get-SubagentRows $mixedTasks).Count -eq 1)
+
+    $taskBuilder = New-Object System.Text.StringBuilder
+    [void]$taskBuilder.Append('{"tasks":[')
+    for ($i=0; $i -lt 1024; $i++) {
+        if ($i -gt 0) { [void]$taskBuilder.Append(',') }
+        [void]$taskBuilder.Append('{"id":"t')
+        [void]$taskBuilder.Append($i)
+        [void]$taskBuilder.Append('","name":"n"}')
+    }
+    [void]$taskBuilder.Append(']}')
+    $taskCap = Invoke-Subagent $taskBuilder.ToString() $nameOnlyConfig @{}
+    Check-Run 'WIN-PS1 1024-task boundary' $taskCap
+    Check 'WIN-PS1 1024 tasks render 1024 rows' (@(Get-SubagentRows $taskCap).Count -eq 1024)
+    [void]$taskBuilder.Remove($taskBuilder.Length - 2, 2)
+    [void]$taskBuilder.Append(',{"id":"over","name":"over"}]}')
+    $taskOver = Invoke-Subagent $taskBuilder.ToString() $nameOnlyConfig @{}
+    Check-Run 'WIN-PS1 1025-task boundary' $taskOver
+    Check 'WIN-PS1 1025 tasks reject the entire input' ($taskOver.StdoutBytes.Length -eq 0)
+
+    foreach ($fieldName in @('id','name','label','description','type','status','startTime','model','contextWindowSize','tokenCount')) {
+        foreach ($composite in @('{}','[]')) {
+            if ($fieldName -ceq 'id') { $raw = '{"tasks":[{"id":' + $composite + ',"name":"fallback"}]}' }
+            elseif ($fieldName -ceq 'name') { $raw = '{"tasks":[{"id":"scalar-test","name":' + $composite + ',"type":"fallback"}]}' }
+            else { $raw = '{"tasks":[{"id":"scalar-test","name":"fallback","' + $fieldName + '":' + $composite + '}]}' }
+            $run = Invoke-Subagent $raw $nameOnlyConfig @{}
+            Check-Run ('WIN-PS1 composite field ' + $fieldName) $run
+            if ($fieldName -ceq 'id') { Check ('WIN-PS1 composite id suppresses row ' + $composite) ($run.StdoutBytes.Length -eq 0) }
+            else { Check ('WIN-PS1 composite field degrades empty ' + $fieldName + $composite) (@(Get-SubagentRows $run).Count -eq 1) }
+        }
+    }
+    foreach ($compositeTranscript in @('{"transcript_path":{},"tasks":[{"id":"x","name":"x"}]}','{"transcript_path":[],"tasks":[{"id":"x","name":"x"}]}')) {
+        $run = Invoke-Subagent $compositeTranscript $nameOnlyConfig @{}
+        Check-Run 'WIN-PS1 composite transcript path' $run
+        Check 'WIN-PS1 composite transcript path only disables sidecar' (@(Get-SubagentRows $run).Count -eq 1)
+    }
+    foreach ($scalarCase in @(
+        [pscustomobject]@{ Raw='{"tasks":[{"id":7,"name":12}]}' ; Id='7'; Label='12' },
+        [pscustomobject]@{ Raw='{"tasks":[{"id":true,"name":false}]}' ; Id='true'; Label='false' },
+        [pscustomobject]@{ Raw='{"tasks":[{"id":"null-name","name":null,"type":"fallback"}]}' ; Id='null-name'; Label='fallback' }
+    )) {
+        $run = Invoke-Subagent $scalarCase.Raw $nameOnlyConfig @{}
+        Check-Run 'WIN-PS1 invariant scalar conversion' $run
+        $rows = @(Get-SubagentRows $run)
+        Check 'WIN-PS1 invariant scalar id and label' ($rows.Count -eq 1 -and $rows[0].id -ceq $scalarCase.Id -and (Plain $rows[0].content).Contains($scalarCase.Label))
+    }
+    $numberCanonicalRaw = '{"tasks":[{"id":1e999,"name":1e999},{"id":1e-999,"name":1e-999},{"id":123e999,"name":123e999},{"id":1.2300e999,"name":1.2300e999},{"id":1e1,"name":1e1},{"id":1.20e2,"name":1.20e2},{"id":0e-7,"name":0e-7},{"id":999999999999999999999999,"name":999999999999999999999999},{"id":12e999999998,"name":12e999999998},{"id":12e999999999,"name":12e999999999},{"id":-1e1000000000,"name":-1e1000000000},{"id":0e1000000000,"name":0e1000000000},{"id":1e-1147483646,"name":1e-1147483646},{"id":4e-1147483647,"name":4e-1147483647},{"id":5e-1147483647,"name":5e-1147483647},{"id":-5e-1147483647,"name":-5e-1147483647},{"id":1.5e-1147483646,"name":1.5e-1147483646},{"id":9.5e-1147483646,"name":9.5e-1147483646},{"id":0e-2000000000,"name":0e-2000000000}]}'
+    $numberCanonicalPs = Invoke-Subagent $numberCanonicalRaw $nameOnlyConfig @{}
+    $numberCanonicalBash = Invoke-BashSubagent $numberCanonicalRaw $nameOnlyConfig @{}
+    Check-Run 'WIN-PS1 exact decimal canonicalization' $numberCanonicalPs
+    Check-Run 'WIN-PS1 Bash exact decimal canonicalization oracle' $numberCanonicalBash
+    Check-Exact 'WIN-PS1 exact decimal canonicalization parity' $numberCanonicalPs $numberCanonicalBash
+    $numberCanonicalRows = @(Get-SubagentRows $numberCanonicalPs)
+    $numberCanonicalExpected = @('1E+999','1E-999','1.23E+1001','1.2300E+999','1E+1','120','0E-7','999999999999999999999999','1.2E+999999999','1.7976931348623157e+308','-1.7976931348623157e+308','0E+999999999','1E-1147483646','0E-1147483646','1E-1147483646','-1E-1147483646','2E-1147483646','1.0E-1147483645','0E-1147483646')
+    Check 'WIN-PS1 exact decimal canonicalization row count' ($numberCanonicalRows.Count -eq $numberCanonicalExpected.Count)
+    for ($i=0; $i -lt $numberCanonicalExpected.Count -and $i -lt $numberCanonicalRows.Count; $i++) {
+        Check ('WIN-PS1 exact decimal canonicalization ' + $i) ($numberCanonicalRows[$i].id -ceq $numberCanonicalExpected[$i] -and (Plain $numberCanonicalRows[$i].content).Contains($numberCanonicalExpected[$i]))
+    }
+
+    $escapedRaw = '{"tasks":[{"id":"quote\"\\id","name":"quote\" slash\\ esc\u001b[2J","status":true}]}'
+    $escapedRun = Invoke-Subagent $escapedRaw $nameOnlyConfig @{}
+    Check-Run 'WIN-PS1 quote backslash and ESC scrub' $escapedRun
+    $escapedRows = @(Get-SubagentRows $escapedRun)
+    Check 'WIN-PS1 JSON quoting round-trips id and label' ($escapedRows.Count -eq 1 -and $escapedRows[0].id -ceq "quote`"\id" -and (Plain $escapedRows[0].content).Contains("quote`" slash\ esc[2J"))
+    Check 'WIN-PS1 untrusted ESC cannot survive as CSI' (-not $escapedRows[0].content.Contains(([string][char]27 + '[2J')))
+
+    $asciiExact = 'a' * 16384
+    $asciiOver = $asciiExact + 'b'
+    $multiExact = ((Glyph 0x96EA) * 5461) + 'a'
+    $multiOver = $multiExact + 'b'
+    foreach ($boundary in @(
+        [pscustomobject]@{ Name='name-ascii'; Value=$asciiExact; Accepted=$true; Field='name' },
+        [pscustomobject]@{ Name='name-ascii-over'; Value=$asciiOver; Accepted=$false; Field='name' },
+        [pscustomobject]@{ Name='name-multibyte'; Value=$multiExact; Accepted=$true; Field='name' },
+        [pscustomobject]@{ Name='name-multibyte-over'; Value=$multiOver; Accepted=$false; Field='name' },
+        [pscustomobject]@{ Name='id-ascii'; Value=$asciiExact; Accepted=$true; Field='id' },
+        [pscustomobject]@{ Name='id-ascii-over'; Value=$asciiOver; Accepted=$false; Field='id' },
+        [pscustomobject]@{ Name='id-multibyte'; Value=$multiExact; Accepted=$true; Field='id' },
+        [pscustomobject]@{ Name='id-multibyte-over'; Value=$multiOver; Accepted=$false; Field='id' }
+    )) {
+        if ($boundary.Field -ceq 'id') { $payload = [ordered]@{ tasks=@([ordered]@{ id=$boundary.Value; name='n' }) } }
+        else { $payload = [ordered]@{ tasks=@([ordered]@{ id='field-bound'; name=$boundary.Value }) } }
+        $run = Invoke-Subagent (Json $payload) $nameOnlyConfig @{}
+        Check-Run ('WIN-PS1 field byte boundary ' + $boundary.Name) $run
+        Check ('WIN-PS1 field boundary acceptance ' + $boundary.Name) ((@((Get-SubagentRows $run)).Count -eq 1) -eq $boundary.Accepted)
+    }
+
+    $ctxOnlyConfig = New-Config 'sub-ctx-only' @(('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'ctx')))
+    foreach ($vector in @(
+        [pscustomobject]@{ Name='floor'; Tok='1'; Win='3'; Show=$true; Needle='33%' },
+        [pscustomobject]@{ Name='clamp'; Tok='9999999999999999'; Win='1'; Show=$true; Needle='100%' },
+        [pscustomobject]@{ Name='zero-window'; Tok='1000'; Win='0'; Show=$true; Needle='1.0k' },
+        [pscustomobject]@{ Name='invalid-window'; Tok='1000'; Win='10000000000000000'; Show=$true; Needle='1.0k' },
+        [pscustomobject]@{ Name='invalid-token'; Tok='10000000000000000'; Win='1'; Show=$false; Needle='' },
+        [pscustomobject]@{ Name='signed-token'; Tok='-1'; Win='3'; Show=$false; Needle='' }
+    )) {
+        $payload = [ordered]@{ tasks=@([ordered]@{ id=$vector.Name; tokenCount=$vector.Tok; contextWindowSize=$vector.Win }) }
+        $run = Invoke-Subagent (Json $payload) $ctxOnlyConfig @{}
+        Check-Run ('WIN-PS1 ctx numeric ' + $vector.Name) $run
+        $shown = @(Get-SubagentRows $run)
+        Check ('WIN-PS1 ctx numeric semantics ' + $vector.Name) (($shown.Count -eq 1) -eq $vector.Show)
+        if ($vector.Show) { Check ('WIN-PS1 ctx text ' + $vector.Name) ((Plain $shown[0].content).Contains($vector.Needle)) }
+    }
+    $numericCtx = Invoke-Subagent '{"tasks":[{"id":"numeric","tokenCount":1000,"contextWindowSize":2000}]}' $ctxOnlyConfig @{}
+    Check-Run 'WIN-PS1 numeric JSON context scalars' $numericCtx
+    Check 'WIN-PS1 numeric JSON context scalars use invariant digits' ((Plain (@(Get-SubagentRows $numericCtx)[0].content)).Contains('50%'))
+
+    $elapsedOnlyConfig = New-Config 'sub-elapsed-only' @(('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'elapsed')))
+    $epochNow = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $fractionAtFieldCap = '1970-01-01T00:00:00.' + (('0' * 16363) -join '') + 'Z'
+    $fractionOverFieldCap = '1970-01-01T00:00:00.' + (('0' * 16364) -join '') + 'Z'
+    $elapsedVectors = @(
+        [pscustomobject]@{ Name='seconds'; Value=[string]($epochNow - 65); Show=$true },
+        [pscustomobject]@{ Name='milliseconds'; Value=[string](($epochNow - 65) * 1000); Show=$true },
+        [pscustomobject]@{ Name='iso'; Value=[DateTimeOffset]::FromUnixTimeSeconds($epochNow - 65).UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", $Invariant); Show=$true },
+        [pscustomobject]@{ Name='iso-year-zero'; Value='0000-01-01T00:00:00Z'; Show=$true },
+        [pscustomobject]@{ Name='iso-year-zero-leap-day'; Value='0000-02-29T00:00:00Z'; Show=$true },
+        [pscustomobject]@{ Name='iso-year-zero-bad-date'; Value='0000-02-30T00:00:00Z'; Show=$false },
+        [pscustomobject]@{ Name='iso-before-epoch'; Value='1969-12-31T23:59:59Z'; Show=$true },
+        [pscustomobject]@{ Name='iso-at-epoch'; Value='1970-01-01T00:00:00Z'; Show=$true },
+        [pscustomobject]@{ Name='iso-fraction-pre-epoch'; Value='1969-12-31T23:59:59.1Z'; Show=$true },
+        [pscustomobject]@{ Name='iso-fraction-year-zero'; Value='0000-02-29T00:00:00.123456789Z'; Show=$true },
+        [pscustomobject]@{ Name='iso-fraction-field-cap'; Value=$fractionAtFieldCap; Show=$true },
+        [pscustomobject]@{ Name='iso-fraction-over-field-cap'; Value=$fractionOverFieldCap; Show=$false },
+        [pscustomobject]@{ Name='iso-fraction-empty'; Value='2000-01-01T00:00:00.Z'; Show=$false },
+        [pscustomobject]@{ Name='iso-fraction-double-dot'; Value='2000-01-01T00:00:00.1.2Z'; Show=$false },
+        [pscustomobject]@{ Name='iso-fraction-nondigit'; Value='2000-01-01T00:00:00.12xZ'; Show=$false },
+        [pscustomobject]@{ Name='iso-fraction-offset'; Value='2000-01-01T00:00:00.123+00:00'; Show=$false },
+        [pscustomobject]@{ Name='iso-fraction-no-z'; Value='2000-01-01T00:00:00.123'; Show=$false },
+        [pscustomobject]@{ Name='iso-lowercase-t'; Value='2000-01-01t00:00:00Z'; Show=$false },
+        [pscustomobject]@{ Name='iso-lowercase-z'; Value='2000-01-01T00:00:00z'; Show=$false },
+        [pscustomobject]@{ Name='future'; Value=[string]($epochNow + 3600); Show=$false },
+        [pscustomobject]@{ Name='overflow'; Value='9999999999999999'; Show=$false },
+        [pscustomobject]@{ Name='too-many-digits'; Value='10000000000000000'; Show=$false },
+        [pscustomobject]@{ Name='bad-date'; Value='2026-02-30T00:00:00Z'; Show=$false }
+    )
+    foreach ($vector in $elapsedVectors) {
+        $run = Invoke-Subagent (Json ([ordered]@{ tasks=@([ordered]@{ id=$vector.Name; startTime=$vector.Value }) })) $elapsedOnlyConfig @{}
+        Check-Run ('WIN-PS1 elapsed ' + $vector.Name) $run
+        Check ('WIN-PS1 elapsed semantics ' + $vector.Name) ((@((Get-SubagentRows $run)).Count -eq 1) -eq $vector.Show)
+    }
+
+    $emptyTasksText = '{"tasks":[]}'
+    $exactCapBytes = $Utf8NoBom.GetBytes((' ' * (4194304 - $emptyTasksText.Length)) + $emptyTasksText)
+    $exactCapRun = Invoke-StatuslineBytes $exactCapBytes $nameOnlyConfig @{} '--subagent' 30000
+    Check-Run 'WIN-PS1 stdin exact 4194304 bytes' $exactCapRun
+    Check 'WIN-PS1 stdin exact cap is accepted silently' ($exactCapRun.StdoutBytes.Length -eq 0)
+    $overCapBytes = New-Object byte[] 4194305
+    [Array]::Copy($exactCapBytes, $overCapBytes, $exactCapBytes.Length)
+    $overCapBytes[$overCapBytes.Length - 1] = 0x20
+    $overCapRun = Invoke-StatuslineBytes $overCapBytes $nameOnlyConfig @{} '--subagent' 30000
+    Check-Run 'WIN-PS1 stdin cap plus one' $overCapRun
+    Check 'WIN-PS1 stdin cap plus one is silent' ($overCapRun.StdoutBytes.Length -eq 0)
+    $badUtf8Run = Invoke-StatuslineBytes ([byte[]]@(0x7B,0x22,0xC3,0x28,0x22,0x3A,0x31,0x7D)) $nameOnlyConfig @{} '--subagent' 5000
+    Check-Run 'WIN-PS1 malformed UTF-8 stdin' $badUtf8Run
+    Check 'WIN-PS1 malformed UTF-8 stdin is silent' ($badUtf8Run.StdoutBytes.Length -eq 0)
+
+    $contentExactConfig = New-Config 'sub-content-exact' @(
+        ('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'name')),
+        'VL_NOCOLOR=1',
+        ("VL_CAP_L='" + (('x' * 65512) -join '') + "'"),
+        "VL_CAP_R=''"
+    )
+    $contentExactRun = Invoke-Subagent '{"tasks":[{"id":"content-exact","name":"x"}]}' $contentExactConfig @{}
+    Check-Run 'WIN-PS1 content exact 65536 bytes' $contentExactRun
+    $contentExactRows = @(Get-SubagentRows $contentExactRun)
+    Check 'WIN-PS1 content exact cap renders untruncated' ($contentExactRows.Count -eq 1 -and $StrictUtf8.GetByteCount([string]$contentExactRows[0].content) -eq 65536)
+    $contentOverConfig = New-Config 'sub-content-over' @(
+        ('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'name')),
+        'VL_NOCOLOR=1',
+        ("VL_CAP_L='" + (('x' * 65513) -join '') + "'"),
+        "VL_CAP_R=''"
+    )
+    $contentOverRun = Invoke-Subagent '{"tasks":[{"id":"content-over","name":"x"}]}' $contentOverConfig @{}
+    Check-Run 'WIN-PS1 content cap plus one' $contentOverRun
+    Check 'WIN-PS1 content cap plus one suppresses row' ($contentOverRun.StdoutBytes.Length -eq 0)
+
+    $sidecarRoot = Join-Path $TempRoot 'subagent-sidecar'
+    [void][IO.Directory]::CreateDirectory($sidecarRoot)
+    $transcript = Join-Path $sidecarRoot 'session.jsonl'
+    Write-Utf8 $transcript ''
+    $sidecarDir = Join-Path $sidecarRoot 'session\subagents'
+    [void][IO.Directory]::CreateDirectory($sidecarDir)
+    $sidecar = Join-Path $sidecarDir 'agent-side.meta.json'
+    Write-Utf8 $sidecar '{"agentType":"Explore"}'
+    $sidePayload = [ordered]@{ transcript_path=(Forward-Path $transcript); tasks=@([ordered]@{ id='side'; name='Payload'; type='local_agent' }) }
+    $sideRun = Invoke-Subagent (Json $sidePayload) $nameOnlyConfig @{}
+    Check-Run 'WIN-PS1 sidecar positive' $sideRun
+    Check 'WIN-PS1 sidecar formula adds role beside payload name' ((Plain (@(Get-SubagentRows $sideRun)[0].content)).Contains('Payload (Explore)'))
+    foreach ($separatorPath in @((Forward-Path $transcript), $transcript)) {
+        $sidePayload.transcript_path = $separatorPath
+        $run = Invoke-Subagent (Json $sidePayload) $nameOnlyConfig @{}
+        Check 'WIN-PS1 sidecar accepts native and forward separators' ((Plain (@(Get-SubagentRows $run)[0].content)).Contains('Explore'))
+    }
+    foreach ($unsafeId in @('side:ads','side/slash','side\slash')) {
+        $sidePayload.tasks[0].id = $unsafeId
+        $run = Invoke-Subagent (Json $sidePayload) $nameOnlyConfig @{}
+        Check 'WIN-PS1 unsafe sidecar id keeps row but not metadata' (@(Get-SubagentRows $run).Count -eq 1 -and -not (Plain (@(Get-SubagentRows $run)[0].content)).Contains('Explore'))
+    }
+    $sidePayload.tasks[0].id = 'side'
+    $fallbackCases = @(
+        '\\server\share\session.jsonl',
+        '\\?\C:\session.jsonl',
+        'Registry::HKEY_CURRENT_USER\session.jsonl',
+        'C:\bad..\session.jsonl',
+        'C:\CON\session.jsonl',
+        'C:\carrier:stream.jsonl',
+        ('C:\' + ('x' * 4090) + '.jsonl'),
+        ((Split-Path -Path $transcript -Parent) + '\child\..\session.jsonl')
+    )
+    foreach ($badPath in $fallbackCases) {
+        $sidePayload.transcript_path = $badPath
+        $run = Invoke-Subagent (Json $sidePayload) $nameOnlyConfig @{}
+        Check-Run 'WIN-PS1 unsafe sidecar path fallback' $run
+        Check 'WIN-PS1 unsafe sidecar path uses payload identity' (-not (Plain (@(Get-SubagentRows $run)[0].content)).Contains('Explore'))
+    }
+    $sidePayload.transcript_path = Forward-Path $transcript
+    [IO.File]::WriteAllBytes($sidecar, (New-Object byte[] 65537))
+    $oversizedSide = Invoke-Subagent (Json $sidePayload) $nameOnlyConfig @{}
+    Check 'WIN-PS1 oversized sidecar falls back' (-not (Plain (@(Get-SubagentRows $oversizedSide)[0].content)).Contains('Explore'))
+    [IO.File]::WriteAllBytes($sidecar, [byte[]]@(0xC3,0x28))
+    $malformedSide = Invoke-Subagent (Json $sidePayload) $nameOnlyConfig @{}
+    Check 'WIN-PS1 malformed UTF-8 sidecar falls back' (-not (Plain (@(Get-SubagentRows $malformedSide)[0].content)).Contains('Explore'))
+    Write-Utf8 $sidecar '{"agentType":'
+    $badJsonSide = Invoke-Subagent (Json $sidePayload) $nameOnlyConfig @{}
+    Check 'WIN-PS1 malformed JSON sidecar falls back' (-not (Plain (@(Get-SubagentRows $badJsonSide)[0].content)).Contains('Explore'))
+    Write-Utf8 $sidecar '{"agentType":"Explore"}'
+
+    $junctionTarget = Join-Path $TempRoot 'subagent-junction-target'
+    $junctionLink = Join-Path $TempRoot 'subagent-junction-link'
+    [void][IO.Directory]::CreateDirectory($junctionTarget)
+    $junctionTranscript = Join-Path $junctionTarget 'session.jsonl'
+    Write-Utf8 $junctionTranscript ''
+    [void][IO.Directory]::CreateDirectory((Join-Path $junctionTarget 'session\subagents'))
+    Write-Utf8 (Join-Path $junctionTarget 'session\subagents\agent-side.meta.json') '{"agentType":"JunctionRole"}'
+    $mkSubJunction = Invoke-CapturedProcess $env:ComSpec ('/d /s /c "mklink /J ""' + $junctionLink + '"" ""' + $junctionTarget + '"""') '' @{} $Repo 5000
+    if ($mkSubJunction.ExitCode -eq 0) {
+        $sidePayload.transcript_path = Forward-Path (Join-Path $junctionLink 'session.jsonl')
+        $junctionRun = Invoke-Subagent (Json $sidePayload) $nameOnlyConfig @{}
+        Check 'WIN-PS1 reparse transcript path falls back' (-not (Plain (@(Get-SubagentRows $junctionRun)[0].content)).Contains('JunctionRole'))
+    } else { Blocked 'WIN-PS1 reparse transcript path' $mkSubJunction.Stderr }
+
+    $subSideEffectRoot = Join-Path $TempRoot 'subagent-no-main-side-effects'
+    $floatTarget = Join-Path $subSideEffectRoot 'float.txt'
+    $burnTarget = Join-Path $subSideEffectRoot 'burn.tsv'
+    $sideEffectConfig = New-Config 'sub-no-main-side-effects' @(
+        ('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'name')),
+        'VL_FLOAT=1',
+        ('VL_FLOAT_FILE=' + (Quote-FromConfigure (Forward-Path $floatTarget))),
+        'VL_SEGMENTS=git\ burn',
+        ('BURN_FILE=' + (Quote-FromConfigure (Forward-Path $burnTarget))),
+        'VL_LIMIT_SYNC=1'
+    )
+    $sideEffectRun = Invoke-Subagent '{"tasks":[{"id":"side-effect","name":"safe"}]}' $sideEffectConfig @{ CORALLINE_NO_SAMPLE=$null }
+    Check-Run 'WIN-PS1 subagent avoids main side effects' $sideEffectRun
+    Check 'WIN-PS1 subagent creates no float or state artifacts' (-not [IO.File]::Exists($floatTarget) -and -not [IO.File]::Exists($burnTarget) -and -not [IO.Directory]::Exists($burnTarget + '.d'))
+    $mainIdentityConfig = New-Config 'sub-main-identity' @('VL_SEGMENTS=model\ ctx','VL_CLOCK=off')
+    $mainIdentityPs = Invoke-Statusline (Json $basePayload) $mainIdentityConfig @{} '' 5000
+    $mainIdentityBash = Invoke-BashStatusline (Json $basePayload) $mainIdentityConfig @{}
+    Check-Run 'WIN-PS1 main fixture identity after subagent implementation' $mainIdentityPs
+    Check-Exact 'WIN-PS1 main fixture remains byte exact' $mainIdentityPs $mainIdentityBash
+
     $quotedSegments = Quote-FromConfigure 'dir git model ctx'
     Check 'real configure shell_quote emits escaped multi-word value' ($quotedSegments.Contains('\ '))
     $quotedConfig = New-Config 'configure-q-segments' @("VL_SEGMENTS=$quotedSegments", 'VL_CLOCK=off')

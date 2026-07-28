@@ -27,8 +27,11 @@ Check the actual shell and tools before choosing a path:
 For the native path, explain that `install.ps1` writes only `statusline.ps1` and
 the ten shipped themes under `$HOME\.claude\coralline`, then losslessly merges
 the exact-case top-level `statusLine` value in `$HOME\.claude\settings.json`.
-It never creates or edits `$HOME\.claude\coralline.conf`, never writes
-`subagentStatusLine`, and retains timestamped sibling backups when existing
+It never creates or edits `$HOME\.claude\coralline.conf`. Ask whether the user
+wants native themed subagent rows: pass `-SubagentRows on` only after yes,
+`-SubagentRows off` only for an explicit disable request, and otherwise keep the
+default `preserve` so an existing `subagentStatusLine` remains byte-for-byte
+untouched. The installer retains timestamped sibling backups when existing
 managed content changes. An identical rerun is a true no-op. Renderer state and
 custom files remain in place because updates replace only the managed allowlist.
 Installer invocations are serialized. Single-file runtime rollback rejects
@@ -44,7 +47,7 @@ README one-line after approval. If already inside an audited local checkout, use
 the zero-network local mode instead:
 
 ```powershell
-& "$PSHOME\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\install.ps1 -SourceDirectory (Get-Location).Path -InstallRoot "$HOME\.claude\coralline" -SettingsPath "$HOME\.claude\settings.json"
+& "$PSHOME\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\install.ps1 -SourceDirectory (Get-Location).Path -InstallRoot "$HOME\.claude\coralline" -SettingsPath "$HOME\.claude\settings.json" -SubagentRows preserve
 ```
 
 Pass only drive-absolute local-mode paths (`C:\...` or `C:/...`), never
@@ -80,7 +83,7 @@ places the renderer under `~/.claude/coralline`, writes
 | `sample-input.json` | `~/.claude/coralline/sample-input.json` | Local preview and verification sample |
 | generated config | `~/.claude/coralline.conf` | User layout, segments, and theme choices |
 | `statusLine` entry | `~/.claude/settings.json` | Registers coralline in Claude Code |
-| `subagentStatusLine` entry | `~/.claude/settings.json` | Opt-in only — themed agent-panel rows, written when the user says yes (wizard question or `configure.sh --subagent-rows=on`) |
+| `subagentStatusLine` entry | `~/.claude/settings.json` | Opt-in only — themed agent-panel rows, written when the user says yes (wizard question, `configure.sh --subagent-rows=on`, or native `install.ps1 -SubagentRows on`) |
 
 ## Fast Path
 
@@ -225,12 +228,14 @@ Ask concise questions. If the user says "you decide", choose the defaults.
    default; it only converges sessions when they redraw and cannot refresh a fully idle one.
 6. **Subagent panel rows** (optional, needs Claude Code v2.1.205+ for the per-task
    model/context fields): offer to theme only the subagent rows below the prompt — the
-   native main-session row remains visible. If the user says yes, run
+   native main-session row remains visible. On Bash-capable installs, if the user says yes, run
    `bash ~/.claude/coralline/configure.sh --subagent-rows=on` after the bootstrap; it
    registers `subagentStatusLine` in `~/.claude/settings.json` (with the same
    backup-then-merge as the installer) and prints a preview. To disable it, run
    `bash ~/.claude/coralline/configure.sh --subagent-rows=off`; this removes only that
-   settings entry. Explain that model comes from Claude Code's per-task payload, missing
+   settings entry. On PowerShell-only Windows, rerun the native installer with
+   `-SubagentRows on` or `-SubagentRows off`; `preserve` remains the ordinary default.
+   Explain that model comes from Claude Code's per-task payload, missing
    fields degrade their own segments (`tokenCount` still shows without a context window),
    and redraws are panel-event-driven rather than a one-second poll. Claude Code v2.1.211
    omits the native `agentType` role from this payload, so coralline recovers it from the

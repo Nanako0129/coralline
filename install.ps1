@@ -27,7 +27,10 @@ param(
 
     [Parameter(Mandatory = $true, ParameterSetName = 'Local')]
     [ValidateNotNullOrEmpty()]
-    [string]$SettingsPath
+    [string]$SettingsPath,
+
+    [ValidateSet('preserve', 'on', 'off', IgnoreCase = $false)]
+    [string]$SubagentRows = 'preserve'
 )
 
 Set-StrictMode -Version 2.0
@@ -770,7 +773,12 @@ function ConvertTo-JsonString([string]$Value) {
     return $builder.ToString()
 }
 
-function Get-SettingsPlan([string]$Path, [string]$DesiredValue) {
+function Get-SettingsPlan(
+    [string]$Path,
+    [string]$DesiredValue,
+    [string]$SubagentMode,
+    [string]$DesiredSubagentValue
+) {
     $existed = [System.IO.File]::Exists($Path)
     $original = [byte[]]@()
     if ($existed) {
@@ -803,12 +811,21 @@ function Get-SettingsPlan([string]$Path, [string]$DesiredValue) {
     $memberCount = 0
     $managedStart = -1
     $managedEnd = -1
+    $subagentMemberStart = -1
+    $subagentValueStart = -1
+    $subagentValueEnd = -1
+    $subagentPreviousComma = -1
+    $subagentFollowingComma = -1
+    $subagentKeySeen = $false
+    $subagentCaseVariantSeen = $false
+    $previousComma = -1
     $closingBrace = -1
     if ($index -lt $text.Length -and $text[$index] -eq '}') {
         $closingBrace = $index
         $index++
     } else {
         while ($true) {
+            $memberStart = $index
             $key = Read-JsonString $text ([ref]$index)
             Skip-JsonWhitespace $text ([ref]$index)
             if ($index -ge $text.Length -or $text[$index] -ne ':') {
@@ -824,6 +841,25 @@ function Get-SettingsPlan([string]$Path, [string]$DesiredValue) {
                 $managedStart = $valueStart
                 $managedEnd = $valueEnd
             }
+            $isExactSubagent = $key -ceq 'subagentStatusLine'
+            if ([string]::Equals(
+                $key,
+                'subagentStatusLine',
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+                if ($subagentKeySeen) {
+                    throw 'settings.json contains duplicate or case-colliding subagentStatusLine members'
+                }
+                $subagentKeySeen = $true
+                if ($isExactSubagent) {
+                    $subagentMemberStart = $memberStart
+                    $subagentValueStart = $valueStart
+                    $subagentValueEnd = $valueEnd
+                    $subagentPreviousComma = $previousComma
+                } else {
+                    $subagentCaseVariantSeen = $true
+                }
+            }
             $memberCount++
             Skip-JsonWhitespace $text ([ref]$index)
             if ($index -ge $text.Length) { throw 'truncated top-level JSON object' }
@@ -835,6 +871,8 @@ function Get-SettingsPlan([string]$Path, [string]$DesiredValue) {
             if ($text[$index] -ne ',') {
                 throw "expected comma after top-level JSON member at offset $index"
             }
+            if ($isExactSubagent) { $subagentFollowingComma = $index }
+            $previousComma = $index
             $index++
             Skip-JsonWhitespace $text ([ref]$index)
         }
@@ -842,13 +880,64 @@ function Get-SettingsPlan([string]$Path, [string]$DesiredValue) {
     Skip-JsonWhitespace $text ([ref]$index)
     if ($index -ne $text.Length) { throw "unexpected data after top-level JSON object at offset $index" }
 
+    if ($SubagentMode -ceq 'on' -and $subagentCaseVariantSeen) {
+        throw 'settings.json contains a case-variant subagentStatusLine member; refusing ambiguous insertion'
+    }
+
+    $edits = @()
+    $insertions = @()
+    $remainingMemberCount = $memberCount
     if ($managedStart -ge 0) {
-        $updated = $text.Substring(0, $managedStart) + $DesiredValue + $text.Substring($managedEnd)
+        $edits += [pscustomobject]@{
+            Start = $managedStart
+            End = $managedEnd
+            Value = $DesiredValue
+        }
     } else {
+        $insertions += '"statusLine":' + $DesiredValue
+    }
+    if ($SubagentMode -ceq 'on') {
+        if ($subagentValueStart -ge 0) {
+            $edits += [pscustomobject]@{
+                Start = $subagentValueStart
+                End = $subagentValueEnd
+                Value = $DesiredSubagentValue
+            }
+        } else {
+            $insertions += '"subagentStatusLine":' + $DesiredSubagentValue
+        }
+    } elseif ($SubagentMode -ceq 'off' -and $subagentValueStart -ge 0) {
+        $removeStart = $subagentMemberStart
+        $removeEnd = $subagentValueEnd
+        if ($subagentFollowingComma -ge 0) {
+            $removeEnd = $subagentFollowingComma + 1
+        } elseif ($subagentPreviousComma -ge 0) {
+            $removeStart = $subagentPreviousComma
+        }
+        $edits += [pscustomobject]@{
+            Start = $removeStart
+            End = $removeEnd
+            Value = ''
+        }
+        $remainingMemberCount--
+    }
+    if ($insertions.Count -gt 0) {
         $prefix = ''
-        if ($memberCount -gt 0) { $prefix = ',' }
-        $insertion = $prefix + '"statusLine":' + $DesiredValue
-        $updated = $text.Substring(0, $closingBrace) + $insertion + $text.Substring($closingBrace)
+        if ($remainingMemberCount -gt 0) { $prefix = ',' }
+        $edits += [pscustomobject]@{
+            Start = $closingBrace
+            End = $closingBrace
+            Value = $prefix + ($insertions -join ',')
+        }
+    }
+
+    $updated = $text
+    foreach ($edit in @($edits | Sort-Object Start -Descending)) {
+        $updated = (
+            $updated.Substring(0, [int]$edit.Start) +
+            [string]$edit.Value +
+            $updated.Substring([int]$edit.End)
+        )
     }
     $contentBytes = $script:Utf8NoBom.GetBytes($updated)
     if ($hadBom) {
@@ -1318,6 +1407,8 @@ function Invoke-CorallineInstall {
     Assert-CommandPath $runtimePath 'installed runtime path'
     $command = '"' + $powershell + '" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $runtimePath + '"'
     $desiredStatusLine = '{"type":"command","command":' + (ConvertTo-JsonString $command) + ',"refreshInterval":1}'
+    $desiredSubagentStatusLine = '{"type":"command","command":' +
+        (ConvertTo-JsonString ($command + ' --subagent')) + '}'
 
     $installMutex = New-Object System.Threading.Mutex(
         $false,
@@ -1357,7 +1448,9 @@ function Invoke-CorallineInstall {
         Assert-ValidStagedPayload $stage
         $runtimeExpected = Get-ManagedPayloadBytes $stage
         $runtimeChanged = -not (Test-ManagedPayloadEqual $stage $install)
-        $settingsPlan = Get-SettingsPlan $settings $desiredStatusLine
+        $settingsPlan = Get-SettingsPlan (
+            $settings
+        ) $desiredStatusLine $SubagentRows $desiredSubagentStatusLine
         $settingsChanged = [bool]$settingsPlan.Changed
 
         if (-not $runtimeChanged -and -not $settingsChanged) {

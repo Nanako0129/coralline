@@ -7,8 +7,9 @@
 >
 > This playbook updates Bash-based installs. On PowerShell-only Windows, do not run
 > `install.sh`; re-run the native archive procedure under
-> [Windows without Git Bash](README.md#windows-without-git-bash), which preserves
-> `coralline.conf` and `settings.json`.
+> [Windows without Git Bash](README.md#windows-without-git-bash). It preserves
+> `coralline.conf` and keeps `subagentStatusLine` unchanged by default; use
+> `-SubagentRows on` or `-SubagentRows off` only for an explicit user choice.
 
 ## Overview
 

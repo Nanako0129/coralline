@@ -50,12 +50,11 @@ defaults to `name · description · token count`. coralline can theme the
 
 Claude Code v2.1.211 does not include its internal `agentType` role in the
 `subagentStatusLine` payload, but local Agent tasks have a small metadata
-sidecar next to the session transcript. coralline reads that file with Bash
-builtins, so roles such as `scout` and `executor` return without another
-process. The row keeps both identity and task label: an explicit per-task
-`name` is retained alongside the role when both exist, followed by `label` or
-`description`. If the sidecar is absent or unreadable, the payload fields still
-render normally.
+sidecar next to the session transcript. coralline reads that local file without
+starting another process, so roles such as `scout` and `executor` return. The
+row keeps both identity and task label: an explicit per-task `name` is retained
+alongside the role when both exist, followed by `label` or `description`. If the
+sidecar is absent or unreadable, the payload fields still render normally.
 
 The model comes directly from Claude Code's per-task `model` payload field;
 coralline never infers it from the main-session model or the agent role. Known
@@ -71,6 +70,9 @@ bash ~/.claude/coralline/configure.sh --subagent-rows=off
 
 The setup wizard offers the same toggle. Disabling removes only the
 `subagentStatusLine` entry and preserves every other Claude setting.
+On PowerShell-only Windows, rerun the native one-line installer below with
+`$subagentRows="on"` or `$subagentRows="off"`. Its default
+`$subagentRows="preserve"` leaves any existing `subagentStatusLine` untouched.
 
 Per-task `model` and `contextWindowSize` need Claude Code **v2.1.205+**. Missing
 fields degrade one segment at a time: no model hides only the model segment;
@@ -119,8 +121,10 @@ Everything else —
 `VL_SEGMENTS*`, layout (`VL_LAYOUT`, `VL_MAX_LINES`, `VL_WRAP_MARGIN`), clock,
 cost, lines, float, limit-sync, burn, git, and the runtime segments — is
 main-bar-only and ignored here. To theme panel rows independently of the main
-bar, point the registration at its own config file:
+bar, point the registration at its own config file. For example, the Bash
+registration can use:
 `CORALLINE_CONFIG=~/.claude/coralline-subagent.conf bash ~/.claude/coralline/statusline.sh --subagent`.
+The native renderer honors the same `CORALLINE_CONFIG` environment variable.
 
 ## Install
 
@@ -201,15 +205,15 @@ version too).
 It reads the exact same `~/.claude/coralline.conf` (and theme file) a bash install already
 wrote, so nothing about the config format changes; only the renderer is new. The native main
 bar supports the same segments, `pill`/`lean`/`classic` styles, `fixed`/`auto` layouts, burn
-history, limit sync, and float publication as the bash renderer. The `--subagent` panel-row
-protocol remains bash-only and exits without output in `statusline.ps1`.
+history, limit sync, float publication, and themed `--subagent` panel rows as the bash
+renderer.
 
 The following is the **mutable `main`** one-line installer. It resolves `main` to a commit SHA,
 downloads `install.ps1` from that SHA with a bounded `HttpWebRequest`, parses it before
 execution, and launches the absolute `$PSHOME\powershell.exe` with the same SHA:
 
 ```powershell
-& { $ErrorActionPreference='Stop';$repo='Nanako0129/coralline';$ref='main';if($repo -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$' -or $ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $ref.Length -gt 200 -or $ref.Contains('..') -or $ref.Contains('//') -or $ref.Contains('@{') -or $ref.EndsWith('/') -or $ref.EndsWith('.') -or $ref -match '(?i)(^|/)[^/]*\.lock($|/)'){throw 'invalid Repo or Ref'};$safe={param([string]$p,[string]$label,[bool]$cmd=$false);if([string]::IsNullOrWhiteSpace($p) -or $p -match '[\x00-\x1f\x7f-\x9f]' -or $p.StartsWith('\\') -or $p.StartsWith('//') -or $p.IndexOf(':',2) -ge 0){throw "$label is not a safe local path"};$full=[IO.Path]::GetFullPath($p).Replace('/','\');$root=[IO.Path]::GetPathRoot($full);if($root -notmatch '^[A-Za-z]:\\$'){throw "$label is not on a local drive"};$drive=New-Object IO.DriveInfo($root);if($drive.DriveType -eq [IO.DriveType]::Network){throw "$label is on a network drive"};if($cmd -and ($full.Contains('"') -or $full.Contains('%') -or $full.Contains('!'))){throw "$label is not cmd-safe"};$current=$root;foreach($part in $full.Substring($root.Length).Split(@([char]'\'),[StringSplitOptions]::RemoveEmptyEntries)){$current=[IO.Path]::Combine($current,$part);$item=Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue;if($null -eq $item){break};if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw "$label contains a reparse point"}};if($full.Length -gt $root.Length){$full=$full.TrimEnd('\')};return $full};$fetch={param([uri]$uri,[long]$cap,[string]$label);if($uri.Scheme -cne 'https' -or ($uri.Host -cne 'api.github.com' -and $uri.Host -cne 'raw.githubusercontent.com') -or $uri.UserInfo -or $uri.Query -or $uri.Fragment){throw "unexpected $label URI"};$request=[Net.HttpWebRequest]::Create($uri);$request.Method='GET';$request.AllowAutoRedirect=$false;$request.Timeout=15000;$request.ReadWriteTimeout=15000;$request.UserAgent='coralline-bootstrap';$response=$null;try{$response=[Net.HttpWebResponse]$request.GetResponse();if($response.StatusCode -ne [Net.HttpStatusCode]::OK -or $response.ResponseUri.AbsoluteUri -cne $uri.AbsoluteUri){throw "$label request failed or redirected"};if($response.ContentLength -gt $cap){throw "$label Content-Length exceeds limit"};$input=$response.GetResponseStream();$memory=New-Object IO.MemoryStream;try{$buffer=New-Object byte[] 8192;$total=0L;while(($read=$input.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $cap){throw "$label stream exceeds limit"};$memory.Write($buffer,0,$read)};if($response.ContentLength -ge 0 -and $total -ne $response.ContentLength){throw "$label download was truncated"};return ,$memory.ToArray()}finally{if($null -ne $input){$input.Dispose()};$memory.Dispose()}}finally{if($null -ne $response){$response.Dispose()}}};$old=[Net.ServicePointManager]::SecurityProtocol;$tmp=$null;$made=$false;$code=0;try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$parts=$repo.Split('/');$commit=$ref;if($commit -cnotmatch '^[0-9a-f]{40}$'){$api=[uri]('https://api.github.com/repos/'+[uri]::EscapeDataString($parts[0])+'/'+[uri]::EscapeDataString($parts[1])+'/commits/'+[uri]::EscapeDataString($ref));$strict=New-Object Text.UTF8Encoding($false,$true);try{$payload=$strict.GetString((& $fetch $api 1MB 'commit resolution'))|ConvertFrom-Json}catch{throw ('commit resolution response is invalid: '+$_.Exception.Message)};if($null -eq $payload -or $payload.PSObject.Properties.Name -notcontains 'sha'){throw 'commit resolution response has no sha'};$commit=[string]$payload.sha;if($commit -cnotmatch '^[0-9a-f]{40}$'){throw 'commit resolution returned an invalid sha'}};$uri=[uri]('https://raw.githubusercontent.com/'+[uri]::EscapeDataString($parts[0])+'/'+[uri]::EscapeDataString($parts[1])+'/'+$commit+'/install.ps1');$bytes=& $fetch $uri 1MB 'installer';$tempRoot=& $safe ([IO.Path]::GetTempPath()) 'TEMP';$tmp=& $safe ([IO.Path]::Combine($tempRoot,('coralline-install-'+[guid]::NewGuid().ToString('N')+'.ps1'))) 'installer temp';$output=[IO.File]::Open($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$made=$true;try{$output.Write($bytes,0,$bytes.Length);$output.Flush($true)}finally{$output.Dispose()};$checked=& $safe $tmp 'downloaded installer';if($checked -cne $tmp){throw 'installer temp identity changed'};$tokens=$null;$errors=$null;[void][Management.Automation.Language.Parser]::ParseFile($tmp,[ref]$tokens,[ref]$errors);if($errors.Count -ne 0){throw ('downloaded installer parse failed: '+$errors[0].Message)};$exe=& $safe ([IO.Path]::Combine($PSHOME,'powershell.exe')) 'PowerShell executable' $true;if(-not [IO.File]::Exists($exe)){throw 'trusted powershell.exe is missing'};$psi=New-Object Diagnostics.ProcessStartInfo;$psi.FileName=$exe;$psi.UseShellExecute=$false;$psi.Arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$tmp+'" -Repo "'+$repo+'" -Ref "'+$commit+'"';$process=New-Object Diagnostics.Process;$process.StartInfo=$psi;try{if(-not $process.Start()){throw 'installer child did not start'};$process.WaitForExit();$code=$process.ExitCode}finally{$process.Dispose()}}finally{[Net.ServicePointManager]::SecurityProtocol=$old;if($made -and $null -ne $tmp -and [IO.File]::Exists($tmp)){$checked=& $safe $tmp 'installer cleanup';if($checked -cne $tmp){throw 'refusing unexpected cleanup path'};$item=Get-Item -LiteralPath $tmp -Force;if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'refusing reparse-point cleanup'};[IO.File]::Delete($tmp)}};if($code -ne 0){exit $code} }
+& { $ErrorActionPreference='Stop';$repo='Nanako0129/coralline';$ref='main';$subagentRows="preserve";if($subagentRows -cnotin @("preserve","on","off")){throw "invalid SubagentRows"};if($repo -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$' -or $ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $ref.Length -gt 200 -or $ref.Contains('..') -or $ref.Contains('//') -or $ref.Contains('@{') -or $ref.EndsWith('/') -or $ref.EndsWith('.') -or $ref -match '(?i)(^|/)[^/]*\.lock($|/)'){throw 'invalid Repo or Ref'};$safe={param([string]$p,[string]$label,[bool]$cmd=$false);if([string]::IsNullOrWhiteSpace($p) -or $p -match '[\x00-\x1f\x7f-\x9f]' -or $p.StartsWith('\\') -or $p.StartsWith('//') -or $p.IndexOf(':',2) -ge 0){throw "$label is not a safe local path"};$full=[IO.Path]::GetFullPath($p).Replace('/','\');$root=[IO.Path]::GetPathRoot($full);if($root -notmatch '^[A-Za-z]:\\$'){throw "$label is not on a local drive"};$drive=New-Object IO.DriveInfo($root);if($drive.DriveType -eq [IO.DriveType]::Network){throw "$label is on a network drive"};if($cmd -and ($full.Contains('"') -or $full.Contains('%') -or $full.Contains('!'))){throw "$label is not cmd-safe"};$current=$root;foreach($part in $full.Substring($root.Length).Split(@([char]'\'),[StringSplitOptions]::RemoveEmptyEntries)){$current=[IO.Path]::Combine($current,$part);$item=Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue;if($null -eq $item){break};if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw "$label contains a reparse point"}};if($full.Length -gt $root.Length){$full=$full.TrimEnd('\')};return $full};$fetch={param([uri]$uri,[long]$cap,[string]$label);if($uri.Scheme -cne 'https' -or ($uri.Host -cne 'api.github.com' -and $uri.Host -cne 'raw.githubusercontent.com') -or $uri.UserInfo -or $uri.Query -or $uri.Fragment){throw "unexpected $label URI"};$request=[Net.HttpWebRequest]::Create($uri);$request.Method='GET';$request.AllowAutoRedirect=$false;$request.Timeout=15000;$request.ReadWriteTimeout=15000;$request.UserAgent='coralline-bootstrap';$response=$null;try{$response=[Net.HttpWebResponse]$request.GetResponse();if($response.StatusCode -ne [Net.HttpStatusCode]::OK -or $response.ResponseUri.AbsoluteUri -cne $uri.AbsoluteUri){throw "$label request failed or redirected"};if($response.ContentLength -gt $cap){throw "$label Content-Length exceeds limit"};$input=$response.GetResponseStream();$memory=New-Object IO.MemoryStream;try{$buffer=New-Object byte[] 8192;$total=0L;while(($read=$input.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $cap){throw "$label stream exceeds limit"};$memory.Write($buffer,0,$read)};if($response.ContentLength -ge 0 -and $total -ne $response.ContentLength){throw "$label download was truncated"};return ,$memory.ToArray()}finally{if($null -ne $input){$input.Dispose()};$memory.Dispose()}}finally{if($null -ne $response){$response.Dispose()}}};$old=[Net.ServicePointManager]::SecurityProtocol;$tmp=$null;$made=$false;$code=0;try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$parts=$repo.Split('/');$commit=$ref;if($commit -cnotmatch '^[0-9a-f]{40}$'){$api=[uri]('https://api.github.com/repos/'+[uri]::EscapeDataString($parts[0])+'/'+[uri]::EscapeDataString($parts[1])+'/commits/'+[uri]::EscapeDataString($ref));$strict=New-Object Text.UTF8Encoding($false,$true);try{$payload=$strict.GetString((& $fetch $api 1MB 'commit resolution'))|ConvertFrom-Json}catch{throw ('commit resolution response is invalid: '+$_.Exception.Message)};if($null -eq $payload -or $payload.PSObject.Properties.Name -notcontains 'sha'){throw 'commit resolution response has no sha'};$commit=[string]$payload.sha;if($commit -cnotmatch '^[0-9a-f]{40}$'){throw 'commit resolution returned an invalid sha'}};$uri=[uri]('https://raw.githubusercontent.com/'+[uri]::EscapeDataString($parts[0])+'/'+[uri]::EscapeDataString($parts[1])+'/'+$commit+'/install.ps1');$bytes=& $fetch $uri 1MB 'installer';$tempRoot=& $safe ([IO.Path]::GetTempPath()) 'TEMP';$tmp=& $safe ([IO.Path]::Combine($tempRoot,('coralline-install-'+[guid]::NewGuid().ToString('N')+'.ps1'))) 'installer temp';$output=[IO.File]::Open($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$made=$true;try{$output.Write($bytes,0,$bytes.Length);$output.Flush($true)}finally{$output.Dispose()};$checked=& $safe $tmp 'downloaded installer';if($checked -cne $tmp){throw 'installer temp identity changed'};$tokens=$null;$errors=$null;[void][Management.Automation.Language.Parser]::ParseFile($tmp,[ref]$tokens,[ref]$errors);if($errors.Count -ne 0){throw ('downloaded installer parse failed: '+$errors[0].Message)};$exe=& $safe ([IO.Path]::Combine($PSHOME,'powershell.exe')) 'PowerShell executable' $true;if(-not [IO.File]::Exists($exe)){throw 'trusted powershell.exe is missing'};$psi=New-Object Diagnostics.ProcessStartInfo;$psi.FileName=$exe;$psi.UseShellExecute=$false;$psi.Arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$tmp+'" -Repo "'+$repo+'" -Ref "'+$commit+'"';$psi.Arguments+=" -SubagentRows "+[char]34+$subagentRows+[char]34;$process=New-Object Diagnostics.Process;$process.StartInfo=$psi;try{if(-not $process.Start()){throw 'installer child did not start'};$process.WaitForExit();$code=$process.ExitCode}finally{$process.Dispose()}}finally{[Net.ServicePointManager]::SecurityProtocol=$old;if($made -and $null -ne $tmp -and [IO.File]::Exists($tmp)){$checked=& $safe $tmp 'installer cleanup';if($checked -cne $tmp){throw 'refusing unexpected cleanup path'};$item=Get-Item -LiteralPath $tmp -Force;if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'refusing reparse-point cleanup'};[IO.File]::Delete($tmp)}};if($code -ne 0){exit $code} }
 ```
 
 For an audited release or commit, copy the same line and replace only
@@ -218,8 +222,11 @@ can technically be moved; only an audited 40-character commit SHA makes the boot
 immutable. The bootstrap resolves a mutable name or tag before downloading executable code,
 then the installer downloads every managed file from that same commit.
 
-`install.ps1` installs `statusline.ps1` plus all ten themes, then losslessly merges only the
-exact-case top-level `statusLine` member in `$HOME\.claude\settings.json`. It preserves
+`install.ps1` installs `statusline.ps1` plus all ten themes, then losslessly merges the
+exact-case top-level `statusLine` member in `$HOME\.claude\settings.json`. The
+`-SubagentRows preserve|on|off` option leaves `subagentStatusLine` untouched by default,
+registers the native `statusline.ps1 --subagent` command when set to `on`, or removes only
+that exact-case top-level member when set to `off`. It preserves
 `$HOME\.claude\coralline.conf` byte-for-byte and never creates it. Existing runtime and settings
 are backed up with timestamped sibling names when their managed content changes. Installer
 invocations are serialized. Single-file runtime rollback refuses to overwrite concurrent edits and
@@ -238,7 +245,7 @@ If the one-line bootstrap cannot run, download a GitHub source archive in the br
 it, extract it locally, and run the checked-out installer without network access:
 
 ```powershell
-& "$PSHOME\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\path\to\coralline\install.ps1 -SourceDirectory C:\path\to\coralline -InstallRoot "$HOME\.claude\coralline" -SettingsPath "$HOME\.claude\settings.json"
+& "$PSHOME\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\path\to\coralline\install.ps1 -SourceDirectory C:\path\to\coralline -InstallRoot "$HOME\.claude\coralline" -SettingsPath "$HOME\.claude\settings.json" -SubagentRows preserve
 ```
 
 All three local-mode paths must be drive-absolute (`C:\...` or `C:/...`); drive-relative forms
@@ -304,8 +311,9 @@ that skepticism is inspection, not trust:
 - **What gets written, exactly:** Bash setup writes its runtime, your approved config, and
   Claude settings as described above. The native installer writes only `statusline.ps1` and
   ten themes under `~/.claude/coralline`, plus the exact top-level `statusLine` value in
-  `settings.json`. It never creates or edits `coralline.conf` and never writes
-  `subagentStatusLine`. Changed existing runtime/settings get timestamped sibling backups.
+  `settings.json`. It never creates or edits `coralline.conf`; `subagentStatusLine` is
+  preserved unless the explicit native opt-in or opt-out is selected. Changed existing
+  runtime/settings get timestamped sibling backups.
 - **What runs afterwards:** the registered Bash or PowerShell renderer runs on every prompt
   and makes zero network requests. The native command quotes the absolute trusted
   `$PSHOME\powershell.exe` and the absolute renderer path; it never searches the workspace
@@ -584,21 +592,21 @@ The wizard discovers themes automatically from `themes/*.conf` and nested collec
 | macOS | ✅ supported (works on the stock bash 3.2) |
 | Linux | ✅ supported |
 | Windows + Git Bash | ✅ supported — Claude Code runs the status line through Git Bash when it's installed |
-| Windows without Git Bash | ✅ supported for the main bar through native Windows PowerShell 5.1 |
+| Windows without Git Bash | ✅ supported through native Windows PowerShell 5.1 |
 
 > **Windows note:** the native PowerShell renderer needs neither Git Bash nor `jq`. `git.exe`
 > is optional and only enables the `git`, `stash`, and `project` segments. The interactive
-> wizard and themed `--subagent` rows remain bash-only.
+> wizard remains bash-only; main and themed `--subagent` rows are native.
 
 ## Why it's fast
 
-The statusline is just a local shell script: it makes no network or API calls and uses zero
+The statusline is just a local renderer: it makes no network or API calls and uses zero
 tokens. Claude Code pipes the session JSON to it on stdin and renders whatever it prints.
 
-It runs every second (`refreshInterval: 1`), so the script is built to be cheap on CPU: one
-`jq` invocation extracts every field at once, and one `git status --porcelain=v2 --branch`
-call provides branch, dirty state, and ahead/behind together. No `bc`, no per-field subprocess
-spam. Works on stock macOS bash 3.2 and any Linux bash.
+The main bar runs every second (`refreshInterval: 1`), while subagent rows redraw on panel
+events. The Bash renderer extracts every field with one `jq` call; the native PowerShell
+renderer parses in-process. Both use at most one `git status --porcelain=v2 --branch` call per
+render, and neither launches per-field subprocesses.
 
 ## Support coralline
 
