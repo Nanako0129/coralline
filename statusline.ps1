@@ -835,9 +835,20 @@ function Format-Tok([string]$Raw) {
     if ($Raw -notmatch '^[0-9]+$') { return $Raw }
     $n = 0L
     if (-not [long]::TryParse($Raw, $IntegerStyle, $Invariant, [ref]$n)) { return '0' }
-    if ($n -ge 1000000) { return ('{0}.{1}M' -f [math]::Floor($n / 1000000), [math]::Floor(($n % 1000000) / 100000)) }
-    if ($n -ge 1000) { return ('{0}.{1}k' -f [math]::Floor($n / 1000), [math]::Floor(($n % 1000) / 100)) }
-    return [string]$n
+    if ($n -ge 1000000) {
+        $scale = 1000000L
+        $tenthScale = 100000L
+        $suffix = 'M'
+    } elseif ($n -ge 1000) {
+        $scale = 1000L
+        $tenthScale = 100L
+        $suffix = 'k'
+    } else { return [string]$n }
+    $remainder = 0L
+    $whole = [Math]::DivRem($n, $scale, [ref]$remainder)
+    $unused = 0L
+    $tenth = [Math]::DivRem($remainder, $tenthScale, [ref]$unused)
+    return ('{0}.{1}{2}' -f $whole, $tenth, $suffix)
 }
 
 function Get-PctValue([string]$Raw, [ref]$Result) {

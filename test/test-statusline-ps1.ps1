@@ -914,6 +914,9 @@ shell_quote "$CORALLINE_Q_VALUE"
         [pscustomobject]@{ Name='floor'; Tok='1'; Win='3'; Show=$true; Needle='33%' },
         [pscustomobject]@{ Name='large-exact-floor'; Tok='299999999999998'; Win='9999999999999934'; Show=$true; Needle='2%' },
         [pscustomobject]@{ Name='clamp'; Tok='9999999999999999'; Win='1'; Show=$true; Needle='100%' },
+        [pscustomobject]@{ Name='large-token-abbreviation'; Tok='9999999999999999'; Win='0'; Show=$true; Needle='9999999999.9M' },
+        [pscustomobject]@{ Name='below-million'; Tok='999999'; Win='0'; Show=$true; Needle='999.9k' },
+        [pscustomobject]@{ Name='at-million'; Tok='1000000'; Win='0'; Show=$true; Needle='1.0M' },
         [pscustomobject]@{ Name='zero-window'; Tok='1000'; Win='0'; Show=$true; Needle='1.0k' },
         [pscustomobject]@{ Name='invalid-window'; Tok='1000'; Win='10000000000000000'; Show=$true; Needle='1.0k' },
         [pscustomobject]@{ Name='invalid-token'; Tok='10000000000000000'; Win='1'; Show=$false; Needle='' },
@@ -1491,6 +1494,16 @@ fi
     $tokenRun = Invoke-Statusline (Json $missingTokens) $tokenConfig @{} '' 5000
     Check-Run 'missing token values' $tokenRun
     Check 'missing token values render zero' ((Plain $tokenRun.Stdout).Contains((Glyph 0x2191) + '0 ' + (Glyph 0x2193) + '0 cr:0 cw:0'))
+
+    $largeTokens = Clone-Object $basePayload
+    $largeTokens.context_window.total_input_tokens = '9999999999999999'
+    $largeTokenConfig = New-Config 'large-token-format' @('VL_SEGMENTS=ctx','VL_CLOCK=off')
+    $largeTokenPs = Invoke-Statusline (Json $largeTokens) $largeTokenConfig @{} '' 5000
+    $largeTokenBash = Invoke-BashStatusline (Json $largeTokens) $largeTokenConfig @{}
+    Check-Run 'large main token abbreviation' $largeTokenPs
+    Check-Run 'large main token abbreviation Bash reference' $largeTokenBash
+    Check-Exact 'large main token abbreviation remains byte exact' $largeTokenPs $largeTokenBash
+    Check 'large main token abbreviation uses integer quotient' ((Plain $largeTokenPs.Stdout).Contains('9999999999.9M'))
 
     $dirConfig = New-Config 'dir-only' @('VL_SEGMENTS=dir','VL_CLOCK=off','VL_PATH_DEPTH=4')
     foreach ($case in @(
