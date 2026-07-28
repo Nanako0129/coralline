@@ -1518,7 +1518,8 @@ function Invoke-SubagentMode([string]$InputText) {
                     $window = 0L
                     $background = if ([string]::IsNullOrEmpty([string]$Cfg.VL_BG_SUB_CTX)) { $Cfg.VL_BG_CTX } else { $Cfg.VL_BG_SUB_CTX }
                     if ((Try-SubagentUnsigned $fields.contextWindowSize ([ref]$window)) -and $window -gt 0) {
-                        $percentage = [long][Math]::Floor(($token * 100L) / $window)
+                        $unused = 0L
+                        $percentage = [Math]::DivRem(($token * 100L), $window, [ref]$unused)
                         if ($percentage -gt 100) { $percentage = 100 }
                         $bar = New-Bar ([int]$percentage) ([int]$Cfg.VL_BAR_WIDTH)
                         Add-SubagentSegment $backgrounds $texts $background ((Get-Fg (Get-PctFg ([int]$percentage))) + ' ' + $Cfg.VL_CTX_GLYPH + ' ' + $bar + ' ' + $percentage + '% ' + (Get-Fg $Cfg.VL_FG_DIM) + $tokenText + ' ')

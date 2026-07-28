@@ -912,6 +912,7 @@ shell_quote "$CORALLINE_Q_VALUE"
     $ctxOnlyConfig = New-Config 'sub-ctx-only' @(('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'ctx')))
     foreach ($vector in @(
         [pscustomobject]@{ Name='floor'; Tok='1'; Win='3'; Show=$true; Needle='33%' },
+        [pscustomobject]@{ Name='large-exact-floor'; Tok='299999999999998'; Win='9999999999999934'; Show=$true; Needle='2%' },
         [pscustomobject]@{ Name='clamp'; Tok='9999999999999999'; Win='1'; Show=$true; Needle='100%' },
         [pscustomobject]@{ Name='zero-window'; Tok='1000'; Win='0'; Show=$true; Needle='1.0k' },
         [pscustomobject]@{ Name='invalid-window'; Tok='1000'; Win='10000000000000000'; Show=$true; Needle='1.0k' },
