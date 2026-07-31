@@ -143,6 +143,9 @@ eq '5h fractional pct exact eta' "$_B5_ETA" 22050
 run5h '1000000\t6\t1015900\n1000060\t6.500\t1015900\n1000060\t7\t1015900\n1000300\t8\t1015900\n1000360\t8\t1015900\n' 1000360 0
 eq 'same-second maximum keeps slope' "$_B5_ETA" 22080
 
+run5h '1000000\t6\t1015900\n1000300\t8\t1015900\n1000060\t7\t1015900\n1000360\t8\t1015900\n' 1000360 0
+eq 'out-of-order appends sort before slope' "$_B5_ETA" 22080
+
 run5h '1000000\t6\t1015900\n1000060\t50\t1010000\n1000120\t7\t1015900\n1000180\t51\t1010000\n1000300\t8\t1015900\n1000360\t8\t1015900\n' 1000360 0
 eq 'latest reset isolates old windows' "$_B5_ETA" 16560
 
@@ -168,6 +171,14 @@ IFS=$'\t' read -r _FIRST _ _ < "$BURN_FILE"; eq '5h trim first kept' "$_FIRST" 3
 BURN_TRIM=3
 run5h '1\t6\t9\n1\t6.100\t9\n1\t6.200\t9\n2\t7\t9\n2\t7.100\t9\n2\t7.200\t9\n' 3 1
 eq 'resize burst collapses same-second rows' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 2
+
+CASE="$TMPD/stale-tmp"; mkdir -p "$CASE"
+unit_gate "$CASE" 6 '' '' '' '' 1
+printf '1\t6\t9\n2\t7\t9\n3\t8\t9\n4\t9\t9\n' > "$BURN_FILE"
+printf 'stale-canary\n' > "$BURN_FILE.$$.tmp"
+cp "$BURN_FILE" "$CASE/before"; _CUR_BURN_VALID=0; BURN_TRIM=3; burn_eta_5h 1
+if cmp -s "$BURN_FILE" "$CASE/before"; then ok 'pre-existing temp never replaces history'; else bad 'pre-existing temp never replaces history' changed; fi
+eq 'pre-existing temp remains untouched' "$(LC_ALL=C tr -d '\n' < "$BURN_FILE.$$.tmp")" stale-canary
 BURN_TRIM=1500
 
 # Stateless 7d estimator keeps exact rational semantics.
@@ -331,7 +342,14 @@ CASE="$TMPD/path-case"; mkdir -p "$CASE/State"; printf 'case-canary' > "$CASE/St
 write_paths_config "$CASE/conf" 'burn limit5h' 1 "$CASE/State/burn.tsv" "$CASE/state/burn.tsv" "$CASE/limit7.tsv"
 make_payload "$CASE/input" 41.2 "$_r5" 30 "$_r7"
 cp "$CASE/State/burn.tsv" "$CASE/before"; run_runtime "$BASH_BIN" "$CASE/conf" "$CASE/input" "$CASE/out" "$CASE/err" 0
-if cmp -s "$CASE/State/burn.tsv" "$CASE/before"; then ok 'case alias collision preserves canary'; else bad 'case alias collision preserves canary' changed; fi
+case "${OSTYPE:-}" in
+  (darwin*|mingw*|msys*)
+    if cmp -s "$CASE/State/burn.tsv" "$CASE/before"; then ok 'case alias collision preserves canary'; else bad 'case alias collision preserves canary' changed; fi
+    ;;
+  (*)
+    if cmp -s "$CASE/State/burn.tsv" "$CASE/before"; then bad 'case-sensitive distinct paths remain usable' unchanged; else ok 'case-sensitive distinct paths remain usable'; fi
+    ;;
+esac
 
 CASE="$TMPD/path-link"; mkdir -p "$CASE/target"; printf 'ancestor-canary' > "$CASE/target/canary"
 if ln -s "$CASE/target" "$CASE/link" 2>/dev/null; then

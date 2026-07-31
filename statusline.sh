@@ -809,6 +809,17 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
       if (!(key in pos)) { at = ++n; pos[key] = at; rs[at] = r; sm[at] = s; pc[at] = p }
       else { at = pos[key]; if (p > pc[at]) pc[at] = p }
     }
+    function qsort(a, lo, hi, i, j, mid, t) {
+      while (lo < hi) {
+        i = lo; j = hi; mid = a[int((lo + hi) / 2)] + 0
+        while (i <= j) {
+          while (a[i] + 0 < mid) i++
+          while (a[j] + 0 > mid) j--
+          if (i <= j) { t = a[i]; a[i] = a[j]; a[j] = t; i++; j-- }
+        }
+        if (j - lo < hi - i) { qsort(a, lo, j); lo = i } else { qsort(a, i, hi); hi = j }
+      }
+    }
     {
       physical++; bytes += length($0) + 1
       if (physical > 4096 || bytes > 1048576 || length($0) > 4096) { incomplete = 1; exit }
@@ -833,18 +844,21 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
       if (maxrst <= 0) { print "warming 0 0 0 0"; exit }
       m = 0
       for (i = 1; i <= n; i++) if (rs[i] == maxrst) {
-        sk = sm[i] ""
-        if (!(sk in spos)) { j = ++m; spos[sk] = j; ss[j] = sm[i]; sp[j] = pc[i] }
-        else { j = spos[sk]; if (pc[i] > sp[j]) sp[j] = pc[i] }
+        sk = sprintf("%.0f", sm[i])
+        if (!(sk in sample_pct)) { order[++m] = sm[i]; sample_pct[sk] = pc[i] }
+        else if (pc[i] > sample_pct[sk]) sample_pct[sk] = pc[i]
       }
       if (m == 0) { print "warming 0 0 0 0"; exit }
-      latest = sp[m]; ttr = maxrst - now; if (ttr < 0) ttr = 0
+      qsort(order, 1, m)
+      sk = sprintf("%.0f", order[m]); latest = sample_pct[sk]
+      ttr = maxrst - now; if (ttr < 0) ttr = 0
       cutoff = now - win; minspan = int(win / 10)
       fc_t = 0; fc_p = -1; lc_t = 0; lc_p = -1; ncross = 0; anycross = 0
       for (i = 2; i <= m; i++) {
-        a = int(sp[i-1] / 1000); b = int(sp[i] / 1000)
+        psk = sprintf("%.0f", order[i-1]); sk = sprintf("%.0f", order[i])
+        a = int(sample_pct[psk] / 1000); b = int(sample_pct[sk] / 1000)
         if (b > a) {
-          anycross = 1; ct = ss[i]
+          anycross = 1; ct = order[i]
           if (ct >= cutoff && ct <= now) {
             if (fc_p < 0) { fc_t = ct; fc_p = b }
             lc_t = ct; lc_p = b; ncross++
@@ -858,7 +872,7 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
     }
   ' "$src" 2>/dev/null); rc=$?
 
-  if [ -n "$tmp" ] && [ -f "$tmp" ] && [ ! -L "$tmp" ]; then
+  if [ "$write_tmp" = 1 ] && [ -f "$tmp" ] && [ ! -L "$tmp" ]; then
     if [ "$rc" -eq 0 ] && state_paths_revalidate && state_no_symlink_path "$tmp" && [ "$_SNP" = "$tmp" ]; then
       mv -f "$tmp" "$_SB_BASE" 2>/dev/null || true
     elif state_paths_revalidate && state_no_symlink_path "$tmp" && [ "$_SNP" = "$tmp" ]; then
