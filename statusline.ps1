@@ -15,27 +15,47 @@ $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 
 $StrictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+$LenientUtf8 = New-Object System.Text.UTF8Encoding($false, $false)
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $InputStream = [Console]::OpenStandardInput()
-if ($SubagentMode) {
-    # Read one byte beyond the limit before allocating a decoded string. This
-    # distinguishes an exact-cap stream from a longer one without unbounded I/O.
-    $inputCap = 4194304
-    $inputBytes = New-Object byte[] ($inputCap + 1)
+
+# Read one byte beyond the limit before allocating a decoded string. This
+# distinguishes an exact-cap stream from a longer one without unbounded I/O.
+# Both modes capture raw bytes up front (rather than decoding straight off
+# the stream) specifically so a decode failure below has something left to
+# retry against - stdin is a non-seekable console handle, so once the bytes
+# are gone there is no re-reading it.
+$inputCap = 4194304
+$inputBytes = New-Object byte[] ($inputCap + 1)
+$inputLength = 0
+try {
+    while ($inputLength -lt $inputBytes.Length) {
+        $read = $InputStream.Read($inputBytes, $inputLength, $inputBytes.Length - $inputLength)
+        if ($read -le 0) { break }
+        $inputLength += $read
+    }
+} catch { $inputLength = 0 }
+if ($inputLength -gt $inputCap) {
+    if ($SubagentMode) { [Environment]::Exit(0) }
     $inputLength = 0
-    try {
-        while ($inputLength -lt $inputBytes.Length) {
-            $read = $InputStream.Read($inputBytes, $inputLength, $inputBytes.Length - $inputLength)
-            if ($read -le 0) { break }
-            $inputLength += $read
-        }
-        if ($inputLength -gt $inputCap) { [Environment]::Exit(0) }
-        $rawInput = $StrictUtf8.GetString($inputBytes, 0, $inputLength)
-    } catch { [Environment]::Exit(0) }
-} else {
-    $InputReader = New-Object System.IO.StreamReader($InputStream, $StrictUtf8, $false, 4096, $false)
-    try { $rawInput = $InputReader.ReadToEnd() } catch { $rawInput = '' }
-    $InputReader.Dispose()
+}
+
+# A BOM is valid UTF-8 - it decodes without throwing straight into a literal
+# U+FEFF character, which then silently breaks JSON parsing further down
+# rather than raising anything here. Strip it from the bytes up front so
+# neither decode path below has to special-case it separately.
+$inputStart = 0
+if ($inputLength -ge 3 -and $inputBytes[0] -eq 0xEF -and $inputBytes[1] -eq 0xBB -and $inputBytes[2] -eq 0xBF) { $inputStart = 3 }
+
+# Genuinely invalid byte sequences previously meant an empty $rawInput and a
+# near-blank render (or a silent exit in --subagent mode). Falling back to a
+# non-throwing decode of the same captured bytes recovers a usable string
+# instead of losing the whole render to one encoding hiccup.
+try {
+    $rawInput = $StrictUtf8.GetString($inputBytes, $inputStart, $inputLength - $inputStart)
+} catch {
+    try { $rawInput = $LenientUtf8.GetString($inputBytes, $inputStart, $inputLength - $inputStart) }
+    catch { $rawInput = '' }
 }
 
 $OutputStream = [Console]::OpenStandardOutput()
@@ -76,6 +96,14 @@ if ([string]::IsNullOrEmpty($DefaultRl5File)) {
 $DefaultRl7File = [string]$env:CORALLINE_RL7D_FILE
 if ([string]::IsNullOrEmpty($DefaultRl7File)) {
     $DefaultRl7File = [System.IO.Path]::Combine($HomeDir, '.claude\coralline\limit-7d.tsv')
+}
+$AppPathCacheFile = [string]$env:CORALLINE_APPPATH_CACHE
+if ([string]::IsNullOrEmpty($AppPathCacheFile)) {
+    $AppPathCacheFile = [System.IO.Path]::Combine($HomeDir, '.claude\coralline\apppath-cache.tsv')
+}
+$GitCacheDir = [string]$env:CORALLINE_GITCACHE_DIR
+if ([string]::IsNullOrEmpty($GitCacheDir)) {
+    $GitCacheDir = [System.IO.Path]::Combine($HomeDir, '.claude\coralline\git-cache')
 }
 
 $Defaults = [ordered]@{
@@ -2534,15 +2562,137 @@ function Get-DisplayPath([string]$Path) {
     return $short
 }
 
+function Get-PathEnvSignature {
+    if ($null -ne $script:PathEnvSignature) { return $script:PathEnvSignature }
+    $sig = ''
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $bytes = $sha.ComputeHash($Utf8NoBom.GetBytes([string]$env:PATH))
+            $sb = New-Object System.Text.StringBuilder
+            foreach ($b in $bytes) { [void]$sb.Append($b.ToString('x2')) }
+            $sig = $sb.ToString()
+        } finally { $sha.Dispose() }
+    } catch { $sig = '' }
+    $script:PathEnvSignature = $sig
+    return $sig
+}
+
+# Atomic single-writer-wins temp+Replace, mirroring Write-BurnState. Concurrent
+# renders never see a torn read; a losing writer's update is simply discarded.
+function Write-AtomicStateFile([string]$Path, [string]$Text, [string]$TmpTag) {
+    $parent = $null
+    try { $parent = [System.IO.Path]::GetDirectoryName($Path) } catch { return }
+    if ([string]::IsNullOrEmpty($parent) -or -not (Test-NoReparseComponents $parent)) { return }
+    try { if (-not [IO.Directory]::Exists($parent)) { [void][IO.Directory]::CreateDirectory($parent) } } catch { return }
+    if (-not [IO.Directory]::Exists($parent)) { return }
+    if ((Test-StateObjectExists $Path) -and -not (Test-StateRegularFile $Path)) { return }
+    $temp = ''
+    $backup = ''
+    try {
+        for ($attempt = 0; $attempt -lt 8; $attempt++) {
+            $candidate = [IO.Path]::Combine($parent, ('.' + $TmpTag + '.tmp.' + [string]$PID + '.' + [guid]::NewGuid().ToString('N')))
+            if ($candidate.Length -gt 4096) { return }
+            $stream = $null
+            try {
+                $stream = New-Object IO.FileStream($candidate, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough)
+                $bytes = $Utf8NoBom.GetBytes($Text)
+                if ($bytes.Length -gt 0) { $stream.Write($bytes, 0, $bytes.Length) }
+                $stream.Flush($true)
+                $stream.Dispose()
+                $stream = $null
+                $temp = $candidate
+                break
+            } catch [IO.IOException] {
+                if ($null -ne $stream) { $stream.Dispose() }
+            } catch {
+                if ($null -ne $stream) { $stream.Dispose() }
+                return
+            }
+        }
+        if ([string]::IsNullOrEmpty($temp)) { return }
+        if (Test-StateObjectExists $Path) {
+            if (-not (Test-StateRegularFile $Path)) { return }
+            for ($attempt = 0; $attempt -lt 8; $attempt++) {
+                $backup = [IO.Path]::Combine($parent, ('.' + $TmpTag + '.bak.' + [string]$PID + '.' + [guid]::NewGuid().ToString('N')))
+                if ($backup.Length -gt 4096) { $backup = ''; return }
+                if (-not (Test-StateObjectExists $backup)) { break }
+                $backup = ''
+            }
+            if ([string]::IsNullOrEmpty($backup)) { return }
+            [IO.File]::Replace($temp, $Path, $backup)
+            if (Test-StateRegularFile $backup) { [IO.File]::Delete($backup); $backup = '' }
+            elseif (-not (Test-StateObjectExists $backup)) { $backup = '' }
+        } else {
+            [IO.File]::Move($temp, $Path)
+        }
+        $temp = ''
+    } catch { }
+    finally {
+        foreach ($leftover in @($temp, $backup)) {
+            if (-not [string]::IsNullOrEmpty($leftover)) {
+                try { if (Test-StateRegularFile $leftover) { [IO.File]::Delete($leftover) } } catch { }
+            }
+        }
+    }
+}
+
 $AppCache = @{}
+$script:AppPathDiskCache = @{}
+$script:AppPathDiskCacheLoaded = $false
+
+function Read-AppPathCacheFile([string]$Path) {
+    $map = @{}
+    $text = Read-StrictUtf8File $Path
+    if ($null -eq $text) { return $map }
+    foreach ($line in [regex]::Split($text, "`r`n|`n|`r")) {
+        if ([string]::IsNullOrEmpty($line)) { continue }
+        $fields = $line.Split("`t")
+        if ($fields.Length -ne 3) { continue }
+        $map[$fields[0]] = [pscustomobject]@{ Sig = $fields[1]; Value = $fields[2] }
+    }
+    return $map
+}
+
+function Write-AppPathCacheFile([string]$Path, [hashtable]$Map) {
+    $builder = New-Object Text.StringBuilder
+    foreach ($key in $Map.Keys) {
+        $entry = $Map[$key]
+        if ($key -match '[\t\r\n]' -or [string]$entry.Sig -match '[\t\r\n]' -or [string]$entry.Value -match '[\t\r\n]') { continue }
+        [void]$builder.Append($key).Append("`t").Append([string]$entry.Sig).Append("`t").Append([string]$entry.Value).Append("`n")
+    }
+    Write-AtomicStateFile $Path ($builder.ToString()) 'apppath'
+}
+
+# Resolving git.exe (or node/python3 when VL_RUNTIME_PROBE=1) via Get-Command
+# walks every PATH directory on the filesystem. That cost previously repeated
+# on every single render, since $AppCache only lives for one process. Caching
+# the resolution keyed by a hash of the live PATH string means an unchanged
+# PATH (the overwhelming common case) costs one small file read instead.
 function Get-ApplicationPath([string]$Name) {
     if ($AppCache.ContainsKey($Name)) { return [string]$AppCache[$Name] }
+    $sig = Get-PathEnvSignature
+    if (-not $script:AppPathDiskCacheLoaded) {
+        $script:AppPathDiskCache = Read-AppPathCacheFile $AppPathCacheFile
+        $script:AppPathDiskCacheLoaded = $true
+    }
+    if ($script:AppPathDiskCache.ContainsKey($Name)) {
+        $entry = $script:AppPathDiskCache[$Name]
+        if (-not [string]::IsNullOrEmpty($sig) -and [string]$entry.Sig -ceq $sig) {
+            $AppCache[$Name] = [string]$entry.Value
+            return [string]$entry.Value
+        }
+    }
     $path = ''
     try {
         $cmd = Get-Command -Name $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($null -ne $cmd) { $path = [string]$cmd.Source }
     } catch { $path = '' }
     $AppCache[$Name] = $path
+    if (-not [string]::IsNullOrEmpty($sig)) {
+        $script:AppPathDiskCache[$Name] = [pscustomobject]@{ Sig = $sig; Value = $path }
+        Write-AppPathCacheFile $AppPathCacheFile $script:AppPathDiskCache
+    }
     return $path
 }
 
@@ -2593,39 +2743,320 @@ function Get-GitState([string]$Cwd) {
     return $state
 }
 
-function Get-GitRoot([string]$Cwd) {
-    if ([string]::IsNullOrEmpty($Cwd)) { return '' }
-    $git = Get-ApplicationPath 'git'
-    if ([string]::IsNullOrEmpty($git)) { return '' }
-    $root = ''
-    try {
-        $LASTEXITCODE = 0
-        $result = @(& $git -C $Cwd rev-parse --path-format=absolute --git-common-dir 2>$null)
-        if ($LASTEXITCODE -eq 0 -and $result.Count -gt 0) { $root = [string]$result[0] }
-        if ([string]::IsNullOrEmpty($root)) {
-            $LASTEXITCODE = 0
-            $result = @(& $git -C $Cwd rev-parse --show-toplevel 2>$null)
-            if ($LASTEXITCODE -ne 0 -or $result.Count -eq 0) { return '' }
-            $root = [string]$result[0]
-        }
-    } catch { return '' }
-    $root = (Remove-ControlChars $root).Replace('\', '/').TrimEnd('/')
-    if ($root.EndsWith('/.git', [System.StringComparison]::OrdinalIgnoreCase)) { $root = $root.Substring(0, $root.Length - 5) }
-    $parts = $root.Split(@('/'), [System.StringSplitOptions]::RemoveEmptyEntries)
-    if ($parts.Length -eq 0) { return '' }
-    return $parts[$parts.Length - 1]
+# --- Pure-.NET .git discovery (no git.exe) -------------------------------
+# Branch name, stash count, and the project folder name are all derivable by
+# reading git's own plumbing files directly, so they never need to fork
+# git.exe. Only dirty-state/ahead-behind (Get-GitState above) still shells
+# out, because faithfully reproducing git's own status computation (rename
+# detection, .gitignore, sparse-checkout, submodules...) is not something to
+# reimplement here; that call is instead cached below.
+
+function Read-GitPointerFile([string]$Path) {
+    # commondir/HEAD-target pointer files are absent far more often than
+    # present (plain non-worktree repos never have a commondir file at all).
+    # File.Exists() is a cheap boolean probe; routing the common "absent"
+    # case through GetAttributes/ReadAllBytes instead would mean paying a
+    # .NET exception unwind on every single render for something that isn't
+    # an error at all, just the normal shape of most repos.
+    if (-not [IO.File]::Exists($Path)) { return $null }
+    $text = Read-StrictUtf8File $Path
+    if ($null -eq $text) { return $null }
+    $line = ([regex]::Split($text, "`r`n|`n|`r"))[0]
+    if ($null -eq $line) { return $null }
+    $line = $line.TrimEnd()
+    if ($line.Length -eq 0) { return $null }
+    return $line
 }
 
-function Get-StashCount([string]$Cwd) {
-    if ([string]::IsNullOrEmpty($Cwd)) { return 0 }
-    $git = Get-ApplicationPath 'git'
-    if ([string]::IsNullOrEmpty($git)) { return 0 }
+function Resolve-GitRelativePath([string]$BaseDir, [string]$Raw) {
+    if ([string]::IsNullOrEmpty($Raw)) { return $null }
+    $p = $Raw.Trim()
+    if ($p.Length -eq 0 -or $p.Length -gt 4096) { return $null }
     try {
-        $LASTEXITCODE = 0
-        $result = @(& $git -C $Cwd rev-list --walk-reflogs --count refs/stash 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $result.Count -eq 0) { return 0 }
-        return Get-BoundedInt ([string]$result[0]) 0 0 1000000
-    } catch { return 0 }
+        if (-not [IO.Path]::IsPathRooted($p)) { $p = [IO.Path]::Combine($BaseDir, $p) }
+        return [IO.Path]::GetFullPath($p)
+    } catch { return $null }
+}
+
+function Resolve-GitCommonDir([string]$GitDir) {
+    $commonDir = $GitDir
+    $commonRaw = Read-GitPointerFile ([IO.Path]::Combine($GitDir, 'commondir'))
+    if (-not [string]::IsNullOrEmpty($commonRaw)) {
+        $resolved = Resolve-GitRelativePath $GitDir $commonRaw
+        if ($null -ne $resolved -and [IO.Directory]::Exists($resolved)) { $commonDir = $resolved }
+    }
+    $envCommonDir = [string]$env:GIT_COMMON_DIR
+    if (-not [string]::IsNullOrEmpty($envCommonDir)) {
+        $resolvedEnv = Resolve-GitRelativePath $GitDir $envCommonDir
+        if ($null -ne $resolvedEnv -and [IO.Directory]::Exists($resolvedEnv)) { $commonDir = $resolvedEnv }
+    }
+    return $commonDir
+}
+
+function Find-GitPaths([string]$Cwd) {
+    $none = [pscustomobject]@{ Found = $false; GitDir = ''; CommonDir = ''; WorktreeRoot = '' }
+    if ([string]::IsNullOrEmpty($Cwd)) { return $none }
+
+    $envGitDir = [string]$env:GIT_DIR
+    if (-not [string]::IsNullOrEmpty($envGitDir)) {
+        $resolved = Resolve-GitRelativePath $Cwd $envGitDir
+        if ($null -ne $resolved -and [IO.Directory]::Exists($resolved)) {
+            $worktreeRoot = $Cwd
+            $envWorkTree = [string]$env:GIT_WORK_TREE
+            if (-not [string]::IsNullOrEmpty($envWorkTree)) {
+                $resolvedWt = Resolve-GitRelativePath $Cwd $envWorkTree
+                if ($null -ne $resolvedWt) { $worktreeRoot = $resolvedWt }
+            }
+            return [pscustomobject]@{ Found = $true; GitDir = $resolved; CommonDir = (Resolve-GitCommonDir $resolved); WorktreeRoot = $worktreeRoot }
+        }
+    }
+
+    $dir = $null
+    try { $dir = New-Object IO.DirectoryInfo($Cwd) } catch { return $none }
+    $depth = 0
+    while ($null -ne $dir -and $depth -lt 512) {
+        $depth++
+        $candidate = [IO.Path]::Combine($dir.FullName, '.git')
+        # Directory.Exists()/File.Exists() are non-throwing probes; walking
+        # up toward a repo root means most levels genuinely have no '.git'
+        # entry at all, so GetAttributes-plus-catch would pay an exception
+        # unwind at every level that doesn't - checked-first is a straight
+        # improvement, not just a workaround for one slow environment.
+        $isDir = [IO.Directory]::Exists($candidate)
+        $isFile = (-not $isDir) -and [IO.File]::Exists($candidate)
+        if ($isDir) {
+            return [pscustomobject]@{ Found = $true; GitDir = $candidate; CommonDir = (Resolve-GitCommonDir $candidate); WorktreeRoot = $dir.FullName }
+        }
+        if ($isFile) {
+            $pointerRaw = Read-GitPointerFile $candidate
+            if ($null -ne $pointerRaw -and $pointerRaw.StartsWith('gitdir: ', [StringComparison]::Ordinal)) {
+                $target = Resolve-GitRelativePath $dir.FullName $pointerRaw.Substring(8)
+                if ($null -ne $target -and [IO.Directory]::Exists($target)) {
+                    return [pscustomobject]@{ Found = $true; GitDir = $target; CommonDir = (Resolve-GitCommonDir $target); WorktreeRoot = $dir.FullName }
+                }
+            }
+            return $none
+        }
+        $dir = $dir.Parent
+    }
+    return $none
+}
+
+function Get-GitHeadInfo([string]$GitDir) {
+    $result = [pscustomobject]@{ Branch = ''; RefName = ''; Detached = $false }
+    $text = Read-StrictUtf8File ([IO.Path]::Combine($GitDir, 'HEAD'))
+    if ($null -eq $text) { return $result }
+    $line = ([regex]::Split($text, "`r`n|`n|`r"))[0]
+    if ([string]::IsNullOrEmpty($line)) { return $result }
+    if ($line.StartsWith('ref: ', [StringComparison]::Ordinal)) {
+        $ref = $line.Substring(5).Trim()
+        $prefix = 'refs/heads/'
+        if ($ref.StartsWith($prefix, [StringComparison]::Ordinal) -and $ref.Length -gt $prefix.Length) {
+            $result.Branch = Remove-ControlChars ($ref.Substring($prefix.Length))
+            $result.RefName = $ref
+        }
+        return $result
+    }
+    $oid = $line.Trim()
+    if ($oid -match '^[0-9a-fA-F]{40}$' -or $oid -match '^[0-9a-fA-F]{64}$') {
+        $result.Branch = $oid.Substring(0, [Math]::Min(7, $oid.Length))
+        $result.Detached = $true
+    }
+    return $result
+}
+
+function Get-GitProjectNameNative([object]$Paths) {
+    if (-not $Paths.Found) { return '' }
+    $base = $Paths.CommonDir
+    if ([string]::IsNullOrEmpty($base)) { $base = $Paths.WorktreeRoot }
+    $norm = $base.Replace('\', '/').TrimEnd('/')
+    if ($norm.EndsWith('/.git', [StringComparison]::OrdinalIgnoreCase)) { $norm = $norm.Substring(0, $norm.Length - 5) }
+    $parts = $norm.Split(@('/'), [StringSplitOptions]::RemoveEmptyEntries)
+    if ($parts.Length -eq 0) { return '' }
+    return Remove-ControlChars $parts[$parts.Length - 1]
+}
+
+function Get-StashCountNative([string]$CommonDir) {
+    $text = Read-StrictUtf8File ([IO.Path]::Combine($CommonDir, 'logs\refs\stash'))
+    if ($null -eq $text) { return 0 }
+    $count = 0
+    foreach ($line in [regex]::Split($text, "`r`n|`n|`r")) {
+        if (-not [string]::IsNullOrEmpty($line)) { $count++ }
+    }
+    return $count
+}
+
+# --- Cached dirty-state / ahead-behind (still git.exe, but rarely) -------
+
+function Get-FileTicksSafe([string]$Path) {
+    # packed-refs in particular is frequently absent (only appears after a
+    # gc/pack), so this is the same File.Exists()-before-throwing-API
+    # tradeoff as Read-GitPointerFile above.
+    if (-not [IO.File]::Exists($Path)) { return -1L }
+    try { return [IO.File]::GetLastWriteTimeUtc($Path).Ticks } catch { return -1L }
+}
+
+function Get-GitCacheSignatureText([object]$Paths, [object]$Head) {
+    $headTicks = Get-FileTicksSafe ([IO.Path]::Combine($Paths.GitDir, 'HEAD'))
+    $refTicks = -1L
+    if (-not [string]::IsNullOrEmpty($Head.RefName)) {
+        $refTicks = Get-FileTicksSafe ([IO.Path]::Combine($Paths.CommonDir, ($Head.RefName -replace '/', '\')))
+    }
+    $packedTicks = Get-FileTicksSafe ([IO.Path]::Combine($Paths.CommonDir, 'packed-refs'))
+    $indexTicks = Get-FileTicksSafe ([IO.Path]::Combine($Paths.GitDir, 'index'))
+    return ([string]$headTicks) + '|' + ([string]$refTicks) + '|' + ([string]$packedTicks) + '|' + ([string]$indexTicks)
+}
+
+function Get-GitCacheFilePath([string]$CommonDir) {
+    if ([string]::IsNullOrEmpty($CommonDir)) { return $null }
+    $norm = $CommonDir.Replace('/', '\').TrimEnd('\').ToLowerInvariant()
+    $hex = ''
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $bytes = $sha.ComputeHash($Utf8NoBom.GetBytes($norm))
+            $sb = New-Object Text.StringBuilder
+            foreach ($b in $bytes) { [void]$sb.Append($b.ToString('x2')) }
+            $hex = $sb.ToString()
+        } finally { $sha.Dispose() }
+    } catch { return $null }
+    if ([string]::IsNullOrEmpty($hex)) { return $null }
+    return [IO.Path]::Combine($GitCacheDir, $hex + '.tsv')
+}
+
+function Read-GitStatusCache([string]$Path) {
+    $text = Read-StrictUtf8File $Path
+    if ($null -eq $text) { return $null }
+    $line = ([regex]::Split($text, "`r`n|`n|`r"))[0]
+    if ([string]::IsNullOrEmpty($line)) { return $null }
+    $fields = $line.Split("`t")
+    if ($fields.Length -ne 5) { return $null }
+    $writeTicks = 0L
+    if (-not [long]::TryParse($fields[1], $IntegerStyle, $Invariant, [ref]$writeTicks)) { return $null }
+    return [pscustomobject]@{ Sig = $fields[0]; WriteTicks = $writeTicks; Marks = $fields[2]; Ab = $fields[3]; Dirty = ($fields[4] -eq '1') }
+}
+
+function Write-GitStatusCache([string]$Path, [string]$SigText, [string]$Marks, [string]$Ab, [bool]$Dirty) {
+    if ($SigText -match '[\t\r\n]' -or $Marks -match '[\t\r\n]' -or $Ab -match '[\t\r\n]') { return }
+    $dirtyFlag = '0'
+    if ($Dirty) { $dirtyFlag = '1' }
+    $line = $SigText + "`t" + ([DateTime]::UtcNow.Ticks.ToString($Invariant)) + "`t" + $Marks + "`t" + $Ab + "`t" + $dirtyFlag + "`n"
+    Write-AtomicStateFile $Path $line 'gitcache'
+}
+
+function Get-GitCacheTtlTicks {
+    if ($null -ne $script:GitCacheTtlTicksCache) { return $script:GitCacheTtlTicksCache }
+    $ms = 0
+    $raw = [string]$env:CORALLINE_GIT_CACHE_TTL_MS
+    if ([string]::IsNullOrEmpty($raw) -or -not [int]::TryParse($raw, $IntegerStyle, $Invariant, [ref]$ms) -or $ms -lt 0 -or $ms -gt 3600000) { $ms = 1500 }
+    $script:GitCacheTtlTicksCache = [long]$ms * 10000L
+    return $script:GitCacheTtlTicksCache
+}
+
+function Get-GitCacheMaxAgeTicks {
+    if ($null -ne $script:GitCacheMaxAgeTicksCache) { return $script:GitCacheMaxAgeTicksCache }
+    $days = 0
+    $raw = [string]$env:CORALLINE_GIT_CACHE_MAX_AGE_DAYS
+    if ([string]::IsNullOrEmpty($raw) -or -not [int]::TryParse($raw, $IntegerStyle, $Invariant, [ref]$days) -or $days -lt 1 -or $days -gt 3650) { $days = 30 }
+    $script:GitCacheMaxAgeTicksCache = [long]$days * 24L * 3600L * 10000000L
+    return $script:GitCacheMaxAgeTicksCache
+}
+
+# Every distinct repo ever rendered gets its own cache file (named by a hash
+# of its common-dir) that would otherwise live forever, so a deleted, moved,
+# or simply not-revisited-in-months repo's entry accumulates indefinitely.
+# This sweep deletes any cache file not refreshed within
+# CORALLINE_GIT_CACHE_MAX_AGE_DAYS (default 30) - age alone is sufficient
+# (no need to verify the source repo still exists): a still-active repo gets
+# its file rewritten well within that window on its own, so anything that
+# old is either gone or dormant either way, and re-populating it costs one
+# ordinary cache-miss git.exe call next time it is visited.
+# Runs only from the already-expensive git.exe cache-miss path below, and is
+# itself throttled to at most once per day via a sentinel file's own
+# timestamp, so it never adds cost to the common cache-hit render.
+function Invoke-GitCacheSweep {
+    if ([string]::IsNullOrEmpty($GitCacheDir) -or -not (Test-NoReparseComponents $GitCacheDir)) { return }
+    if (-not [IO.Directory]::Exists($GitCacheDir)) { return }
+    $sentinel = [IO.Path]::Combine($GitCacheDir, '.sweep-stamp')
+    $now = [DateTime]::UtcNow
+    try {
+        if (Test-StateObjectExists $sentinel) {
+            if (-not (Test-StateRegularFile $sentinel)) { return }
+            if (($now - [IO.File]::GetLastWriteTimeUtc($sentinel)).TotalHours -lt 24) { return }
+        }
+    } catch { return }
+    Write-AtomicStateFile $sentinel '' 'gitcache-sweep'
+
+    $maxAgeTicks = Get-GitCacheMaxAgeTicks
+    $seen = 0
+    $removed = 0
+    try {
+        foreach ($file in [IO.Directory]::EnumerateFiles($GitCacheDir, '*.tsv')) {
+            $seen++
+            if ($seen -gt 8192 -or $removed -ge 2048) { break }
+            if (-not (Test-StateRegularFile $file)) { continue }
+            try {
+                if (($now.Ticks - [IO.File]::GetLastWriteTimeUtc($file).Ticks) -gt $maxAgeTicks) {
+                    [IO.File]::Delete($file)
+                    $removed++
+                }
+            } catch { }
+        }
+    } catch { }
+}
+
+# One render needs at most one git.exe call now (only on a cache miss), so
+# there is nothing left worth dispatching in parallel.
+function Get-GitInfoCached([string]$Cwd) {
+    $state = @{ Branch = ''; Marks = ''; Ab = ''; Dirty = $false }
+    $result = [pscustomobject]@{ State = $state; Project = ''; Paths = $null }
+    if ([string]::IsNullOrEmpty($Cwd)) { return $result }
+    $paths = Find-GitPaths $Cwd
+    if (-not $paths.Found) { return $result }
+    $result.Paths = $paths
+    $head = Get-GitHeadInfo $paths.GitDir
+    if ([string]::IsNullOrEmpty($head.Branch)) { return $result }
+    $state.Branch = $head.Branch
+    $result.Project = Get-GitProjectNameNative $paths
+
+    $sigText = Get-GitCacheSignatureText $paths $head
+    $cachePath = Get-GitCacheFilePath $paths.CommonDir
+    # A signature match means the exact tracked-file state (HEAD/ref/index/
+    # packed-refs) that produced the cached Marks/Ab/Dirty is still the
+    # current state, so that data is exact, not merely "recent" - the TTL
+    # below only controls how eagerly we re-check for the one thing the
+    # signature can't see (a new/removed untracked file). A cache hit is
+    # therefore always applied first; a stale-by-TTL refresh attempt that
+    # then fails (git.exe missing, transient error) must never blank out
+    # already-known-good data.
+    $sigMatches = $false
+    if (-not [string]::IsNullOrEmpty($cachePath)) {
+        $cached = Read-GitStatusCache $cachePath
+        if ($null -ne $cached -and $cached.Sig -ceq $sigText) {
+            $sigMatches = $true
+            $state.Marks = $cached.Marks
+            $state.Ab = $cached.Ab
+            $state.Dirty = $cached.Dirty
+        }
+    }
+    $needsRefresh = $true
+    if ($sigMatches) {
+        $age = [DateTime]::UtcNow.Ticks - $cached.WriteTicks
+        $needsRefresh = -not ($age -ge 0 -and $age -le (Get-GitCacheTtlTicks))
+    }
+    if ($needsRefresh) {
+        $fresh = Get-GitState $Cwd
+        if (-not [string]::IsNullOrEmpty($fresh.Branch)) {
+            $state.Marks = $fresh.Marks
+            $state.Ab = $fresh.Ab
+            $state.Dirty = $fresh.Dirty
+            if (-not [string]::IsNullOrEmpty($cachePath)) {
+                Write-GitStatusCache $cachePath $sigText $fresh.Marks $fresh.Ab $fresh.Dirty
+            }
+        }
+        Invoke-GitCacheSweep
+    }
+    return $result
 }
 
 function Read-PinFile([string]$Path) {
@@ -2698,9 +3129,12 @@ $script:NodeCache = ''
 $script:PythonCacheSet = $false
 $script:PythonCache = ''
 
-function Get-StashCount-Cached([string]$Cwd) {
+function Get-StashCount-Cached {
     if (-not $script:StashCacheSet) {
-        $script:StashCache = Get-StashCount $Cwd
+        $script:StashCache = 0
+        if ($null -ne $GitInfo -and $null -ne $GitInfo.Paths -and $GitInfo.Paths.Found) {
+            $script:StashCache = Get-StashCountNative $GitInfo.Paths.CommonDir
+        }
         $script:StashCacheSet = $true
     }
     return [int]$script:StashCache
@@ -2761,10 +3195,12 @@ if ($BurnStateGate -or $Limit5StateGate -or $Limit7StateGate) {
 
 $GitState = @{ Branch = ''; Marks = ''; Ab = ''; Dirty = $false }
 $GitRoot = ''
+$GitInfo = $null
 if ($ProbeSegmentNames.Contains('git') -or $ProbeSegmentNames.Contains('stash') -or $ProbeSegmentNames.Contains('project')) {
-    $GitState = Get-GitState $ProbeCwd
+    $GitInfo = Get-GitInfoCached $ProbeCwd
+    $GitState = $GitInfo.State
+    if ($ProbeSegmentNames.Contains('project')) { $GitRoot = $GitInfo.Project }
 }
-if ($ProbeSegmentNames.Contains('project') -and -not [string]::IsNullOrEmpty($GitState.Branch)) { $GitRoot = Get-GitRoot $ProbeCwd }
 
 $SegBgs = New-Object System.Collections.Generic.List[string]
 $SegTxt = New-Object System.Collections.Generic.List[string]
@@ -2839,7 +3275,7 @@ function Add-GitSegment {
 
 function Add-StashSegment {
     if ([string]::IsNullOrEmpty($GitState.Branch)) { return }
-    $count = Get-StashCount-Cached $ProbeCwd
+    $count = Get-StashCount-Cached
     if ($count -le 0) { return }
     $fg = Get-Fg $Cfg.VL_FG_TEXT
     $bg = $Cfg.VL_BG_STASH
