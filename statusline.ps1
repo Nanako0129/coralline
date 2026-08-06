@@ -2678,9 +2678,18 @@ function Get-ApplicationPath([string]$Name) {
     }
     if ($script:AppPathDiskCache.ContainsKey($Name)) {
         $entry = $script:AppPathDiskCache[$Name]
-        if (-not [string]::IsNullOrEmpty($sig) -and [string]$entry.Sig -ceq $sig) {
-            $AppCache[$Name] = [string]$entry.Value
-            return [string]$entry.Value
+        $cachedValue = [string]$entry.Value
+        # A matching PATH signature only proves PATH itself is unchanged, not
+        # that the resolved file is still there (it can be uninstalled while
+        # something else earlier/later on PATH stays put) - so a non-empty
+        # cached path is re-verified with a cheap File.Exists before being
+        # trusted. Empty ("not found") results are never persisted below, so
+        # there is no negative-cache case to honor here either: installing
+        # the tool later without touching PATH must be observed on the very
+        # next render, not hidden behind a stale miss.
+        if (-not [string]::IsNullOrEmpty($sig) -and [string]$entry.Sig -ceq $sig -and -not [string]::IsNullOrEmpty($cachedValue) -and [IO.File]::Exists($cachedValue)) {
+            $AppCache[$Name] = $cachedValue
+            return $cachedValue
         }
     }
     $path = ''
@@ -2689,7 +2698,7 @@ function Get-ApplicationPath([string]$Name) {
         if ($null -ne $cmd) { $path = [string]$cmd.Source }
     } catch { $path = '' }
     $AppCache[$Name] = $path
-    if (-not [string]::IsNullOrEmpty($sig)) {
+    if (-not [string]::IsNullOrEmpty($sig) -and -not [string]::IsNullOrEmpty($path)) {
         $script:AppPathDiskCache[$Name] = [pscustomobject]@{ Sig = $sig; Value = $path }
         Write-AppPathCacheFile $AppPathCacheFile $script:AppPathDiskCache
     }
@@ -2778,37 +2787,63 @@ function Resolve-GitRelativePath([string]$BaseDir, [string]$Raw) {
     } catch { return $null }
 }
 
-function Resolve-GitCommonDir([string]$GitDir) {
+function Resolve-GitCommonDir([string]$Cwd, [string]$GitDir) {
+    $envCommonDir = [string]$env:GIT_COMMON_DIR
+    if (-not [string]::IsNullOrEmpty($envCommonDir)) {
+        # An explicit override is resolved against the effective working
+        # directory, not against GitDir. That mirrors GIT_DIR/GIT_WORK_TREE
+        # below and is distinct from the on-disk commondir file, whose
+        # relative entries are always relative to the .git directory that
+        # contains it. Git does not fall back to that file when the override
+        # is present but wrong, so an override that cannot resolve to a real
+        # directory is reported as invalid ($null) rather than silently
+        # ignored - the caller is expected to treat that as "not found".
+        $resolvedEnv = Resolve-GitRelativePath $Cwd $envCommonDir
+        if ($null -ne $resolvedEnv -and [IO.Directory]::Exists($resolvedEnv)) { return $resolvedEnv }
+        return $null
+    }
     $commonDir = $GitDir
     $commonRaw = Read-GitPointerFile ([IO.Path]::Combine($GitDir, 'commondir'))
     if (-not [string]::IsNullOrEmpty($commonRaw)) {
         $resolved = Resolve-GitRelativePath $GitDir $commonRaw
         if ($null -ne $resolved -and [IO.Directory]::Exists($resolved)) { $commonDir = $resolved }
     }
-    $envCommonDir = [string]$env:GIT_COMMON_DIR
-    if (-not [string]::IsNullOrEmpty($envCommonDir)) {
-        $resolvedEnv = Resolve-GitRelativePath $GitDir $envCommonDir
-        if ($null -ne $resolvedEnv -and [IO.Directory]::Exists($resolvedEnv)) { $commonDir = $resolvedEnv }
-    }
     return $commonDir
 }
 
+function Resolve-GitIndexFile([string]$Cwd, [string]$GitDir) {
+    $default = [IO.Path]::Combine($GitDir, 'index')
+    $envIndexFile = [string]$env:GIT_INDEX_FILE
+    if ([string]::IsNullOrEmpty($envIndexFile)) { return $default }
+    # Unlike GIT_DIR/GIT_COMMON_DIR, a missing index file is not an error
+    # (a fresh repo has no index yet), so this only substitutes the override
+    # when it resolves at all; it does not require the file to already exist.
+    $resolved = Resolve-GitRelativePath $Cwd $envIndexFile
+    if ($null -eq $resolved) { return $default }
+    return $resolved
+}
+
 function Find-GitPaths([string]$Cwd) {
-    $none = [pscustomobject]@{ Found = $false; GitDir = ''; CommonDir = ''; WorktreeRoot = '' }
+    $none = [pscustomobject]@{ Found = $false; GitDir = ''; CommonDir = ''; WorktreeRoot = ''; IndexFile = '' }
     if ([string]::IsNullOrEmpty($Cwd)) { return $none }
 
     $envGitDir = [string]$env:GIT_DIR
     if (-not [string]::IsNullOrEmpty($envGitDir)) {
+        # A non-empty GIT_DIR is authoritative even when it is invalid: Git
+        # does not fall back to upward repository discovery in that case, so
+        # neither do we - an unresolvable override must report "not found",
+        # not silently surface a parent repository Git itself would reject.
         $resolved = Resolve-GitRelativePath $Cwd $envGitDir
-        if ($null -ne $resolved -and [IO.Directory]::Exists($resolved)) {
-            $worktreeRoot = $Cwd
-            $envWorkTree = [string]$env:GIT_WORK_TREE
-            if (-not [string]::IsNullOrEmpty($envWorkTree)) {
-                $resolvedWt = Resolve-GitRelativePath $Cwd $envWorkTree
-                if ($null -ne $resolvedWt) { $worktreeRoot = $resolvedWt }
-            }
-            return [pscustomobject]@{ Found = $true; GitDir = $resolved; CommonDir = (Resolve-GitCommonDir $resolved); WorktreeRoot = $worktreeRoot }
+        if ($null -eq $resolved -or -not [IO.Directory]::Exists($resolved)) { return $none }
+        $commonDir = Resolve-GitCommonDir $Cwd $resolved
+        if ($null -eq $commonDir) { return $none }
+        $worktreeRoot = $Cwd
+        $envWorkTree = [string]$env:GIT_WORK_TREE
+        if (-not [string]::IsNullOrEmpty($envWorkTree)) {
+            $resolvedWt = Resolve-GitRelativePath $Cwd $envWorkTree
+            if ($null -ne $resolvedWt) { $worktreeRoot = $resolvedWt }
         }
+        return [pscustomobject]@{ Found = $true; GitDir = $resolved; CommonDir = $commonDir; WorktreeRoot = $worktreeRoot; IndexFile = (Resolve-GitIndexFile $Cwd $resolved) }
     }
 
     $dir = $null
@@ -2825,14 +2860,18 @@ function Find-GitPaths([string]$Cwd) {
         $isDir = [IO.Directory]::Exists($candidate)
         $isFile = (-not $isDir) -and [IO.File]::Exists($candidate)
         if ($isDir) {
-            return [pscustomobject]@{ Found = $true; GitDir = $candidate; CommonDir = (Resolve-GitCommonDir $candidate); WorktreeRoot = $dir.FullName }
+            $commonDir = Resolve-GitCommonDir $Cwd $candidate
+            if ($null -eq $commonDir) { return $none }
+            return [pscustomobject]@{ Found = $true; GitDir = $candidate; CommonDir = $commonDir; WorktreeRoot = $dir.FullName; IndexFile = (Resolve-GitIndexFile $Cwd $candidate) }
         }
         if ($isFile) {
             $pointerRaw = Read-GitPointerFile $candidate
             if ($null -ne $pointerRaw -and $pointerRaw.StartsWith('gitdir: ', [StringComparison]::Ordinal)) {
                 $target = Resolve-GitRelativePath $dir.FullName $pointerRaw.Substring(8)
                 if ($null -ne $target -and [IO.Directory]::Exists($target)) {
-                    return [pscustomobject]@{ Found = $true; GitDir = $target; CommonDir = (Resolve-GitCommonDir $target); WorktreeRoot = $dir.FullName }
+                    $commonDir = Resolve-GitCommonDir $Cwd $target
+                    if ($null -eq $commonDir) { return $none }
+                    return [pscustomobject]@{ Found = $true; GitDir = $target; CommonDir = $commonDir; WorktreeRoot = $dir.FullName; IndexFile = (Resolve-GitIndexFile $Cwd $target) }
                 }
             }
             return $none
@@ -2903,18 +2942,28 @@ function Get-GitCacheSignatureText([object]$Paths, [object]$Head) {
         $refTicks = Get-FileTicksSafe ([IO.Path]::Combine($Paths.CommonDir, ($Head.RefName -replace '/', '\')))
     }
     $packedTicks = Get-FileTicksSafe ([IO.Path]::Combine($Paths.CommonDir, 'packed-refs'))
-    $indexTicks = Get-FileTicksSafe ([IO.Path]::Combine($Paths.GitDir, 'index'))
+    $indexTicks = Get-FileTicksSafe $Paths.IndexFile
     return ([string]$headTicks) + '|' + ([string]$refTicks) + '|' + ([string]$packedTicks) + '|' + ([string]$indexTicks)
 }
 
-function Get-GitCacheFilePath([string]$CommonDir) {
-    if ([string]::IsNullOrEmpty($CommonDir)) { return $null }
-    $norm = $CommonDir.Replace('/', '\').TrimEnd('\').ToLowerInvariant()
+function Get-GitCacheFilePath([object]$Paths) {
+    if ($null -eq $Paths -or [string]::IsNullOrEmpty($Paths.CommonDir)) { return $null }
+    # Two sessions can share GIT_DIR/index while pointing GIT_WORK_TREE at
+    # different worktrees (or vice versa): CommonDir alone collapses them
+    # onto the same cache file, letting one worktree's dirty state leak into
+    # the other's render. GitDir and WorktreeRoot are folded into the key
+    # alongside CommonDir so each distinct combination gets its own entry;
+    # the index path already varies with GIT_INDEX_FILE and feeds the
+    # signature text above, so it does not need to be part of the key too.
+    $normCommon = $Paths.CommonDir.Replace('/', '\').TrimEnd('\').ToLowerInvariant()
+    $normGitDir = ([string]$Paths.GitDir).Replace('/', '\').TrimEnd('\').ToLowerInvariant()
+    $normWorktree = ([string]$Paths.WorktreeRoot).Replace('/', '\').TrimEnd('\').ToLowerInvariant()
+    $key = $normCommon + '|' + $normGitDir + '|' + $normWorktree
     $hex = ''
     try {
         $sha = [System.Security.Cryptography.SHA256]::Create()
         try {
-            $bytes = $sha.ComputeHash($Utf8NoBom.GetBytes($norm))
+            $bytes = $sha.ComputeHash($Utf8NoBom.GetBytes($key))
             $sb = New-Object Text.StringBuilder
             foreach ($b in $bytes) { [void]$sb.Append($b.ToString('x2')) }
             $hex = $sb.ToString()
@@ -2962,9 +3011,10 @@ function Get-GitCacheMaxAgeTicks {
     return $script:GitCacheMaxAgeTicksCache
 }
 
-# Every distinct repo ever rendered gets its own cache file (named by a hash
-# of its common-dir) that would otherwise live forever, so a deleted, moved,
-# or simply not-revisited-in-months repo's entry accumulates indefinitely.
+# Every distinct repo/worktree combination ever rendered gets its own cache
+# file (named by a hash of its common-dir, git-dir, and worktree root) that
+# would otherwise live forever, so a deleted, moved, or simply
+# not-revisited-in-months repo's entry accumulates indefinitely.
 # This sweep deletes any cache file not refreshed within
 # CORALLINE_GIT_CACHE_MAX_AGE_DAYS (default 30) - age alone is sufficient
 # (no need to verify the source repo still exists): a still-active repo gets
@@ -2994,6 +3044,15 @@ function Invoke-GitCacheSweep {
         foreach ($file in [IO.Directory]::EnumerateFiles($GitCacheDir, '*.tsv')) {
             $seen++
             if ($seen -gt 8192 -or $removed -ge 2048) { break }
+            # CORALLINE_GITCACHE_DIR can be pointed at a pre-existing,
+            # possibly shared directory, so '*.tsv' alone is not a safe
+            # deletion filter - it would let a cache miss age out and delete
+            # some unrelated old *.tsv file that happens to live there too.
+            # Only basenames coralline itself writes (a 64-hex-digit SHA-256
+            # cache key) are eligible; anything else is left untouched no
+            # matter how old it is.
+            $baseName = [IO.Path]::GetFileName($file)
+            if ($baseName -notmatch '^[0-9a-f]{64}\.tsv$') { continue }
             if (-not (Test-StateRegularFile $file)) { continue }
             try {
                 if (($now.Ticks - [IO.File]::GetLastWriteTimeUtc($file).Ticks) -gt $maxAgeTicks) {
@@ -3020,15 +3079,18 @@ function Get-GitInfoCached([string]$Cwd) {
     $result.Project = Get-GitProjectNameNative $paths
 
     $sigText = Get-GitCacheSignatureText $paths $head
-    $cachePath = Get-GitCacheFilePath $paths.CommonDir
-    # A signature match means the exact tracked-file state (HEAD/ref/index/
-    # packed-refs) that produced the cached Marks/Ab/Dirty is still the
-    # current state, so that data is exact, not merely "recent" - the TTL
-    # below only controls how eagerly we re-check for the one thing the
-    # signature can't see (a new/removed untracked file). A cache hit is
-    # therefore always applied first; a stale-by-TTL refresh attempt that
-    # then fails (git.exe missing, transient error) must never blank out
-    # already-known-good data.
+    $cachePath = Get-GitCacheFilePath $paths
+    # A signature match means HEAD/ref/index/packed-refs are byte-for-byte
+    # what produced the cached Marks/Ab/Dirty, but that is not the complete
+    # set of things that can change dirty state: editing a tracked file
+    # without staging it changes neither the index nor any of those files,
+    # so the signature cannot see it. The TTL below is therefore the real
+    # staleness bound for every worktree-only change the signature misses -
+    # untracked files AND unstaged edits to tracked ones - not merely a
+    # nice-to-have for new/removed untracked files. A cache hit is always
+    # applied first; a stale-by-TTL refresh attempt that then fails (git.exe
+    # missing, transient error) must never blank out already-known-good data,
+    # so it degrades to trusting the last good result past its TTL instead.
     $sigMatches = $false
     if (-not [string]::IsNullOrEmpty($cachePath)) {
         $cached = Read-GitStatusCache $cachePath

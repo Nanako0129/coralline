@@ -659,6 +659,160 @@ esac
     Check 'Unicode scalar tail keeps the complete suffix' ((Plain $scalarTailPs.Stdout).Contains('A' + (Glyph 0x2026) + $scalar + 'F'))
     Check 'Unicode scalar tail emits no replacement character' (-not $scalarTailPs.Stdout.Contains([char]0xFFFD))
 
+    # --- Native git-discovery / cache safety regressions ------------------
+    # Covers the four gaps flagged on PR #66: the cache sweep's filesystem
+    # deletion boundary, worktree-specific cache identity, stale/removed
+    # cached executable paths, and explicit Git environment overrides that
+    # must be rejected rather than silently falling back.
+    $cacheSafetyRoot = Join-Path $TempRoot 'git-cache-safety'
+    [void][IO.Directory]::CreateDirectory($cacheSafetyRoot)
+    $cacheSafetyConfig = New-Config 'git-cache-safety' @('VL_SEGMENTS=git', 'VL_CLOCK=off')
+
+    # (1) Invoke-GitCacheSweep must only ever delete files it recognizes as
+    # its own (a 64-hex-digit SHA-256 basename), never an unrelated *.tsv
+    # file that happens to share CORALLINE_GITCACHE_DIR with something else.
+    $sweepCacheDir = Join-Path $cacheSafetyRoot 'sweep-cache'
+    [void][IO.Directory]::CreateDirectory($sweepCacheDir)
+    $unrelatedTsv = Join-Path $sweepCacheDir 'customers.tsv'
+    Write-Utf8 $unrelatedTsv "id`tname`n1`tAcme`n"
+    [IO.File]::SetLastWriteTimeUtc($unrelatedTsv, [DateTime]::UtcNow.AddDays(-400))
+    $staleOwnTsv = Join-Path $sweepCacheDir (('a' * 64) + '.tsv')
+    Write-Utf8 $staleOwnTsv "stale-sig`t0`t`t`t0`n"
+    [IO.File]::SetLastWriteTimeUtc($staleOwnTsv, [DateTime]::UtcNow.AddDays(-400))
+
+    $sweepRepo = Join-Path $cacheSafetyRoot 'sweep-repo'
+    [void][IO.Directory]::CreateDirectory($sweepRepo)
+    Write-Utf8 (Join-Path $sweepRepo 'a.txt') "one`n"
+    [void](Run-Git $sweepRepo 'init -q')
+    [void](Run-Git $sweepRepo 'checkout -q -b main')
+    [void](Run-Git $sweepRepo 'config user.email test@example.com')
+    [void](Run-Git $sweepRepo 'config user.name test')
+    [void](Run-Git $sweepRepo 'add a.txt')
+    [void](Run-Git $sweepRepo 'commit -q -m init')
+
+    $sweepEnv = @{ CORALLINE_GITCACHE_DIR = (Forward-Path $sweepCacheDir) }
+    $sweepPayload = New-Payload (Forward-Path $sweepRepo)
+    $sweepRun = Invoke-Statusline (Json $sweepPayload) $cacheSafetyConfig $sweepEnv '' 5000
+    Check-Run 'git-cache sweep render' $sweepRun
+    Check 'git-cache sweep preserves an unrelated old tsv file' ([IO.File]::Exists($unrelatedTsv))
+    Check 'git-cache sweep still removes its own stale cache file' (-not [IO.File]::Exists($staleOwnTsv))
+
+    # (2) The cache file path must be keyed on WorktreeRoot (and GitDir), not
+    # CommonDir alone - two sessions can share one GIT_DIR/index while
+    # GIT_WORK_TREE points at different worktrees, and a shared key would let
+    # one worktree's dirty state leak into the other's render.
+    $wtRoot = Join-Path $cacheSafetyRoot 'worktree-identity'
+    [void][IO.Directory]::CreateDirectory($wtRoot)
+    $wtBase = Join-Path $wtRoot 'base-repo'
+    [void][IO.Directory]::CreateDirectory($wtBase)
+    Write-Utf8 (Join-Path $wtBase 't.txt') 'clean'
+    [void](Run-Git $wtBase 'init -q')
+    [void](Run-Git $wtBase 'checkout -q -b main')
+    [void](Run-Git $wtBase 'config user.email test@example.com')
+    [void](Run-Git $wtBase 'config user.name test')
+    [void](Run-Git $wtBase 'add t.txt')
+    [void](Run-Git $wtBase 'commit -q -m init')
+    $wtGitDir = Join-Path $wtBase '.git'
+
+    $wtDirty = Join-Path $wtRoot 'worktree-dirty'
+    [void][IO.Directory]::CreateDirectory($wtDirty)
+    Write-Utf8 (Join-Path $wtDirty 't.txt') 'changed'
+
+    $wtClean = Join-Path $wtRoot 'worktree-clean'
+    [void][IO.Directory]::CreateDirectory($wtClean)
+    Write-Utf8 (Join-Path $wtClean 't.txt') 'clean'
+
+    $wtCacheDir = Join-Path $wtRoot 'cache'
+    [void][IO.Directory]::CreateDirectory($wtCacheDir)
+    $wtDirtyEnv = @{ CORALLINE_GITCACHE_DIR = (Forward-Path $wtCacheDir); CORALLINE_GIT_CACHE_TTL_MS = '60000'; GIT_DIR = $wtGitDir; GIT_WORK_TREE = $wtDirty }
+    $wtCleanEnv = @{ CORALLINE_GITCACHE_DIR = (Forward-Path $wtCacheDir); CORALLINE_GIT_CACHE_TTL_MS = '60000'; GIT_DIR = $wtGitDir; GIT_WORK_TREE = $wtClean }
+
+    $wtDirtyRun = Invoke-Statusline (Json (New-Payload (Forward-Path $wtDirty))) $cacheSafetyConfig $wtDirtyEnv '' 5000
+    Check-Run 'worktree-identity dirty worktree render' $wtDirtyRun
+    Check 'worktree-identity dirty worktree reports dirty' ((Plain $wtDirtyRun.Stdout).Contains('!'))
+
+    $wtCleanRun = Invoke-Statusline (Json (New-Payload (Forward-Path $wtClean))) $cacheSafetyConfig $wtCleanEnv '' 5000
+    Check-Run 'worktree-identity clean worktree render' $wtCleanRun
+    Check 'worktree-identity clean worktree is not tainted by the dirty worktree cache entry' (-not ((Plain $wtCleanRun.Stdout).Contains('!')))
+
+    # (3) Get-ApplicationPath must not trust a cached executable path once the
+    # file at that path is gone, even though the PATH string signature that
+    # gated the cache entry has not changed.
+    $staleExeRoot = Join-Path $cacheSafetyRoot 'stale-exe'
+    [void][IO.Directory]::CreateDirectory($staleExeRoot)
+    $fakeBinDir = Join-Path $staleExeRoot 'fakebin'
+    [void][IO.Directory]::CreateDirectory($fakeBinDir)
+    $fakeGitExe = Join-Path $fakeBinDir 'git.exe'
+    Copy-Item -LiteralPath 'C:\Windows\System32\cmd.exe' -Destination $fakeGitExe
+
+    $staleRepo = Join-Path $staleExeRoot 'repo'
+    [void][IO.Directory]::CreateDirectory($staleRepo)
+    Write-Utf8 (Join-Path $staleRepo 't.txt') "one`n"
+    [void](Run-Git $staleRepo 'init -q')
+    [void](Run-Git $staleRepo 'checkout -q -b main')
+    [void](Run-Git $staleRepo 'config user.email test@example.com')
+    [void](Run-Git $staleRepo 'config user.name test')
+    [void](Run-Git $staleRepo 'add t.txt')
+    [void](Run-Git $staleRepo 'commit -q -m init')
+    Write-Utf8 (Join-Path $staleRepo 't.txt') "one-changed`n"
+
+    $staleAppCache = Join-Path $staleExeRoot 'apppath-cache.tsv'
+    $staleGitCache = Join-Path $staleExeRoot 'git-cache'
+    [void][IO.Directory]::CreateDirectory($staleGitCache)
+    $staleEnv = @{
+        CORALLINE_APPPATH_CACHE = (Forward-Path $staleAppCache)
+        CORALLINE_GITCACHE_DIR = (Forward-Path $staleGitCache)
+        PATH = ($fakeBinDir + ';' + [string]$env:PATH)
+    }
+    $stalePayload = New-Payload (Forward-Path $staleRepo)
+
+    $staleRun1 = Invoke-Statusline (Json $stalePayload) $cacheSafetyConfig $staleEnv '' 5000
+    Check-Run 'stale executable path first render (fake git.exe on PATH)' $staleRun1
+    Check 'stale executable path caches the fake git.exe' ((Get-Content -Raw $staleAppCache).Contains($fakeGitExe))
+    Check 'stale executable path first render cannot see dirty state through the fake git.exe' (-not ((Plain $staleRun1.Stdout).Contains('!')))
+
+    Remove-Item -LiteralPath $fakeGitExe -Force
+
+    $staleRun2 = Invoke-Statusline (Json $stalePayload) $cacheSafetyConfig $staleEnv '' 5000
+    Check-Run 'stale executable path second render after removal' $staleRun2
+    Check 'stale executable path re-resolves once the cached file disappears' (-not (Get-Content -Raw $staleAppCache).Contains($fakeGitExe))
+    Check 'stale executable path second render correctly reports dirty via real git.exe' ((Plain $staleRun2.Stdout).Contains('!'))
+
+    # (4) An explicit GIT_DIR that cannot be resolved must not fall back to
+    # upward .git discovery, and an explicit GIT_COMMON_DIR that cannot be
+    # resolved must not silently fall back to the GitDir-derived commondir -
+    # both are treated as a hard error, matching Git's own behavior.
+    $envOverrideRoot = Join-Path $cacheSafetyRoot 'env-overrides'
+    [void][IO.Directory]::CreateDirectory($envOverrideRoot)
+    $overrideParentRepo = Join-Path $envOverrideRoot 'parent-repo'
+    [void][IO.Directory]::CreateDirectory($overrideParentRepo)
+    Write-Utf8 (Join-Path $overrideParentRepo 'p.txt') "one`n"
+    [void](Run-Git $overrideParentRepo 'init -q')
+    [void](Run-Git $overrideParentRepo 'checkout -q -b parent-branch')
+    [void](Run-Git $overrideParentRepo 'config user.email test@example.com')
+    [void](Run-Git $overrideParentRepo 'config user.name test')
+    [void](Run-Git $overrideParentRepo 'add p.txt')
+    [void](Run-Git $overrideParentRepo 'commit -q -m init')
+    $overrideChildDir = Join-Path $overrideParentRepo 'child'
+    [void][IO.Directory]::CreateDirectory($overrideChildDir)
+
+    $badGitDirEnv = @{
+        CORALLINE_GITCACHE_DIR = (Forward-Path (Join-Path $envOverrideRoot 'cache-a'))
+        GIT_DIR = (Join-Path $envOverrideRoot 'does-not-exist')
+    }
+    $badGitDirRun = Invoke-Statusline (Json (New-Payload (Forward-Path $overrideChildDir))) $cacheSafetyConfig $badGitDirEnv '' 5000
+    Check-Run 'invalid explicit GIT_DIR render' $badGitDirRun
+    Check 'invalid explicit GIT_DIR does not fall back to the parent repository' (-not ((Plain $badGitDirRun.Stdout).Contains('parent-branch')))
+
+    $badCommonDirEnv = @{
+        CORALLINE_GITCACHE_DIR = (Forward-Path (Join-Path $envOverrideRoot 'cache-b'))
+        GIT_DIR = (Join-Path $overrideParentRepo '.git')
+        GIT_COMMON_DIR = (Join-Path $envOverrideRoot 'also-does-not-exist')
+    }
+    $badCommonDirRun = Invoke-Statusline (Json (New-Payload (Forward-Path $overrideParentRepo))) $cacheSafetyConfig $badCommonDirEnv '' 5000
+    Check-Run 'invalid explicit GIT_COMMON_DIR render' $badCommonDirRun
+    Check 'invalid explicit GIT_COMMON_DIR is rejected rather than falling back to GitDir' (-not ((Plain $badCommonDirRun.Stdout).Contains('parent-branch')))
+
     $script:QuoteHelper = Join-Path $TempRoot 'configure-quote.sh'
     Write-Utf8 $script:QuoteHelper @'
 #!/usr/bin/env bash
