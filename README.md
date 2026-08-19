@@ -165,7 +165,7 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 
 When run interactively it asks which version to install — the latest tagged release
 (recommended) or `main` (latest development). To skip the prompt, pin one explicitly with
-`--ref`, e.g. `... | bash -s -- --ref v0.9.1` or `--ref main`.
+`--ref`, e.g. `... | bash -s -- --ref v0.13.0` or `--ref main`.
 
 ### Manual
 
@@ -305,7 +305,7 @@ that skepticism is inspection, not trust:
   [install.sh](./install.sh); PowerShell-only Windows uses [install.ps1](./install.ps1).
   [INSTALL.md](./INSTALL.md) routes the AI between them. The PowerShell bootstrap is not
   `irm | iex`: it bounds and parses a temporary installer, then launches it as a file.
-- **Pin a release.** `... | bash -s -- --ref v0.9.1` installs a tagged release instead of
+- **Pin a release.** `... | bash -s -- --ref v0.13.0` installs a tagged release instead of
   `main`, so what you audited is what you run. The interactive installer already offers the
   latest tag by default.
 - **What gets written, exactly:** Bash setup writes its runtime, your approved config, and
