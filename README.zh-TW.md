@@ -155,7 +155,7 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 ```
 
 互動執行時會詢問要裝哪個版本 —— 最新的 release tag（建議）或 `main`（最新開發版）。
-想略過詢問就用 `--ref` 直接指定，例如 `... | bash -s -- --ref v0.9.1` 或 `--ref main`。
+想略過詢問就用 `--ref` 直接指定，例如 `... | bash -s -- --ref v0.13.0` 或 `--ref main`。
 
 ### 手動安裝
 
@@ -285,7 +285,7 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
   [install.ps1](./install.ps1)，[INSTALL.md](./INSTALL.md) 負責替 AI 判斷路徑。
   PowerShell bootstrap 不是 `irm | iex`：它會限制下載大小、先解析暫存 installer，
   再把它當檔案啟動。
-- **釘選版本。** `... | bash -s -- --ref v0.9.1` 安裝打過 tag 的 release 而非 `main`，
+- **釘選版本。** `... | bash -s -- --ref v0.13.0` 安裝打過 tag 的 release 而非 `main`，
   你審過的就是你跑的。互動式安裝本來就預設建議最新 tag。
 - **確切會寫入什麼：** Bash 流程會依前述規則寫入 runtime、經你同意的 config 與
   Claude settings。原生 installer 只會在 `~/.claude/coralline` 寫入
