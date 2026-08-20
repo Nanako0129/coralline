@@ -151,7 +151,7 @@ bash ~/.claude/coralline/configure.sh --subagent-rows=off
 
 Bash install-only 與一般更新不會自行新增或刪除 `subagentStatusLine`；只有 wizard 選擇或上方明確指令才會改動。原生 installer 預設使用 `-SubagentRows preserve`，只有明確指定 `on` 或 `off` 才改設定。
 
-每個 task 的 model 與 context 欄位需要 Claude Code v2.1.205+。在 v2.1.211，coralline 會從 task sidecar 恢復 payload 缺少的本機 `agentType` role；沒有 sidecar 時仍會使用 payload 的 name 與 label。缺少 model、context size、token count 或 start time 時只隱藏受影響的區段。列由 panel event 觸發重繪，不是固定每秒輪詢；原生 main-session 列會保留，也不推測 per-task effort。設計與現行 fallback 行為可追溯到 [issue #45](https://github.com/Nanako0129/coralline/issues/45) 與 [PR #44](https://github.com/Nanako0129/coralline/pull/44)。
+每個 task 的 model 與 context 欄位需要 Claude Code v2.1.205+。在 v2.1.211，coralline 會從 task sidecar 恢復 payload 缺少的本機 `agentType` role；沒有 sidecar 時仍會使用 payload 的 name 與 label。缺少 model 或 start time 時只隱藏對應區段。只有 token count 缺失或無效時才會隱藏 `ctx`；沒有有效 context size 時仍顯示 glyph 與 bare token count，只省略量表與百分比。列由 panel event 觸發重繪，不是固定每秒輪詢；原生 main-session 列會保留，也不推測 per-task effort。設計與現行 fallback 行為可追溯到 [issue #45](https://github.com/Nanako0129/coralline/issues/45) 與 [PR #44](https://github.com/Nanako0129/coralline/pull/44)。
 
 | `VL_SUB_SEGMENTS` 值 | 顯示內容 |
 |---|---|
