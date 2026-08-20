@@ -82,10 +82,16 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 
 ```bash
 SHA=YOUR_AUDITED_40_CHARACTER_COMMIT_SHA
-curl -fsSL "https://raw.githubusercontent.com/Nanako0129/coralline/$SHA/install.sh" | bash -s -- --ref "$SHA"
+audit_dir=$(mktemp -d "${TMPDIR:-/tmp}/coralline-audit.XXXXXX") || exit 1
+(
+  set -o pipefail
+  trap 'cd / && rm -rf "$audit_dir"' EXIT
+  cd "$audit_dir" || exit 1
+  curl -fsSL "https://raw.githubusercontent.com/Nanako0129/coralline/$SHA/install.sh" | bash -s -- --ref "$SHA"
+)
 ```
 
-Bash `--install-only` 與更新不會修改 `coralline.conf`；wizard 或 AI 只會在顯示變更並取得同意後修改。Bash 會先備份 `settings.json`，再以 `jq` 做語意合併，因此會保留無關設定，但不承諾原始格式不變。原生 installer 則遵守上方更窄的 managed／unmanaged 邊界。兩種 renderer 在安裝後都不會發出網路請求。
+使用唯一暫存目錄，可避免從 stdin 執行的 Bash 把外層 coralline checkout 當成本機來源。Bash `--install-only` 與更新不會修改 `coralline.conf`；wizard 或 AI 只會在顯示變更並取得同意後修改。Bash 會先備份 `settings.json`，再以 `jq` 做語意合併，因此會保留無關設定，但不承諾原始格式不變。原生 installer 則遵守上方更窄的 managed／unmanaged 邊界。兩種 renderer 在安裝後都不會發出網路請求。
 
 ## 設定檔
 
@@ -186,7 +192,7 @@ and follow the playbook in it.
 curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash -s -- --install-only
 ```
 
-上方 URL 會抓取可變的 `main` playbook 或 bootstrap code。Bash installer 在非互動執行時維持 `main`。互動式 `--install-only` 會在成功解析 latest release tag 時詢問要安裝哪個 payload ref，按 Enter 預設該 release；若 release 查詢失敗，則不提示並維持 `main`。只有明確要開發版 payload 時才傳入 `--ref main`。先前釘選的安裝，不會讓之後未釘選的更新自動變成 immutable。要做 audited update，請從同一個已檢閱的 40 字元 SHA 抓取 `UPGRADE.md` 與 `install.sh`，並把相同 SHA 傳給 `--ref`。僅有 PowerShell 的 Windows 則以同一個選定 ref 重跑原生 bootstrap。Installer 會報告新的 opt-in，但除非取得同意，否則保留既有選擇；見 [issue #31](https://github.com/Nanako0129/coralline/issues/31) 與現行 [`UPGRADE.md`](./UPGRADE.md)。
+上方 URL 會抓取可變的 `main` playbook 或 bootstrap code。Bash installer 在非互動執行時維持 `main`。互動式 `--install-only` 會在成功解析 latest release tag 時詢問要安裝哪個 payload ref，按 Enter 預設該 release；若 release 查詢失敗，則不提示並維持 `main`。只有明確要開發版 payload 時才傳入 `--ref main`。先前釘選的安裝，不會讓之後未釘選的更新自動變成 immutable。要做 audited update，請從同一個已檢閱的 40 字元 SHA 抓取 `UPGRADE.md`，再依上方做法從中立暫存目錄執行同一 SHA 的 `install.sh`，並把相同 SHA 傳給 `--ref`。僅有 PowerShell 的 Windows 則以同一個選定 ref 重跑原生 bootstrap。Installer 會報告新的 opt-in，但除非取得同意，否則保留既有選擇；見 [issue #31](https://github.com/Nanako0129/coralline/issues/31) 與現行 [`UPGRADE.md`](./UPGRADE.md)。
 
 ### 重新設定
 
