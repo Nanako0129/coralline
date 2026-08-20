@@ -186,7 +186,7 @@ and follow the playbook in it.
 curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash -s -- --install-only
 ```
 
-兩個預設路徑都使用可變的 `main`。先前釘選的安裝，不會讓之後未釘選的更新自動變成 immutable。要做 audited update，請從同一個已檢閱的 40 字元 SHA 抓取 `UPGRADE.md` 與 `install.sh`，並把相同 SHA 傳給 `--ref`。僅有 PowerShell 的 Windows 則以同一個選定 ref 重跑原生 bootstrap。Installer 會報告新的 opt-in，但除非取得同意，否則保留既有選擇；見 [issue #31](https://github.com/Nanako0129/coralline/issues/31) 與現行 [`UPGRADE.md`](./UPGRADE.md)。
+上方 URL 會抓取可變的 `main` playbook 或 bootstrap code。Bash installer 在非互動執行時維持 `main`。互動式 `--install-only` 會在成功解析 latest release tag 時詢問要安裝哪個 payload ref，按 Enter 預設該 release；若 release 查詢失敗，則不提示並維持 `main`。只有明確要開發版 payload 時才傳入 `--ref main`。先前釘選的安裝，不會讓之後未釘選的更新自動變成 immutable。要做 audited update，請從同一個已檢閱的 40 字元 SHA 抓取 `UPGRADE.md` 與 `install.sh`，並把相同 SHA 傳給 `--ref`。僅有 PowerShell 的 Windows 則以同一個選定 ref 重跑原生 bootstrap。Installer 會報告新的 opt-in，但除非取得同意，否則保留既有選擇；見 [issue #31](https://github.com/Nanako0129/coralline/issues/31) 與現行 [`UPGRADE.md`](./UPGRADE.md)。
 
 ### 重新設定
 
