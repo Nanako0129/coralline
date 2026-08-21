@@ -785,8 +785,11 @@ default_store_case() {  # $1=case dir $2=CLAUDE_CONFIG_DIR value ("" = unset)
     HOME="$case_dir/home" CLAUDE_CONFIG_DIR="$cfg_dir" CORALLINE_CONFIG="$case_dir/conf" \
       CORALLINE_NO_SAMPLE=0 "$BASH_BIN" "$SCRIPT" < "$case_dir/input" > "$case_dir/out" 2> "$case_dir/err"
   else
-    HOME="$case_dir/home" CORALLINE_CONFIG="$case_dir/conf" \
-      CORALLINE_NO_SAMPLE=0 "$BASH_BIN" "$SCRIPT" < "$case_dir/input" > "$case_dir/out" 2> "$case_dir/err"
+    # Unset, not merely unassigned: a developer who exports CLAUDE_CONFIG_DIR
+    # (the very configuration this fix targets) would otherwise leak it in.
+    ( unset CLAUDE_CONFIG_DIR
+      HOME="$case_dir/home" CORALLINE_CONFIG="$case_dir/conf" \
+        CORALLINE_NO_SAMPLE=0 "$BASH_BIN" "$SCRIPT" < "$case_dir/input" > "$case_dir/out" 2> "$case_dir/err" )
   fi
 }
 

@@ -64,18 +64,24 @@ $HomeDir = [string]$HOME
 if ([string]::IsNullOrEmpty($HomeDir)) { $HomeDir = [Environment]::GetFolderPath('UserProfile') }
 $ScriptDir = [System.IO.Path]::GetDirectoryName($MyInvocation.MyCommand.Path)
 $ScriptPath = [string]$MyInvocation.MyCommand.Path
-$DefaultFloatFile = [System.IO.Path]::Combine($HomeDir, '.claude\coralline\float.txt')
+# Base for every cross-session store below. Follows CLAUDE_CONFIG_DIR so two
+# Claude config directories keep separate burn/limit state instead of
+# overwriting each other; unset, it is the historical %USERPROFILE%\.claude.
+$CoralineDir = [string]$env:CLAUDE_CONFIG_DIR
+if ([string]::IsNullOrEmpty($CoralineDir)) { $CoralineDir = [System.IO.Path]::Combine($HomeDir, '.claude') }
+$CoralineDir = [System.IO.Path]::Combine($CoralineDir, 'coralline')
+$DefaultFloatFile = [System.IO.Path]::Combine($CoralineDir, 'float.txt')
 $DefaultBurnFile = [string]$env:CORALLINE_BURN_FILE
 if ([string]::IsNullOrEmpty($DefaultBurnFile)) {
-    $DefaultBurnFile = [System.IO.Path]::Combine($HomeDir, '.claude\coralline\burn-5h.tsv')
+    $DefaultBurnFile = [System.IO.Path]::Combine($CoralineDir, 'burn-5h.tsv')
 }
 $DefaultRl5File = [string]$env:CORALLINE_RL5H_FILE
 if ([string]::IsNullOrEmpty($DefaultRl5File)) {
-    $DefaultRl5File = [System.IO.Path]::Combine($HomeDir, '.claude\coralline\limit-5h.tsv')
+    $DefaultRl5File = [System.IO.Path]::Combine($CoralineDir, 'limit-5h.tsv')
 }
 $DefaultRl7File = [string]$env:CORALLINE_RL7D_FILE
 if ([string]::IsNullOrEmpty($DefaultRl7File)) {
-    $DefaultRl7File = [System.IO.Path]::Combine($HomeDir, '.claude\coralline\limit-7d.tsv')
+    $DefaultRl7File = [System.IO.Path]::Combine($CoralineDir, 'limit-7d.tsv')
 }
 
 $Defaults = [ordered]@{
