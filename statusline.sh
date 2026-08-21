@@ -65,7 +65,11 @@ VL_ASCII=0                      # 1 = no Nerd Font glyphs (plain colored blocks)
 VL_FLOAT=0                      # 1 = also write a plain-text readout to VL_FLOAT_FILE (bring your own carrier)
 VL_FLOAT_SEGMENTS="model ctx cost"  # segments rendered into the float line (plain text: keep color-driven limit warnings inline)
 VL_FLOAT_SEP="  ·  "            # separator between float segments (plain text, no color)
-VL_FLOAT_FILE="$HOME/.claude/coralline/float.txt"
+# Base for every cross-session store below. Follows CLAUDE_CONFIG_DIR so two
+# Claude config dirs keep separate burn/limit state instead of overwriting each
+# other; unset (the common case) it is the historical $HOME/.claude/coralline.
+CORALLINE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/coralline"
+VL_FLOAT_FILE="$CORALLINE_DIR/float.txt"
 VL_NOCOLOR=0                    # internal: fg()/bg() emit nothing when 1 (plain-text path)
 
 # ── Subagent panel rows (--subagent mode) ────────────────────────────────────
@@ -96,7 +100,7 @@ unset VL_BG_SUB_NAME VL_FG_SUB_TEXT VL_FG_SUB_OK VL_FG_SUB_HOT VL_FG_SUB_DIM \
 CORALLINE_BURN_WINDOW=600       # recent-slope lookback for 5h, seconds
 VL_BURN_GLYPH="↗"               # plain-Unicode, arrow family (kept in VL_ASCII)
 VL_BG_BURN=""                   # empty → inherits VL_BG_5H at the use site
-BURN_FILE="${CORALLINE_BURN_FILE:-$HOME/.claude/coralline/burn-5h.tsv}"
+BURN_FILE="${CORALLINE_BURN_FILE:-$CORALLINE_DIR/burn-5h.tsv}"
 BURN_TRIM=1500                  # internal: max rows kept in the sample file
 
 # Cross-session limit sync (opt-in). Claude Code only re-renders a session's
@@ -112,8 +116,8 @@ BURN_TRIM=1500                  # internal: max rows kept in the sample file
 # all (that is a Claude Code limit).
 # The store is a directory-set (see rl_sample/rl_latest), race-free by design.
 VL_LIMIT_SYNC=0
-RL5H_FILE="${CORALLINE_RL5H_FILE:-$HOME/.claude/coralline/limit-5h.tsv}"
-RL7D_FILE="${CORALLINE_RL7D_FILE:-$HOME/.claude/coralline/limit-7d.tsv}"
+RL5H_FILE="${CORALLINE_RL5H_FILE:-$CORALLINE_DIR/limit-5h.tsv}"
+RL7D_FILE="${CORALLINE_RL7D_FILE:-$CORALLINE_DIR/limit-7d.tsv}"
 # Per-window ceilings for the sentinel guard (#32): a reset further out than its
 # window can possibly be is corrupt (e.g. sample-input.json's 2030 value) and must
 # never become the high-water. Kept per window because a stale 5h value a couple of

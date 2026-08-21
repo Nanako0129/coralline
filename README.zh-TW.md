@@ -168,7 +168,7 @@ Bash install-only 與一般更新不會自行新增或刪除 `subagentStatusLine
 
 ### 跨 session 額度同步（選用）
 
-設定 `VL_LIMIT_SYNC=1`，讓會重繪的 session 透過 `limit-5h.d` 與 `limit-7d.d` 共用帳號仍開放的 5h 與 7d 視窗。session 自己的有效讀數永遠贏自己的視窗；只有 store 握有嚴格較新的視窗，或 session 完全沒有讀數時，才使用仍開放的 stored window。它預設關閉、沒有 API 存取，也無法刷新完全閒置的 session。原始 redraw-only 契約見 [PR #24](https://github.com/Nanako0129/coralline/pull/24)，無讀數 fallback 見 [PR #64](https://github.com/Nanako0129/coralline/pull/64)。
+設定 `VL_LIMIT_SYNC=1`，讓會重繪的 session 透過 `limit-5h.d` 與 `limit-7d.d` 共用帳號仍開放的 5h 與 7d 視窗。session 自己的有效讀數永遠贏自己的視窗；只有 store 握有嚴格較新的視窗，或 session 完全沒有讀數時，才使用仍開放的 stored window。它預設關閉、沒有 API 存取，也無法刷新完全閒置的 session。store 位於 `~/.claude/coralline`；若有設定 `CLAUDE_CONFIG_DIR`，則改為 `$CLAUDE_CONFIG_DIR/coralline`，burn 樣本與 float 檔案同理，因此兩個 Claude 設定目錄各自保有獨立狀態，不會互相覆蓋視窗。原始 redraw-only 契約見 [PR #24](https://github.com/Nanako0129/coralline/pull/24)，無讀數 fallback 見 [PR #64](https://github.com/Nanako0129/coralline/pull/64)。
 
 ### Float readout（選用）
 
