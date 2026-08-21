@@ -771,6 +771,38 @@ _STATE_RL5_VALID=1; _STATE_RL5_PCT=7000; _STATE_RL5_RST=1016900
 seg_limit5h
 case "${SEG_TXT[0]}" in (*'5h '*' 7% '*) ok 'roll-over catch-up still renders the newer window' ;; (*) bad 'roll-over catch-up still renders the newer window' "${SEG_TXT[0]}" ;; esac
 
+# Default store base follows CLAUDE_CONFIG_DIR (two Claude config dirs must not
+# share one 5h/7d store). Asserted on where a real render puts the files, with no
+# CORALLINE_*_FILE override in play, so a relocated default cannot pass by text.
+default_store_case() {  # $1=case dir $2=CLAUDE_CONFIG_DIR value ("" = unset)
+  local case_dir="$1" cfg_dir="$2" now
+  rm -rf "$case_dir"; mkdir -p "$case_dir/home"
+  printf '%s\n' 'VL_SEGMENTS="limit5h limit7d"' VL_CLOCK=off VL_STYLE=lean \
+    VL_NOCOLOR=1 VL_LIMIT_SYNC=1 > "$case_dir/conf"
+  now=$(date +%s)
+  make_payload "$case_dir/input" 41.2 "$((now + 15930))" 30 "$((now + 345630))"
+  if [ -n "$cfg_dir" ]; then
+    HOME="$case_dir/home" CLAUDE_CONFIG_DIR="$cfg_dir" CORALLINE_CONFIG="$case_dir/conf" \
+      CORALLINE_NO_SAMPLE=0 "$BASH_BIN" "$SCRIPT" < "$case_dir/input" > "$case_dir/out" 2> "$case_dir/err"
+  else
+    # Unset, not merely unassigned: a developer who exports CLAUDE_CONFIG_DIR
+    # (the very configuration this fix targets) would otherwise leak it in.
+    ( unset CLAUDE_CONFIG_DIR
+      HOME="$case_dir/home" CORALLINE_CONFIG="$case_dir/conf" \
+        CORALLINE_NO_SAMPLE=0 "$BASH_BIN" "$SCRIPT" < "$case_dir/input" > "$case_dir/out" 2> "$case_dir/err" )
+  fi
+}
+
+CASE="$TMPD/store-base"
+default_store_case "$CASE/redirected" "$CASE/redirected/alt"
+true_case 'CLAUDE_CONFIG_DIR redirects the default store' test -e "$CASE/redirected/alt/coralline/limit-5h.d"
+true_case 'redirected store leaves the HOME store untouched' test ! -e "$CASE/redirected/home/.claude/coralline"
+eq 'redirected render stderr empty' "$(file_bytes "$CASE/redirected/err")" 0
+
+default_store_case "$CASE/plain" ""
+true_case 'unset CLAUDE_CONFIG_DIR keeps the historical HOME store' test -e "$CASE/plain/home/.claude/coralline/limit-5h.d"
+eq 'plain render stderr empty' "$(file_bytes "$CASE/plain/err")" 0
+
 printf 'SUMMARY pass=%s fail=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 printf 'ALL PASS\n'

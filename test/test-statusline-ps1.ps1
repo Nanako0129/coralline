@@ -1799,6 +1799,30 @@ fi
     Check-Run 'WIN-02 PowerShell reads Bash state' $psRead
     Check-Exact 'WIN-02 PowerShell reader matches Bash fixed-pill output' $psRead $bashWrite
 
+    # Default store base follows CLAUDE_CONFIG_DIR (two Claude config directories
+    # must not share one 5h/7d store). No BURN_FILE/RL*_FILE override is set, so
+    # the assertion is on where the renderer's own defaults put the files.
+    $baseConfig = New-Config 'win02-store-base' @(('VL_SEGMENTS=' + (Quote-FromConfigure 'limit5h limit7d')),'VL_CLOCK=off','VL_LIMIT_SYNC=1')
+    $baseRoot = Join-Path $stateRoot 'store-base'
+    foreach ($case in @('redirected','plain')) {
+        $caseRoot = Join-Path $baseRoot $case
+        $caseHome = Join-Path $caseRoot 'home'
+        [void][IO.Directory]::CreateDirectory($caseHome)
+        $baseEnv = @{ CORALLINE_NO_SAMPLE=$null; CORALLINE_TEST_NOW=[string]$fixedNow
+                      HOME=(Forward-Path $caseHome); USERPROFILE=$caseHome }
+        if ($case -eq 'redirected') { $baseEnv.CLAUDE_CONFIG_DIR = Join-Path $caseRoot 'alt' }
+        else { $baseEnv.CLAUDE_CONFIG_DIR = $null }
+        $baseRun = Invoke-Statusline (Json $statePayload) $baseConfig $baseEnv '' 10000
+        Check-Run "WIN-02 PowerShell default store base $case" $baseRun
+        $homeStore = Join-Path $caseHome '.claude\coralline\limit-5h.d'
+        if ($case -eq 'redirected') {
+            Check 'WIN-02 CLAUDE_CONFIG_DIR redirects the default store' ([IO.Directory]::Exists((Join-Path $caseRoot 'alt\coralline\limit-5h.d')))
+            Check 'WIN-02 redirected store leaves the HOME store untouched' (-not [IO.Directory]::Exists((Join-Path $caseHome '.claude\coralline')))
+        } else {
+            Check 'WIN-02 unset CLAUDE_CONFIG_DIR keeps the historical HOME store' ([IO.Directory]::Exists($homeStore))
+        }
+    }
+
     # C:\, C:/, and /c/ spellings must resolve to the same physical store.
     $identityRoot = Join-Path $stateRoot 'identity'
     [void][IO.Directory]::CreateDirectory($identityRoot)
