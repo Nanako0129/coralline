@@ -697,7 +697,10 @@ state_burn_lead() {  # → 0 iff this render must run the burn write path
     # claimed for this (second, window) at or above ours makes our row
     # redundant.
     for f in "$slot".*.tick; do
-      [ -e "$f" ] || [ -L "$f" ] || continue
+      # Only a regular non-symlink file is a claim we made: a planted symlink
+      # or directory must not stand in for a winner, or losing to it would
+      # let a follower adopt a cached estimate with no live parse behind it.
+      [ -f "$f" ] && [ ! -L "$f" ] || continue
       p=${f#"$slot".}; p=${p%.tick}
       # Length caps mirror state_epoch's width rule: a planted name with an
       # oversized digit run must not reach [ -gt ] (integer overflow would
@@ -1201,7 +1204,12 @@ EOF
   if printf '%s %s %s %s %s %s %s %s\n' "$NOW" $(( NOW + ${_B5_TTR:-0} )) "$s" "$sp" "$d" "$l" \
        "$_CUR_BURN_RST" "$_CUR_BURN_PCT" 2>/dev/null > "$tmp"; then won=1; fi
   [ "$had_c" = 1 ] || set +C
-  [ "$won" = 1 ] || return 0
+  # The redirection creates the file before printf runs, so a write that
+  # fails afterwards (out of space, over quota) leaves a partial temporary
+  # that burn_tmp_sweep cannot retire while the same failure keeps the TSV
+  # from advancing past it. Discard it here instead of accumulating one per
+  # winner render.
+  [ "$won" = 1 ] || { burn_est_discard "$tmp"; return 0; }
   # Divergent same-second winners publish in parse-completion order, which is
   # not claim order: a winner finishing late must never replace the estimate
   # of a covering claim whose parse includes a row ours does not. That covers

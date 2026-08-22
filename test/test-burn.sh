@@ -635,6 +635,16 @@ _BURN_LEAD=
 true_case 'lead: our higher reading beats a lower claim' state_burn_lead
 true_case 'lead: divergent readings both leave tokens' test -f "$TOK"
 rm -f "$CASE"/burn.tsv.*.tick
+# Only a regular non-symlink file counts as a claim: a planted symlink or
+# directory carrying a higher percentage must not make us lose (and must not
+# mark the loss adoption-safe), because no live parse stands behind it.
+ln -s /dev/null "$CASE/burn.tsv.1000000.1015900.70000.tick"
+mkdir "$CASE/burn.tsv.1000000.1015900.80000.tick"
+_BURN_LEAD=; _BURN_LOST=0
+true_case 'lead: planted symlink claim does not win' state_burn_lead
+eq 'lead: planted objects never mark an adoptable loss' "${_BURN_LOST:-0}" 0
+rm -f "$CASE/burn.tsv.1000000.1015900.70000.tick"; rmdir "$CASE/burn.tsv.1000000.1015900.80000.tick"
+rm -f "$CASE"/burn.tsv.*.tick
 : > "$CASE/burn.tsv.1000000.1016000.41200.tick"
 _BURN_LEAD=
 true_case 'lead: same-second other-window token does not block' state_burn_lead
@@ -744,6 +754,13 @@ true_case 'est publish: abandoned publication releases the marker' test ! -e "$_
 _BURN_SNAP=""
 burn_est_publish
 true_case 'est publish: unversioned publish refused' test ! -e "$EST"
+# The redirection creates the temporary before the write runs; a write that
+# fails afterwards must not leave it behind.
+printf() { return 1; }
+burn_est_snap; burn_est_publish
+unset -f printf
+true_case 'est publish: failed write leaves no temporary' test ! -e "$CASE/burn.tsv.$$.tmp"
+true_case 'est publish: failed write publishes nothing' test ! -e "$EST"
 burn_est_snap; burn_est_publish
 true_case 'est publish: untouched TSV publishes normally' test -f "$EST"
 true_case 'est publish: successful publication releases the marker' test ! -e "$_SNAPPED"
