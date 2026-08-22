@@ -1318,8 +1318,11 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   # above), so this is a substitution, not a max - but only for a PRIOR-tick
   # estimate: a same-tick winner's row shares our sample key, where add_obs
   # keeps the maximum, so the published latest already includes what our own
-  # injection could contribute.
-  [ "$crst" -eq "${_CUR_BURN_RST:-0}" ] && [ "$pub" -lt "$NOW" ] && l=$_CUR_BURN_PCT
+  # injection could contribute. The window that matters is the one the
+  # estimate DESCRIBES (rst, the parse's newest window), not the one its
+  # writer happened to claim: a writer on our window whose parse selected
+  # newer rows published numbers our reading has no part in.
+  [ "$rst" -eq "${_CUR_BURN_RST:-0}" ] && [ "$pub" -lt "$NOW" ] && l=$_CUR_BURN_PCT
   # ttr derives locally from the published window and our own NOW, so a
   # 1-3s-old estimate cannot trip the rebind gate into warming flicker.
   t=$(( rst - NOW )); [ "$t" -lt 0 ] && t=0

@@ -836,6 +836,14 @@ true_case 'est adopt: same-tick adoption succeeds' burn_est_adopt
 _ADOPT_ETA=$_B5_ETA
 burn_b5_line 'active 300 5000 50000 15900' || bad 'est adopt: same-tick reference parses' failed
 eq 'est adopt: same-tick keeps the published latest' "$_ADOPT_ETA" "$_B5_ETA"
+# A writer claiming our window whose parse selected a NEWER window published
+# numbers our reading has no part in: the substitution follows the described
+# window, not the claimed one.
+printf '999999 1020000 active 300 5000 50000 1015900 41200\n' > "$EST"
+true_case 'est adopt: claim-ours described-newer adoption succeeds' burn_est_adopt
+_ADOPT_ETA=$_B5_ETA
+burn_b5_line 'active 300 5000 50000 20000' || bad 'est adopt: described-window reference parses' failed
+eq 'est adopt: described-newer keeps the published latest' "$_ADOPT_ETA" "$_B5_ETA"
 
 # A TSV strictly newer than the estimate means rows landed after the publish
 # (an older-tick straggler inside the sweep grace window): the snapshot is
