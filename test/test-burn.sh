@@ -727,6 +727,14 @@ printf '1000000 1015900 active 300 5000 100001\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: latest beyond pct cap rejected' adopted; else ok 'est adopt: latest beyond pct cap rejected'; fi
 printf '1000000 1015900 hacked 300 5000 50000\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: unknown state token rejected' adopted; else ok 'est adopt: unknown state token rejected'; fi
+printf '1000000 1015900 active 008 5000 50000\n' > "$EST"
+if burn_est_adopt 2> "$CASE/octal.err"; then bad 'est adopt: leading-zero span rejected' adopted; else ok 'est adopt: leading-zero span rejected'; fi
+eq 'est adopt: leading-zero rejection leaks no stderr' "$(wc -c < "$CASE/octal.err" | tr -d ' ')" 0
+printf '1000000 1009000 active 300 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: older-window estimate rejected' adopted; else ok 'est adopt: older-window estimate rejected'; fi
+printf '1000000 1020000 active 300 5000 50000\n' > "$EST"
+true_case 'est adopt: newer-window estimate accepted' burn_est_adopt
+eq 'est adopt: newer-window ttr from published maxrst' "$_B5_TTR" 20000
 printf '1000000 1015900 active a[$(touch %s/pwn)] 5000 50000\n' "$CASE" > "$EST"
 if burn_est_adopt; then bad 'est adopt: arithmetic injection rejected' adopted; else ok 'est adopt: arithmetic injection rejected'; fi
 true_case 'est adopt: injection produced no side effect' test ! -e "$CASE/pwn"
