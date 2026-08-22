@@ -821,6 +821,12 @@ printf '1000000 1015900 active 300 5 50000 1015900 50000 600 999000\n' > "$EST"
 true_case 'est adopt: claim above the covering pct accepted' burn_est_adopt
 printf '1000000 1020000 active 300 5 50000 1020000 5000 600 999000\n' > "$EST"
 true_case 'est adopt: newer-window claim supersedes any pct' burn_est_adopt
+# A writer injects its own claim into its parse, so a described window before
+# the claimed one is provenance no publisher could produce.
+printf '1000000 1015900 active 300 5 50000 1020000 5000 600 999000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: claim newer than described window rejected' adopted; else ok 'est adopt: claim newer than described window rejected'; fi
+printf '1000000 1021600 active 300 5 50000 1021601 5000 600 999000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: claim beyond the 5h horizon rejected' adopted; else ok 'est adopt: claim beyond the 5h horizon rejected'; fi
 # Prior-tick same-window adoption substitutes this session's own reading for
 # the published latest (our observation is the newest distinct sample, and
 # percentages legitimately drop within a window). A same-tick estimate keeps

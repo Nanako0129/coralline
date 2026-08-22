@@ -1303,6 +1303,13 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   # (writer renames can interleave arbitrarily, so this is the check that
   # holds regardless of publication order).
   state_epoch "${crst:-}" 12 || return 1; crst=$_SE_VALUE
+  # Producer invariant: a writer injects its own claimed observation into the
+  # parse, so the window the estimate DESCRIBES can never precede the one its
+  # writer CLAIMED, and the claim is bounded by the same horizon. Provenance
+  # that no real publisher could have produced is a cache miss, not a licence
+  # to skip the covering-claim comparison below.
+  [ "$rst" -ge "$crst" ] || return 1
+  [ "$crst" -le $(( NOW + RL_MAX_5H )) ] || return 1
   case "${cpct:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
   [ "${#cpct}" -le 6 ] && [ "$cpct" -le 100000 ] || return 1
   # The estimate is a parse under a specific lookback, and CORALLINE_BURN_WINDOW
