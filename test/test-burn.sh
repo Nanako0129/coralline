@@ -727,6 +727,10 @@ printf '1000000 1015900 active 300 5000 100001\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: latest beyond pct cap rejected' adopted; else ok 'est adopt: latest beyond pct cap rejected'; fi
 printf '1000000 1015900 hacked 300 5000 50000\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: unknown state token rejected' adopted; else ok 'est adopt: unknown state token rejected'; fi
+printf '1000000 253402300799 active 300 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: reset beyond the 5h horizon rejected' adopted; else ok 'est adopt: reset beyond the 5h horizon rejected'; fi
+printf '1000000 1021600 active 300 5000 50000\n' > "$EST"
+true_case 'est adopt: reset at the 5h horizon accepted' burn_est_adopt
 printf '1000000 1015900 active 08 5000 50000\n' > "$EST"
 if burn_est_adopt 2> "$CASE/octal.err"; then bad 'est adopt: leading-zero span rejected' adopted; else ok 'est adopt: leading-zero span rejected'; fi
 eq 'est adopt: leading-zero rejection leaks no stderr' "$(wc -c < "$CASE/octal.err" | tr -d ' ')" 0

@@ -1175,6 +1175,12 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   state_epoch "${pub:-}" 12 || return 1; pub=$_SE_VALUE
   state_epoch "${rst:-}" 12 || return 1; rst=$_SE_VALUE
   [ "$pub" -le "$NOW" ] && [ "$pub" -ge $(( NOW - 3 )) ] || return 1
+  # The TSV parser heals a reset beyond NOW + RL_MAX_5H as implausible, so a
+  # record carrying one is a record no parse produced. Without this the cache
+  # is materially weaker than the file it summarizes: the same planted reset
+  # renders warming through the TSV and an adopted active estimate through
+  # the cache.
+  [ "$rst" -le $(( NOW + RL_MAX_5H )) ] || return 1
   case "${s:-}" in (active|idle|warming) ;; (*) return 1 ;; esac
   # Canonical form, the same rule state_epoch applies: a leading zero is
   # rejected rather than tolerated, because these three fields reach bash
