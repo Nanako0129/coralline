@@ -1125,7 +1125,7 @@ burn_eta_7d() {  # → _B7_*; $1=pct_milli $2=reset epoch
 burn_est_publish() {  # winner only: publish "<now> <maxrst> <state> <span> <delta> <latest>"
   [ "${_CUR_BURN_VALID:-0}" = 1 ] || return 0
   [ -n "${_B5_RAW:-}" ] || return 0
-  local est="$_SB_BASE.est" tmp="$_SB_BASE.$$.tmp" s sp d l t p had_c=0 won=0
+  local est="$_SB_BASE.est" tmp="$_SB_BASE.$$.tmp" s sp d l t p f had_c=0 won=0
   state_paths_revalidate || return 0
   # The est file is a seventh state object outside state_paths_validate's
   # six-path distinctness matrix; refuse to publish over any configured
@@ -1148,6 +1148,19 @@ EOF
        2>/dev/null > "$tmp"; then won=1; fi
   [ "$had_c" = 1 ] || set +C
   [ "$won" = 1 ] || return 0
+  # Divergent same-second winners publish in parse-completion order, which is
+  # not claim order: a lower-pct winner finishing late must never replace the
+  # estimate of a covering higher claim whose parse includes a row ours does
+  # not. If a higher claim exists by the time we are about to rename, yield;
+  # if it appears in the residual race window instead, its own publication
+  # necessarily lands after ours and corrects the file.
+  for f in "$_SB_BASE.${NOW}.${_CUR_BURN_RST}".*.tick; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    p=${f#"$_SB_BASE.${NOW}.${_CUR_BURN_RST}".}; p=${p%.tick}
+    case "$p" in (''|*[!0-9]*) continue ;; esac
+    [ "${#p}" -le 6 ] || continue
+    if [ "$p" -gt "$_CUR_BURN_PCT" ]; then rm -f "$tmp" 2>/dev/null; return 0; fi
+  done
   if state_paths_revalidate && state_no_symlink_path "$est" && [ "$_SNP" = "$est" ] \
      && state_path_leaf "$est" f; then
     mv -f "$tmp" "$est" 2>/dev/null && return 0

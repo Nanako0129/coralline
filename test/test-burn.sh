@@ -707,6 +707,17 @@ burn_est_publish
 true_case 'est publish: directory at est name aborts' test -d "$EST"
 true_case 'est publish: aborted publish leaves no tmp' test ! -e "$CASE/burn.tsv.$$.tmp"
 rmdir "$EST"
+# A covering higher claim in the same (second, window) suppresses our publish;
+# a lower one does not.
+: > "$CASE/burn.tsv.1000000.1015900.60000.tick"
+burn_est_publish
+true_case 'est publish: higher same-second claim suppresses ours' test ! -e "$EST"
+true_case 'est publish: suppressed publish leaves no tmp' test ! -e "$CASE/burn.tsv.$$.tmp"
+rm -f "$CASE/burn.tsv.1000000.1015900.60000.tick"
+: > "$CASE/burn.tsv.1000000.1015900.30000.tick"
+burn_est_publish
+true_case 'est publish: lower claim does not suppress' test -f "$EST"
+rm -f "$EST" "$CASE/burn.tsv.1000000.1015900.30000.tick"
 
 # Adopt: fresh valid estimate is used without the awk (values differ from
 # anything the empty TSV could produce, so adoption is observable).
