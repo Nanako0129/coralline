@@ -1201,8 +1201,8 @@ EOF
   # covering claim the adopter lost to predates a row its own full parse
   # would include, and is rejected on the read side regardless of how writer
   # renames interleave.
-  if printf '%s %s %s %s %s %s %s %s\n' "$NOW" $(( NOW + ${_B5_TTR:-0} )) "$s" "$sp" "$d" "$l" \
-       "$_CUR_BURN_RST" "$_CUR_BURN_PCT" 2>/dev/null > "$tmp"; then won=1; fi
+  if printf '%s %s %s %s %s %s %s %s %s\n' "$NOW" $(( NOW + ${_B5_TTR:-0} )) "$s" "$sp" "$d" "$l" \
+       "$_CUR_BURN_RST" "$_CUR_BURN_PCT" "$CORALLINE_BURN_WINDOW" 2>/dev/null > "$tmp"; then won=1; fi
   [ "$had_c" = 1 ] || set +C
   # The redirection creates the file before printf runs, so a write that
   # fails afterwards (out of space, over quota) leaves a partial temporary
@@ -1242,7 +1242,7 @@ EOF
 }
 
 burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated estimate
-  local est="$_SB_BASE.est" LC_ALL=C pub rst s sp d l crst cpct t
+  local est="$_SB_BASE.est" LC_ALL=C pub rst s sp d l crst cpct cwin t
   # Same defaults burn_eta_5h starts from: the adopter replaces that call
   # entirely, and downstream comparisons assume every _B5_* is populated.
   _B5_STATE=warming; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0; _B5_RAW=""
@@ -1266,7 +1266,7 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   # a render will ever ingest; trailing junk lands in the last field and
   # fails its digit check, so a malformed line is rejected, never truncated
   # into a plausible one.
-  read -r -n 128 pub rst s sp d l crst cpct < "$est" 2>/dev/null || :
+  read -r -n 128 pub rst s sp d l crst cpct cwin < "$est" 2>/dev/null || :
   # Every field is validated before it reaches any arithmetic context; the
   # published values bypass the awk whose internal caps normally guarantee
   # these bounds, so the reader must re-impose them itself.
@@ -1300,6 +1300,13 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   state_epoch "${crst:-}" 12 || return 1; crst=$_SE_VALUE
   case "${cpct:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
   [ "${#cpct}" -le 6 ] && [ "$cpct" -le 100000 ] || return 1
+  # The estimate is a parse under a specific lookback, and CORALLINE_BURN_WINDOW
+  # is per-session config: sessions sharing one BURN_FILE with different
+  # lookbacks compute genuinely different answers from identical rows, and a
+  # wider window can report active where a narrower one reports warming.
+  # Adopt only a parse run under our own lookback.
+  case "${cwin:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
+  [ "${#cwin}" -le 5 ] && [ "$cwin" -eq "$CORALLINE_BURN_WINDOW" ] || return 1
   if [ "$crst" -le "${_CUR_BURN_RST:-0}" ]; then
     [ "$crst" -eq "${_CUR_BURN_RST:-0}" ] || return 1
     [ "$cpct" -ge "${_BURN_LOST_PCT:-100001}" ] || return 1
