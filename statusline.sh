@@ -699,7 +699,11 @@ state_burn_lead() {  # → 0 iff this render must run the burn write path
     for f in "$slot".*.tick; do
       [ -e "$f" ] || [ -L "$f" ] || continue
       p=${f#"$slot".}; p=${p%.tick}
+      # Length caps mirror state_epoch's width rule: a planted name with an
+      # oversized digit run must not reach [ -gt ] (integer overflow would
+      # leak an error line onto the render's stderr).
       case "$p" in (''|*[!0-9]*) continue ;; esac
+      [ "${#p}" -le 6 ] || continue
       [ "$p" -gt "$best" ] && best=$p
     done
     [ "$_CUR_BURN_PCT" -gt "$best" ] || return 1
@@ -748,11 +752,14 @@ state_burn_lead() {  # → 0 iff this render must run the burn write path
     n=${f#"$_SB_BASE".}; n=${n%.tick}
     e=${n%%.*}
     case "$e" in (''|*[!0-9]*) continue ;; esac
+    [ "${#e}" -le 12 ] || continue
     n=${n#*.}
     case "$n" in *.*) ;; *) continue ;; esac
     r=${n%%.*}; p=${n#*.}
     case "$r" in (''|*[!0-9]*) continue ;; esac
+    [ "${#r}" -le 12 ] || continue
     case "$p" in (''|*[!0-9]*) continue ;; esac
+    [ "${#p}" -le 6 ] || continue
     [ "$e" -le "$NOW" ] && [ "$e" -ge $(( NOW - 8 )) ] && continue
     set -- "$@" "$f"; c=$(( c + 1 ))
     [ "$c" -ge 8 ] && break

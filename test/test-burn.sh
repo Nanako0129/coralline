@@ -643,6 +643,13 @@ true_case 'lead sweep: non-numeric epoch kept' test -f "$CASE/burn.tsv.abc.10159
 true_case 'lead sweep: two-field name kept' test -f "$CASE/burn.tsv.999990.1015900.tick"
 true_case 'lead sweep: foreign unprefixed file untouched' test -f "$CASE/tick.999990.1015900.41200.tick"
 true_case 'lead sweep: symlink kept' test -L "$CASE/burn.tsv.999980.1015900.41200.tick"
+rm -f "$CASE"/burn.tsv.*.tick 2>/dev/null
+: > "$CASE/burn.tsv.1000000.1015900.999999999999999999999999.tick"
+: > "$CASE/burn.tsv.999990.1015900.999999999999999999999999.tick"
+_BURN_LEAD=
+state_burn_lead 2> "$CASE/overflow.err" || bad 'lead: oversized field never blocks a claim' lost
+eq 'lead: oversized digit field leaks no stderr' "$(wc -c < "$CASE/overflow.err" | tr -d ' ')" 0
+true_case 'lead sweep: stale oversized name kept, not compared' test -f "$CASE/burn.tsv.999990.1015900.999999999999999999999999.tick"
 rm -f "$CASE"/burn.tsv.*.tick "$CASE"/tick.* 2>/dev/null
 ln -s "$CASE/linktarget" "$TOK"
 _BURN_LEAD=
