@@ -806,6 +806,10 @@ printf '1000002 1015900 active 300 5 50000 1015900 41200 600 999000\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: future-dated estimate rejected' adopted; else ok 'est adopt: future-dated estimate rejected'; fi
 printf '1000000 1015900 active 90000 5 50000 1015900 41200 600 999000\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: span beyond window cap rejected' adopted; else ok 'est adopt: span beyond window cap rejected'; fi
+printf '1000000 1015900 active 601 5 50000 1015900 41200 600 999000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: span past the configured lookback rejected' adopted; else ok 'est adopt: span past the configured lookback rejected'; fi
+printf '1000000 1015900 active 600 5 50000 1015900 41200 600 999000\n' > "$EST"
+true_case 'est adopt: span at the configured lookback accepted' burn_est_adopt
 printf '1000000 1015900 active 300 101 50000 1015900 41200 600 999000\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: delta beyond the producer cap rejected' adopted; else ok 'est adopt: delta beyond the producer cap rejected'; fi
 printf '1000000 1015900 active 300 5 100001 1015900 41200 600 999000\n' > "$EST"

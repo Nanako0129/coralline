@@ -1309,8 +1309,10 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   # Leading zeros are rejected outright (our publisher never emits them, and
   # bash arithmetic downstream would read them as octal): the (0|[1-9]...)
   # shape mirrors state_epoch's rule.
+  # Both crossings lie inside [NOW - win, NOW] in the producer, so the span
+  # cannot exceed the lookback; the clamp ceiling is not the bound here.
   case "${sp:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
-  [ "${#sp}" -le 5 ] && [ "$sp" -le 86400 ] || return 1
+  [ "${#sp}" -le 5 ] && [ "$sp" -le "$CORALLINE_BURN_WINDOW" ] || return 1
   # delta is a difference of two whole-percent values in the producer, so 100
   # is its real ceiling; the pct-milli scale does not apply to it.
   case "${d:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
