@@ -1319,6 +1319,14 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   [ "${#d}" -le 3 ] && [ "$d" -le 100 ] || return 1
   case "${l:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
   [ "${#l}" -le 6 ] && [ "$l" -le 100000 ] || return 1
+  # Shape the pair to what the producer can actually emit: an active result
+  # needs two crossings at least win/10 apart, and every other state carries
+  # zeroes. A span or delta outside that is a record no parse produced.
+  if [ "$s" = active ]; then
+    [ "$sp" -ge $(( CORALLINE_BURN_WINDOW / 10 )) ] || return 1
+  else
+    [ "$sp" -eq 0 ] && [ "$d" -eq 0 ] || return 1
+  fi
   # Provenance ordering: the embedded claim must be at least as complete as
   # the covering claim we lost to. A claim for a newer window supersedes any
   # same-window pct; within our window the claim pct must reach the covering

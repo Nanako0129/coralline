@@ -810,6 +810,15 @@ printf '1000000 1015900 active 601 5 50000 1015900 41200 600 999000\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: span past the configured lookback rejected' adopted; else ok 'est adopt: span past the configured lookback rejected'; fi
 printf '1000000 1015900 active 600 5 50000 1015900 41200 600 999000\n' > "$EST"
 true_case 'est adopt: span at the configured lookback accepted' burn_est_adopt
+printf '1000000 1015900 active 59 5 50000 1015900 41200 600 999000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: active span below the producer minimum rejected' adopted; else ok 'est adopt: active span below the producer minimum rejected'; fi
+printf '1000000 1015900 active 60 5 50000 1015900 41200 600 999000\n' > "$EST"
+true_case 'est adopt: active span at the producer minimum accepted' burn_est_adopt
+printf '1000000 1015900 warming 300 5 50000 1015900 41200 600 999000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: non-active with crossing fields rejected' adopted; else ok 'est adopt: non-active with crossing fields rejected'; fi
+printf '1000000 1015900 warming 0 0 50000 1015900 41200 600 999000\n' > "$EST"
+true_case 'est adopt: warming with producer zeroes accepted' burn_est_adopt
+eq 'est adopt: warming state carried through' "$_B5_STATE" warming
 printf '1000000 1015900 active 300 101 50000 1015900 41200 600 999000\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: delta beyond the producer cap rejected' adopted; else ok 'est adopt: delta beyond the producer cap rejected'; fi
 printf '1000000 1015900 active 300 5 100001 1015900 41200 600 999000\n' > "$EST"
