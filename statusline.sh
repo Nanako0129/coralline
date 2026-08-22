@@ -1124,6 +1124,18 @@ burn_eta_7d() {  # → _B7_*; $1=pct_milli $2=reset epoch
 # returned), so burn_tmp_sweep's <base>.<digits>.tmp rule covers orphans from
 # a killed render. Fork budget: one mv per second per store, paid by the
 # winner, replacing N-1 whole-file awk parses.
+# Unlinking is a mutation like any other: an ancestor swapped for a symlink
+# after the temporary was written would make a bare rm traverse untrusted
+# ground and delete a same-named file in the attacker's target. Every discard
+# therefore re-proves the path identity first, mirroring burn_eta_5h's guarded
+# cleanup. A temporary left behind because revalidation failed is not lost:
+# burn_tmp_sweep owns the <base>.<digits>.tmp namespace and retires it.
+burn_est_discard() {  # $1=our publish temporary; remove only through revalidated identities
+  state_paths_revalidate && state_no_symlink_path "$1" && [ "$_SNP" = "$1" ] \
+    && [ -f "$1" ] && [ ! -L "$1" ] && rm -f "$1" 2>/dev/null
+  return 0
+}
+
 burn_est_publish() {  # winner only: publish "<now> <maxrst> <state> <span> <delta> <latest>"
   [ "${_CUR_BURN_VALID:-0}" = 1 ] || return 0
   [ -n "${_B5_RAW:-}" ] || return 0
@@ -1173,16 +1185,16 @@ EOF
     [ "${#cr}" -le 12 ] || continue
     case "$p" in (''|*[!0-9]*) continue ;; esac
     [ "${#p}" -le 6 ] || continue
-    if [ "$cr" -gt "$_CUR_BURN_RST" ]; then rm -f "$tmp" 2>/dev/null; return 0; fi
+    if [ "$cr" -gt "$_CUR_BURN_RST" ]; then burn_est_discard "$tmp"; return 0; fi
     if [ "$cr" -eq "$_CUR_BURN_RST" ] && [ "$p" -gt "$_CUR_BURN_PCT" ]; then
-      rm -f "$tmp" 2>/dev/null; return 0
+      burn_est_discard "$tmp"; return 0
     fi
   done
   if state_paths_revalidate && state_no_symlink_path "$est" && [ "$_SNP" = "$est" ] \
      && state_path_leaf "$est" f; then
     mv -f "$tmp" "$est" 2>/dev/null && return 0
   fi
-  rm -f "$tmp" 2>/dev/null
+  burn_est_discard "$tmp"
   return 0
 }
 

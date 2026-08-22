@@ -727,6 +727,20 @@ rm -f "$CASE/burn.tsv.1000000.1016100.20000.tick"
 burn_est_publish
 true_case 'est publish: older-window claim does not suppress' test -f "$EST"
 rm -f "$EST" "$CASE/burn.tsv.1000000.1009000.90000.tick"
+# Discarding a temporary is a mutation: it must re-prove the path identity, so
+# an unlink can never traverse an ancestor swapped for a symlink mid-render.
+: > "$CASE/burn.tsv.4242.tmp"
+_STATE_PATHS_OK=0
+burn_est_discard "$CASE/burn.tsv.4242.tmp"
+true_case 'est discard: revalidation failure keeps the temporary' test -f "$CASE/burn.tsv.4242.tmp"
+_STATE_PATHS_OK=1
+burn_est_discard "$CASE/burn.tsv.4242.tmp"
+true_case 'est discard: revalidated temporary removed' test ! -e "$CASE/burn.tsv.4242.tmp"
+ln -s "$CASE/discardtarget" "$CASE/burn.tsv.4243.tmp"
+burn_est_discard "$CASE/burn.tsv.4243.tmp"
+true_case 'est discard: symlink temporary never unlinked' test -L "$CASE/burn.tsv.4243.tmp"
+true_case 'est discard: symlink target never touched' test ! -e "$CASE/discardtarget"
+rm -f "$CASE/burn.tsv.4243.tmp"
 
 # Adopt: fresh valid estimate is used without the awk (values differ from
 # anything the empty TSV could produce, so adoption is observable).
