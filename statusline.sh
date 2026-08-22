@@ -1255,8 +1255,11 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   # defined by the newest sample, so a same-window adoption substitutes our
   # own current pct for the published latest. Percentages legitimately DROP
   # within a window (upstream resets, subscription upgrades - see rl_choose
-  # above), so this is a substitution, not a max.
-  [ "$crst" -eq "${_CUR_BURN_RST:-0}" ] && l=$_CUR_BURN_PCT
+  # above), so this is a substitution, not a max - but only for a PRIOR-tick
+  # estimate: a same-tick winner's row shares our sample key, where add_obs
+  # keeps the maximum, so the published latest already includes what our own
+  # injection could contribute.
+  [ "$crst" -eq "${_CUR_BURN_RST:-0}" ] && [ "$pub" -lt "$NOW" ] && l=$_CUR_BURN_PCT
   # ttr derives locally from the published window and our own NOW, so a
   # 1-3s-old estimate cannot trip the rebind gate into warming flicker.
   t=$(( rst - NOW )); [ "$t" -lt 0 ] && t=0

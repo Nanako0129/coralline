@@ -768,14 +768,21 @@ printf '1000000 1015900 active 300 5000 50000 1015900 50000\n' > "$EST"
 true_case 'est adopt: claim above the covering pct accepted' burn_est_adopt
 printf '1000000 1020000 active 300 5000 50000 1020000 5000\n' > "$EST"
 true_case 'est adopt: newer-window claim supersedes any pct' burn_est_adopt
-# Same-window adoption substitutes this session's own reading for the
-# published latest (percentages legitimately drop within a window, and the
-# full parse would inject our observation as the newest sample).
-printf '1000000 1015900 active 300 5000 50000 1015900 50000\n' > "$EST"
-true_case 'est adopt: latest override adoption succeeds' burn_est_adopt
+# Prior-tick same-window adoption substitutes this session's own reading for
+# the published latest (our observation is the newest distinct sample, and
+# percentages legitimately drop within a window). A same-tick estimate keeps
+# the published value: the winner's row shares our sample key, where the
+# reader keeps the maximum, so it already covers our injection.
+printf '999999 1015900 active 300 5000 50000 1015900 50000\n' > "$EST"
+true_case 'est adopt: prior-tick latest override adoption succeeds' burn_est_adopt
 _ADOPT_ETA=$_B5_ETA
 burn_b5_line 'active 300 5000 41200 15900' || bad 'est adopt: reference line parses' failed
-eq 'est adopt: same-window latest is our own reading' "$_ADOPT_ETA" "$_B5_ETA"
+eq 'est adopt: prior-tick latest is our own reading' "$_ADOPT_ETA" "$_B5_ETA"
+printf '1000000 1015900 active 300 5000 50000 1015900 50000\n' > "$EST"
+true_case 'est adopt: same-tick adoption succeeds' burn_est_adopt
+_ADOPT_ETA=$_B5_ETA
+burn_b5_line 'active 300 5000 50000 15900' || bad 'est adopt: same-tick reference parses' failed
+eq 'est adopt: same-tick keeps the published latest' "$_ADOPT_ETA" "$_B5_ETA"
 
 # A TSV strictly newer than the estimate means rows landed after the publish
 # (an older-tick straggler inside the sweep grace window): the snapshot is
