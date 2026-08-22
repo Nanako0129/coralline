@@ -1176,11 +1176,15 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   state_epoch "${rst:-}" 12 || return 1; rst=$_SE_VALUE
   [ "$pub" -le "$NOW" ] && [ "$pub" -ge $(( NOW - 3 )) ] || return 1
   case "${s:-}" in (active|idle|warming) ;; (*) return 1 ;; esac
-  case "${sp:-}" in (''|*[!0-9]*) return 1 ;; esac
+  # Canonical form, the same rule state_epoch applies: a leading zero is
+  # rejected rather than tolerated, because these three fields reach bash
+  # arithmetic in burn_b5_line, where 08 is an invalid octal literal and
+  # leaks a diagnostic onto the render's stderr instead of falling back.
+  case "${sp:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
   [ "${#sp}" -le 5 ] && [ "$sp" -le 86400 ] || return 1
-  case "${d:-}" in (''|*[!0-9]*) return 1 ;; esac
+  case "${d:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
   [ "${#d}" -le 6 ] && [ "$d" -le 100000 ] || return 1
-  case "${l:-}" in (''|*[!0-9]*) return 1 ;; esac
+  case "${l:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
   [ "${#l}" -le 6 ] && [ "$l" -le 100000 ] || return 1
   # ttr derives locally from the published window and our own NOW, so a
   # 1-3s-old estimate cannot trip the rebind gate into warming flicker.
