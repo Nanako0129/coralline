@@ -1244,16 +1244,19 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
     [ "$crst" -eq "${_CUR_BURN_RST:-0}" ] || return 1
     [ "$cpct" -ge "${_BURN_LOST_PCT:-100001}" ] || return 1
   fi
-  # What is deliberately NOT checked: that the estimate's tick equals ours.
-  # An adopter at 1Hz cadence normally consumes the previous second's
-  # publication; that is the designed freshness allowance, and the residual
-  # it admits is only that the estimate excludes this session's own
-  # current-second observation - a documented, tested trade-off bounded by
-  # one to three observations against a 600-second slope window. Within one
-  # 5h window used_percentage is non-decreasing and every store consumer
-  # applies max-pct semantics (add_obs keeps the highest reading per
-  # sample), so a slightly older estimate can only carry the high-water
-  # reading the estimator would keep anyway, never an inflated one.
+  # THE CONTRACT: the estimate is a cache of the full parse with a freshness
+  # bound of three seconds. Within that bound it may lag rows that landed
+  # after its publish; every guard above shrinks the lag (mtime versioning,
+  # claim provenance, window bounds) but only the next publish or the
+  # fallback parse closes it, because bash offers no atomic read of file
+  # plus summary. What the cache must NEVER do is contradict what this
+  # session itself knows: the full parse injects this session's own reading
+  # as the newest sample of its window, and the estimator's latest is
+  # defined by the newest sample, so a same-window adoption substitutes our
+  # own current pct for the published latest. Percentages legitimately DROP
+  # within a window (upstream resets, subscription upgrades - see rl_choose
+  # above), so this is a substitution, not a max.
+  [ "$crst" -eq "${_CUR_BURN_RST:-0}" ] && l=$_CUR_BURN_PCT
   # ttr derives locally from the published window and our own NOW, so a
   # 1-3s-old estimate cannot trip the rebind gate into warming flicker.
   t=$(( rst - NOW )); [ "$t" -lt 0 ] && t=0
