@@ -708,8 +708,10 @@ state_burn_lead() {  # → 0 iff this render must run the burn write path
     done
     # A covering claim (pct at or above ours) is the one loss reason a
     # follower may trust: it proves a winner is computing this second, so the
-    # published estimate is safe to adopt (_BURN_LOST gates burn_est_adopt).
-    [ "$_CUR_BURN_PCT" -gt "$best" ] || { _BURN_LOST=1; return 1; }
+    # published estimate is safe to adopt (_BURN_LOST gates burn_est_adopt,
+    # and _BURN_LOST_PCT records the covering pct so the adopter can require
+    # the estimate's embedded claim to be at least that complete).
+    [ "$_CUR_BURN_PCT" -gt "$best" ] || { _BURN_LOST=1; _BURN_LOST_PCT=$best; return 1; }
   else
     # No reading of our own: maintenance-only claim under the reserved
     # window/pct 0.0, so trim, healing, and the tmp sweep never starve while
@@ -733,7 +735,7 @@ state_burn_lead() {  # → 0 iff this render must run the burn write path
   if [ "$won" != 1 ]; then
     # EEXIST from a regular file: another session claimed this exact reading,
     # which also counts as a covering claim for adoption purposes.
-    if [ -f "$tok" ] && [ ! -L "$tok" ]; then _BURN_LOST=1; return 1; fi
+    if [ -f "$tok" ] && [ ! -L "$tok" ]; then _BURN_LOST=1; _BURN_LOST_PCT=$_CUR_BURN_PCT; return 1; fi
     # A non-file object raced in: lose without trusting it.
     if [ -e "$tok" ] || [ -L "$tok" ]; then return 1; fi
     # Anything else (missing parent on a fresh store, transient fs error):
@@ -1144,8 +1146,13 @@ $_B5_RAW
 EOF
   case $- in *C*) had_c=1 ;; esac
   set -C
-  if printf '%s %s %s %s %s %s\n' "$NOW" $(( NOW + ${_B5_TTR:-0} )) "$s" "$sp" "$d" "$l" \
-       2>/dev/null > "$tmp"; then won=1; fi
+  # The trailing claim identity (our reset and pct) lets an adopter require
+  # provenance ordering: an estimate whose embedded claim sits below the
+  # covering claim the adopter lost to predates a row its own full parse
+  # would include, and is rejected on the read side regardless of how writer
+  # renames interleave.
+  if printf '%s %s %s %s %s %s %s %s\n' "$NOW" $(( NOW + ${_B5_TTR:-0} )) "$s" "$sp" "$d" "$l" \
+       "$_CUR_BURN_RST" "$_CUR_BURN_PCT" 2>/dev/null > "$tmp"; then won=1; fi
   [ "$had_c" = 1 ] || set +C
   [ "$won" = 1 ] || return 0
   # Divergent same-second winners publish in parse-completion order, which is
@@ -1180,7 +1187,7 @@ EOF
 }
 
 burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated estimate
-  local est="$_SB_BASE.est" LC_ALL=C pub rst s sp d l t
+  local est="$_SB_BASE.est" LC_ALL=C pub rst s sp d l crst cpct t
   # Same defaults burn_eta_5h starts from: the adopter replaces that call
   # entirely, and downstream comparisons assume every _B5_* is populated.
   _B5_STATE=warming; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0; _B5_RAW=""
@@ -1191,7 +1198,7 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   # a render will ever ingest; trailing junk lands in the last field and
   # fails its digit check, so a malformed line is rejected, never truncated
   # into a plausible one.
-  read -r -n 128 pub rst s sp d l < "$est" 2>/dev/null || :
+  read -r -n 128 pub rst s sp d l crst cpct < "$est" 2>/dev/null || :
   # Every field is validated before it reaches any arithmetic context; the
   # published values bypass the awk whose internal caps normally guarantee
   # these bounds, so the reader must re-impose them itself.
@@ -1216,6 +1223,19 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   [ "${#d}" -le 6 ] && [ "$d" -le 100000 ] || return 1
   case "${l:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
   [ "${#l}" -le 6 ] && [ "$l" -le 100000 ] || return 1
+  # Provenance ordering: the embedded claim must be at least as complete as
+  # the covering claim we lost to. A claim for a newer window supersedes any
+  # same-window pct; within our window the claim pct must reach the covering
+  # pct, or the estimate predates a row our own full parse would include
+  # (writer renames can interleave arbitrarily, so this is the check that
+  # holds regardless of publication order).
+  state_epoch "${crst:-}" 12 || return 1; crst=$_SE_VALUE
+  case "${cpct:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
+  [ "${#cpct}" -le 6 ] && [ "$cpct" -le 100000 ] || return 1
+  if [ "$crst" -le "${_CUR_BURN_RST:-0}" ]; then
+    [ "$crst" -eq "${_CUR_BURN_RST:-0}" ] || return 1
+    [ "$cpct" -ge "${_BURN_LOST_PCT:-100001}" ] || return 1
+  fi
   # ttr derives locally from the published window and our own NOW, so a
   # 1-3s-old estimate cannot trip the rebind gate into warming flicker.
   t=$(( rst - NOW )); [ "$t" -lt 0 ] && t=0

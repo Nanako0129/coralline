@@ -543,9 +543,9 @@ run_concurrency() {  # $1=runtime $2=workers $3=tag
   # and no orphaned publish temporaries once every render has exited.
   _CC_EST=0
   if [ -f "$root/state/burn.tsv.est" ] && [ ! -L "$root/state/burn.tsv.est" ]; then
-    _E1=""; _E2=""; _E3=""; _E4=""; _E5=""; _E6=""
-    read -r _E1 _E2 _E3 _E4 _E5 _E6 < "$root/state/burn.tsv.est" 2>/dev/null || :
-    case "$_E1$_E2$_E4$_E5$_E6" in (''|*[!0-9]*) ;; (*)
+    _E1=""; _E2=""; _E3=""; _E4=""; _E5=""; _E6=""; _E7=""; _E8=""
+    read -r _E1 _E2 _E3 _E4 _E5 _E6 _E7 _E8 < "$root/state/burn.tsv.est" 2>/dev/null || :
+    case "$_E1$_E2$_E4$_E5$_E6$_E7$_E8" in (''|*[!0-9]*) ;; (*)
       case "$_E3" in (active|idle|warming) _CC_EST=1 ;; esac ;; esac
   fi
   _CC_TMPS=$(ls "$root/state" 2>/dev/null | grep -c '\.tmp$')
@@ -693,7 +693,7 @@ EST="$CASE/burn.tsv.est"
 # Publish: winner shape, maintenance/no-raw refusal.
 _CUR_BURN_VALID=1; _B5_RAW='warming 0 0 41200 9000'; _B5_TTR=9000
 burn_est_publish
-eq 'est publish: winner writes the six-field line' "$(cat "$EST" 2>/dev/null)" '1000000 1009000 warming 0 0 41200'
+eq 'est publish: winner writes the claim-stamped line' "$(cat "$EST" 2>/dev/null)" '1000000 1009000 warming 0 0 41200 1015900 41200'
 rm -f "$EST"
 _CUR_BURN_VALID=0
 burn_est_publish
@@ -730,46 +730,55 @@ rm -f "$EST" "$CASE/burn.tsv.1000000.1009000.90000.tick"
 
 # Adopt: fresh valid estimate is used without the awk (values differ from
 # anything the empty TSV could produce, so adoption is observable).
-printf '1000000 1015900 active 300 5000 50000\n' > "$EST"
-_CUR_BURN_VALID=1
+# _BURN_LOST_PCT simulates the covering claim this session lost to.
+printf '1000000 1015900 active 300 5000 50000 1015900 41200\n' > "$EST"
+_CUR_BURN_VALID=1; _BURN_LOST_PCT=41200
 true_case 'est adopt: fresh valid estimate adopted' burn_est_adopt
 eq 'est adopt: state comes from the estimate' "$_B5_STATE" active
 eq 'est adopt: ttr derives from window and local NOW' "$_B5_TTR" 15900
-printf '999996 1015900 active 300 5000 50000\n' > "$EST"
+printf '999996 1015900 active 300 5000 50000 1015900 41200\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: stale estimate rejected' adopted; else ok 'est adopt: stale estimate rejected'; fi
-printf '1000002 1015900 active 300 5000 50000\n' > "$EST"
+printf '1000002 1015900 active 300 5000 50000 1015900 41200\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: future-dated estimate rejected' adopted; else ok 'est adopt: future-dated estimate rejected'; fi
-printf '1000000 1015900 active 90000 5000 50000\n' > "$EST"
+printf '1000000 1015900 active 90000 5000 50000 1015900 41200\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: span beyond window cap rejected' adopted; else ok 'est adopt: span beyond window cap rejected'; fi
-printf '1000000 1015900 active 300 200000 50000\n' > "$EST"
+printf '1000000 1015900 active 300 200000 50000 1015900 41200\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: delta beyond pct cap rejected' adopted; else ok 'est adopt: delta beyond pct cap rejected'; fi
-printf '1000000 1015900 active 300 5000 100001\n' > "$EST"
+printf '1000000 1015900 active 300 5000 100001 1015900 41200\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: latest beyond pct cap rejected' adopted; else ok 'est adopt: latest beyond pct cap rejected'; fi
-printf '1000000 1015900 hacked 300 5000 50000\n' > "$EST"
+printf '1000000 1015900 hacked 300 5000 50000 1015900 41200\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: unknown state token rejected' adopted; else ok 'est adopt: unknown state token rejected'; fi
-printf '1000000 1015900 active 008 5000 50000\n' > "$EST"
+printf '1000000 1015900 active 008 5000 50000 1015900 41200\n' > "$EST"
 if burn_est_adopt 2> "$CASE/octal.err"; then bad 'est adopt: leading-zero span rejected' adopted; else ok 'est adopt: leading-zero span rejected'; fi
 eq 'est adopt: leading-zero rejection leaks no stderr' "$(wc -c < "$CASE/octal.err" | tr -d ' ')" 0
-printf '1000000 1009000 active 300 5000 50000\n' > "$EST"
+printf '1000000 1009000 active 300 5000 50000 1009000 41200\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: older-window estimate rejected' adopted; else ok 'est adopt: older-window estimate rejected'; fi
-printf '1000000 1020000 active 300 5000 50000\n' > "$EST"
+printf '1000000 1020000 active 300 5000 50000 1020000 41200\n' > "$EST"
 true_case 'est adopt: newer-window estimate accepted' burn_est_adopt
 eq 'est adopt: newer-window ttr from published maxrst' "$_B5_TTR" 20000
-printf '1000000 1021601 active 300 5000 50000\n' > "$EST"
+printf '1000000 1021601 active 300 5000 50000 1021601 41200\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: reset beyond 5h horizon rejected' adopted; else ok 'est adopt: reset beyond 5h horizon rejected'; fi
-printf '1000000 1021600 active 300 5000 50000\n' > "$EST"
+printf '1000000 1021600 active 300 5000 50000 1021600 41200\n' > "$EST"
 true_case 'est adopt: reset at the 5h horizon accepted' burn_est_adopt
-printf '1000000 1015900 active a[$(touch %s/pwn)] 5000 50000\n' "$CASE" > "$EST"
+printf '1000000 1015900 active 300 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: legacy six-field line rejected' adopted; else ok 'est adopt: legacy six-field line rejected'; fi
+printf '1000000 1015900 active 300 5000 50000 1015900 30000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: claim below the covering pct rejected' adopted; else ok 'est adopt: claim below the covering pct rejected'; fi
+printf '1000000 1015900 active 300 5000 50000 1015900 50000\n' > "$EST"
+true_case 'est adopt: claim above the covering pct accepted' burn_est_adopt
+printf '1000000 1020000 active 300 5000 50000 1020000 5000\n' > "$EST"
+true_case 'est adopt: newer-window claim supersedes any pct' burn_est_adopt
+printf '1000000 1015900 active a[$(touch %s/pwn)] 5000 50000 1015900 41200\n' "$CASE" > "$EST"
 if burn_est_adopt; then bad 'est adopt: arithmetic injection rejected' adopted; else ok 'est adopt: arithmetic injection rejected'; fi
 true_case 'est adopt: injection produced no side effect' test ! -e "$CASE/pwn"
-{ printf '1000000 1015900 active 300 5000 50000 '; head -c 400 /dev/zero | tr '\0' '9'; printf '\n'; } > "$EST"
+{ printf '1000000 1015900 active 300 5000 50000 1015900 '; head -c 400 /dev/zero | tr '\0' '9'; printf '\n'; } > "$EST"
 if burn_est_adopt; then bad 'est adopt: oversized line rejected' adopted; else ok 'est adopt: oversized line rejected'; fi
 rm -f "$EST"; ln -s "$CASE/esttarget" "$EST"
 if burn_est_adopt; then bad 'est adopt: symlink est rejected' adopted; else ok 'est adopt: symlink est rejected'; fi
 true_case 'est adopt: symlink est not followed' test ! -e "$CASE/esttarget"
 true_case 'est adopt: symlink est not deleted' test -L "$EST"
 rm -f "$EST"
-printf '999998 1015900 active 300 5000 50000\n' > "$EST"
+printf '999998 1015900 active 300 5000 50000 1015900 41200\n' > "$EST"
 true_case 'est adopt: two-second-old estimate still adopts' burn_est_adopt
 eq 'est adopt: aged estimate ttr still local' "$_B5_TTR" 15900
 _CUR_BURN_VALID=0
@@ -783,7 +792,7 @@ CASE="$TMPD/est-ro"; mkdir -p "$CASE/state"
 write_config "$CASE/conf" "$CASE/state" burn 0
 _now=$(date +%s)
 make_payload "$CASE/input" 41.2 "$((_now + 9000))" '' ''
-printf '%s %s active 300 5000 50000\n' "$_now" "$((_now + 9000))" > "$CASE/state/burn.tsv.est"
+printf '%s %s active 300 5000 50000 %s 41200\n' "$_now" "$((_now + 9000))" "$((_now + 9000))" > "$CASE/state/burn.tsv.est"
 cp "$CASE/state/burn.tsv.est" "$CASE/est.before"
 run_runtime "$BASH_BIN" "$CASE/conf" "$CASE/input" "$CASE/out" "$CASE/err" 1
 printf '\033[0m B … \033[0m\n' > "$CASE/oracle"
