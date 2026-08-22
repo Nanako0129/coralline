@@ -1095,7 +1095,18 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
 
   if [ "$write_tmp" = 1 ] && [ -f "$tmp" ] && [ ! -L "$tmp" ]; then
     if [ "$rc" -eq 0 ] && state_paths_revalidate && state_no_symlink_path "$tmp" && [ "$_SNP" = "$tmp" ]; then
-      mv -f "$tmp" "$_SB_BASE" 2>/dev/null || true
+      if mv -f "$tmp" "$_SB_BASE" 2>/dev/null; then
+        # rename(2) carries the temporary's own mtime onto the store, and that
+        # timestamp predates the replacement - it is when awk wrote the file.
+        # A replacement could therefore land looking OLDER than a concurrent
+        # reader's snapshot marker, and that reader would treat a store it
+        # never parsed as untouched. Stamping the store after the rename makes
+        # every replacement advance past any marker taken before it. The stamp
+        # is one empty line: both renderers skip a record that does not split
+        # into three fields (awk's `nf != 3` here, ConvertFrom-BurnRecord's
+        # length check in statusline.ps1), and the next rewrite drops it.
+        state_paths_revalidate && printf '\n' >> "$_SB_BASE" 2>/dev/null || true
+      fi
     elif state_paths_revalidate && state_no_symlink_path "$tmp" && [ "$_SNP" = "$tmp" ]; then
       rm -f "$tmp" 2>/dev/null || true
     fi

@@ -174,11 +174,15 @@ if grep -q 99999999 "$BURN_FILE"; then bad 'burn sentinel healed on mutable read
 
 BURN_TRIM=3
 run5h '1\t6\t9\n2\t6\t9\n3\t7\t9\n4\t7\t9\n5\t8\t9\n' 6 1
-eq '5h trim physical rowcount' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 3
+# A rewrite ends with an empty stamp line (see the rename in burn_eta_5h),
+# which both renderers skip and the next rewrite drops: rows + 1 physical line.
+eq '5h trim physical rowcount' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 4
+eq '5h trim data rowcount' "$(grep -c '	' "$BURN_FILE")" 3
+eq '5h trim ends with the replacement stamp' "$(tail -1 "$BURN_FILE")" ''
 IFS=$'\t' read -r _FIRST _ _ < "$BURN_FILE"; eq '5h trim first kept' "$_FIRST" 3
 BURN_TRIM=3
 run5h '1\t6\t9\n1\t6.100\t9\n1\t6.200\t9\n2\t7\t9\n2\t7.100\t9\n2\t7.200\t9\n' 3 1
-eq 'resize burst collapses same-second rows' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 2
+eq 'resize burst collapses same-second rows' "$(grep -c '	' "$BURN_FILE")" 2
 
 CASE="$TMPD/stale-tmp"; mkdir -p "$CASE"
 unit_gate "$CASE" 6 '' '' '' '' 1
@@ -421,7 +425,7 @@ if cmp -s "$CASE/before.tar" "$CASE/after.tar"; then ok 'immutable burn.d stays 
 printf 'tmp-canary' > "$CASE/state/burn.tsv.keep.tmp"
 _i=0; while [ "$_i" -lt 8 ]; do run_runtime "$BASH_BIN" "$CASE/conf" "$CASE/input" "$CASE/out.$_i" "$CASE/err.$_i" 0; _i=$((_i + 1)); done
 eq 'unrelated temp canary preserved' "$(LC_ALL=C tr -d '\n' < "$CASE/state/burn.tsv.keep.tmp")" tmp-canary
-[ "$(wc -l < "$CASE/state/burn.tsv" | tr -d ' ')" -le 3 ] && ok 'repeated render TSV remains trimmed' || bad 'repeated render TSV remains trimmed' "rows=$(wc -l < "$CASE/state/burn.tsv")"
+[ "$(grep -c '	' "$CASE/state/burn.tsv")" -le 3 ] && ok 'repeated render TSV remains trimmed' || bad 'repeated render TSV remains trimmed' "rows=$(grep -c '	' "$CASE/state/burn.tsv")"
 
 # Malformed arithmetic/metacharacter basenames and nonempty canonical-looking
 # directories never displace the valid winner, emit stderr, or trigger side effects.
@@ -609,7 +613,7 @@ BURN_TRIM=3; BURN_SLACK=2
 run5h '1\t6\t9\n2\t6\t9\n3\t7\t9\n4\t7\t9\n' 6 1
 eq 'slack holds the rewrite below trim+slack' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 4
 run5h '1\t6\t9\n2\t6\t9\n3\t7\t9\n4\t7\t9\n5\t8\t9\n6\t8\t9\n' 7 1
-eq 'past trim+slack rewrites down to trim' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 3
+eq 'past trim+slack rewrites down to trim' "$(grep -c '	' "$BURN_FILE")" 3
 run5h '1\t6\t9\n2\t7\t9\n9999000\t99\t99999999\n' 6 1
 if grep -q 99999999 "$BURN_FILE"; then bad 'heal is not deferred by slack' present; else ok 'heal is not deferred by slack'; fi
 BURN_TRIM=1500; BURN_SLACK=0
