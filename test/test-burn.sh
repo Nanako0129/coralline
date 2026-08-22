@@ -758,6 +758,13 @@ true_case 'est publish: abandoned publication releases the marker' test ! -e "$_
 _BURN_SNAP=""
 burn_est_publish
 true_case 'est publish: unversioned publish refused' test ! -e "$EST"
+# The marker shares burn_tmp_sweep's namespace, so a concurrent writer can
+# retire it mid-parse; a vanished marker proves nothing and must not pass.
+burn_est_snap
+rm -f "$_BURN_SNAP"
+burn_est_publish
+true_case 'est publish: vanished marker refuses publication' test ! -e "$EST"
+true_case 'est publish: vanished marker leaves no temporary' test ! -e "$CASE/burn.tsv.$$.tmp"
 # The redirection creates the temporary before the write runs; a write that
 # fails afterwards must not leave it behind.
 printf() { return 1; }

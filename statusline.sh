@@ -1178,32 +1178,30 @@ burn_est_snap() {  # → _BURN_SNAP: marker recording the pre-parse TSV state
 }
 
 burn_est_publish() {  # winner only: publish "<now> <maxrst> <state> <span> <delta> <latest>"
-  # Release the parse-time marker first and unconditionally: its only job is
-  # this comparison, and every later exit path must not leak it. No marker
-  # means the parse was never versioned, which is a refusal, not a licence.
-  local fresh=0
-  if [ -n "${_BURN_SNAP:-}" ]; then
-    [ "$_SB_BASE" -nt "$_BURN_SNAP" ] || fresh=1
-    burn_est_discard "$_BURN_SNAP"
-    _BURN_SNAP=""
-  fi
-  [ "$fresh" = 1 ] || return 0
-  [ "${_CUR_BURN_VALID:-0}" = 1 ] || return 0
-  [ -n "${_B5_RAW:-}" ] || return 0
+  # The parse-time marker is claimed for this call and released on every exit
+  # path below. No marker means the parse was never versioned, which is a
+  # refusal, not a licence.
+  local snap="${_BURN_SNAP:-}"
+  _BURN_SNAP=""
+  [ -n "$snap" ] || return 0
+  [ "${_CUR_BURN_VALID:-0}" = 1 ] || { burn_est_discard "$snap"; return 0; }
+  [ -n "${_B5_RAW:-}" ] || { burn_est_discard "$snap"; return 0; }
   local est="$_SB_BASE.est" tmp="$_SB_BASE.$$.tmp" s sp d l t nw p f had_c=0 won=0
-  state_paths_revalidate || return 0
+  state_paths_revalidate || { burn_est_discard "$snap"; return 0; }
   # The est file is a seventh state object outside state_paths_validate's
   # six-path distinctness matrix; refuse to publish over any configured
   # namespace (state_same_path is conservative: unsure means same).
   for p in "$_SB_BASE" "$_SB_ROOT" "$_SL5_BASE" "$_SL5_ROOT" "$_SL7_BASE" "$_SL7_ROOT"; do
-    if state_same_path "$est" "$p"; then return 0; fi
+    if state_same_path "$est" "$p"; then burn_est_discard "$snap"; return 0; fi
   done
   # A symlink or directory planted at the est name is not followed, not
   # deleted, and aborts the publish; same rule as the election tokens.
-  state_no_symlink_path "$est" && [ "$_SNP" = "$est" ] || return 0
-  state_path_leaf "$est" f || return 0
-  state_no_symlink_path "$tmp" && [ "$_SNP" = "$tmp" ] || return 0
-  [ ! -e "$tmp" ] && [ ! -L "$tmp" ] || return 0
+  state_no_symlink_path "$est" && [ "$_SNP" = "$est" ] \
+    || { burn_est_discard "$snap"; return 0; }
+  state_path_leaf "$est" f || { burn_est_discard "$snap"; return 0; }
+  state_no_symlink_path "$tmp" && [ "$_SNP" = "$tmp" ] \
+    || { burn_est_discard "$snap"; return 0; }
+  [ ! -e "$tmp" ] && [ ! -L "$tmp" ] || { burn_est_discard "$snap"; return 0; }
   read -r s sp d l t nw <<EOF
 $_B5_RAW
 EOF
@@ -1223,7 +1221,7 @@ EOF
   # that burn_tmp_sweep cannot retire while the same failure keeps the TSV
   # from advancing past it. Discard it here instead of accumulating one per
   # winner render.
-  [ "$won" = 1 ] || { burn_est_discard "$tmp"; return 0; }
+  [ "$won" = 1 ] || { burn_est_discard "$tmp"; burn_est_discard "$snap"; return 0; }
   # Divergent same-second winners publish in parse-completion order, which is
   # not claim order: a winner finishing late must never replace the estimate
   # of a covering claim whose parse includes a row ours does not. That covers
@@ -1242,16 +1240,28 @@ EOF
     [ "${#cr}" -le 12 ] || continue
     case "$p" in (''|*[!0-9]*) continue ;; esac
     [ "${#p}" -le 6 ] || continue
-    if [ "$cr" -gt "$_CUR_BURN_RST" ]; then burn_est_discard "$tmp"; return 0; fi
+    if [ "$cr" -gt "$_CUR_BURN_RST" ]; then
+      burn_est_discard "$tmp"; burn_est_discard "$snap"; return 0
+    fi
     if [ "$cr" -eq "$_CUR_BURN_RST" ] && [ "$p" -gt "$_CUR_BURN_PCT" ]; then
-      burn_est_discard "$tmp"; return 0
+      burn_est_discard "$tmp"; burn_est_discard "$snap"; return 0
     fi
   done
-  if state_paths_revalidate && state_no_symlink_path "$est" && [ "$_SNP" = "$est" ] \
+  # The version test belongs HERE, immediately before the rename, not before
+  # the temporary was written: a row landing in between would otherwise be
+  # missing from an estimate that nonetheless carries a newer mtime than the
+  # TSV, defeating the adopter's guard too. The marker must also still exist:
+  # it shares burn_tmp_sweep's namespace, so a concurrent writer's sweep can
+  # retire it mid-parse, and a vanished marker proves nothing about the
+  # store. Both conditions failing mean the same thing - this estimate is not
+  # provably a summary of the current TSV - so publication is abandoned.
+  if [ -f "$snap" ] && [ ! -L "$snap" ] && [ ! "$_SB_BASE" -nt "$snap" ] \
+     && state_paths_revalidate && state_no_symlink_path "$est" && [ "$_SNP" = "$est" ] \
      && state_path_leaf "$est" f; then
-    mv -f "$tmp" "$est" 2>/dev/null && return 0
+    if mv -f "$tmp" "$est" 2>/dev/null; then burn_est_discard "$snap"; return 0; fi
   fi
   burn_est_discard "$tmp"
+  burn_est_discard "$snap"
   return 0
 }
 
