@@ -601,52 +601,65 @@ run5h '1\t6\t9\n2\t7\t9\n9999000\t99\t99999999\n' 6 1
 if grep -q 99999999 "$BURN_FILE"; then bad 'heal is not deferred by slack' present; else ok 'heal is not deferred by slack'; fi
 BURN_TRIM=1500; BURN_SLACK=0
 
-# Per-(second, window) burn-write election. The token is the only coordination
-# point and every touch around it re-runs the store's TOCTOU guards.
+# Per-(second, window, pct) burn-write election. Tokens carry the store's own
+# file name as prefix (provenance: a shared directory never gets foreign files
+# deleted) and every touch around the claim re-runs the store's TOCTOU guards.
 CASE="$TMPD/lead"; mkdir -p "$CASE"
 unit_gate "$CASE" 1000000 41.2 1015900 '' '' 0
+TOK="$CASE/burn.tsv.1000000.1015900.41200.tick"
 _BURN_LEAD=
 true_case 'lead: first claim wins' state_burn_lead
-true_case 'lead: winning claim leaves a token' test -f "$CASE/tick.1000000.1015900"
+true_case 'lead: winning claim leaves a token' test -f "$TOK"
 _BURN_LEAD=
-if state_burn_lead; then bad 'lead: planted same-window token loses' won; else ok 'lead: planted same-window token loses'; fi
-rm -f "$CASE/tick.1000000.1015900"
-: > "$CASE/tick.1000000.1016000"
+if state_burn_lead; then bad 'lead: same-pct token loses' won; else ok 'lead: same-pct token loses'; fi
+rm -f "$TOK"
+: > "$CASE/burn.tsv.1000000.1015900.50000.tick"
+_BURN_LEAD=
+if state_burn_lead; then bad 'lead: higher-pct claim wins over ours' won; else ok 'lead: higher-pct claim wins over ours'; fi
+rm -f "$CASE/burn.tsv.1000000.1015900.50000.tick"
+: > "$CASE/burn.tsv.1000000.1015900.30000.tick"
+_BURN_LEAD=
+true_case 'lead: our higher reading beats a lower claim' state_burn_lead
+true_case 'lead: divergent readings both leave tokens' test -f "$TOK"
+rm -f "$CASE"/burn.tsv.*.tick
+: > "$CASE/burn.tsv.1000000.1016000.41200.tick"
 _BURN_LEAD=
 true_case 'lead: same-second other-window token does not block' state_burn_lead
-true_case 'lead: other-window token kept by the sweep' test -f "$CASE/tick.1000000.1016000"
-rm -f "$CASE"/tick.*
-: > "$CASE/tick.999990.1015900"
-: > "$CASE/tick.999999.1015900"
-: > "$CASE/tick.1000002.1015900"
-: > "$CASE/tick.abc.1015900"
-: > "$CASE/tick.999997"
-ln -s /dev/null "$CASE/tick.999980.1015900"
+true_case 'lead: other-window token kept by the sweep' test -f "$CASE/burn.tsv.1000000.1016000.41200.tick"
+rm -f "$CASE"/burn.tsv.*.tick
+: > "$CASE/burn.tsv.999990.1015900.41200.tick"
+: > "$CASE/burn.tsv.999999.1015900.41200.tick"
+: > "$CASE/burn.tsv.1000002.1015900.41200.tick"
+: > "$CASE/burn.tsv.abc.1015900.41200.tick"
+: > "$CASE/burn.tsv.999990.1015900.tick"
+: > "$CASE/tick.999990.1015900.41200.tick"
+ln -s /dev/null "$CASE/burn.tsv.999980.1015900.41200.tick"
 _BURN_LEAD=
 state_burn_lead || bad 'lead: sweep round claim' lost
-true_case 'lead sweep: stale token removed' test ! -e "$CASE/tick.999990.1015900"
-true_case 'lead sweep: recent-past token kept for stragglers' test -f "$CASE/tick.999999.1015900"
-true_case 'lead sweep: future token removed' test ! -e "$CASE/tick.1000002.1015900"
-true_case 'lead sweep: non-numeric epoch kept' test -f "$CASE/tick.abc.1015900"
-true_case 'lead sweep: single-field name kept' test -f "$CASE/tick.999997"
-true_case 'lead sweep: symlink kept' test -L "$CASE/tick.999980.1015900"
-rm -f "$CASE"/tick.* 2>/dev/null; rm -f "$CASE/tick.abc.1015900" "$CASE/tick.999997"
-ln -s "$CASE/linktarget" "$CASE/tick.1000000.1015900"
+true_case 'lead sweep: stale token removed' test ! -e "$CASE/burn.tsv.999990.1015900.41200.tick"
+true_case 'lead sweep: recent-past token kept for stragglers' test -f "$CASE/burn.tsv.999999.1015900.41200.tick"
+true_case 'lead sweep: future token removed' test ! -e "$CASE/burn.tsv.1000002.1015900.41200.tick"
+true_case 'lead sweep: non-numeric epoch kept' test -f "$CASE/burn.tsv.abc.1015900.41200.tick"
+true_case 'lead sweep: two-field name kept' test -f "$CASE/burn.tsv.999990.1015900.tick"
+true_case 'lead sweep: foreign unprefixed file untouched' test -f "$CASE/tick.999990.1015900.41200.tick"
+true_case 'lead sweep: symlink kept' test -L "$CASE/burn.tsv.999980.1015900.41200.tick"
+rm -f "$CASE"/burn.tsv.*.tick "$CASE"/tick.* 2>/dev/null
+ln -s "$CASE/linktarget" "$TOK"
 _BURN_LEAD=
 if state_burn_lead; then bad 'lead: symlink at the token name loses' won; else ok 'lead: symlink at the token name loses'; fi
 true_case 'lead: symlink token never followed' test ! -e "$CASE/linktarget"
-true_case 'lead: symlink token never deleted' test -L "$CASE/tick.1000000.1015900"
-rm -f "$CASE/tick.1000000.1015900"
+true_case 'lead: symlink token never deleted' test -L "$TOK"
+rm -f "$TOK"
 _STATE_PATHS_OK=0
 _BURN_LEAD=
 true_case 'lead: revalidation failure fails open' state_burn_lead
-true_case 'lead: fail-open touches nothing' test ! -e "$CASE/tick.1000000.1015900"
+true_case 'lead: fail-open touches nothing' test ! -e "$TOK"
 _STATE_PATHS_OK=1
 CASE="$TMPD/lead-fresh"
 unit_gate "$CASE/absent" 1000000 41.2 1015900 '' '' 0
 _BURN_LEAD=
 true_case 'lead: missing store parent fails open' state_burn_lead
-true_case 'lead: fail-open creates no token' test ! -e "$CASE/absent/tick.1000000.1015900"
+true_case 'lead: fail-open creates no token' test ! -e "$CASE/absent/burn.tsv.1000000.1015900.41200.tick"
 _BURN_LEAD=
 
 # Two-window coverage under election: a session holding a different (newer) 5h
