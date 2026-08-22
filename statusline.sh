@@ -1287,8 +1287,10 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   # shape mirrors state_epoch's rule.
   case "${sp:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
   [ "${#sp}" -le 5 ] && [ "$sp" -le 86400 ] || return 1
+  # delta is a difference of two whole-percent values in the producer, so 100
+  # is its real ceiling; the pct-milli scale does not apply to it.
   case "${d:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
-  [ "${#d}" -le 6 ] && [ "$d" -le 100000 ] || return 1
+  [ "${#d}" -le 3 ] && [ "$d" -le 100 ] || return 1
   case "${l:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
   [ "${#l}" -le 6 ] && [ "$l" -le 100000 ] || return 1
   # Provenance ordering: the embedded claim must be at least as complete as
@@ -1329,7 +1331,17 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   # estimate DESCRIBES (rst, the parse's newest window), not the one its
   # writer happened to claim: a writer on our window whose parse selected
   # newer rows published numbers our reading has no part in.
-  [ "$rst" -eq "${_CUR_BURN_RST:-0}" ] && [ "$pub" -lt "$NOW" ] && l=$_CUR_BURN_PCT
+  if [ "$rst" -eq "${_CUR_BURN_RST:-0}" ] && [ "$pub" -lt "$NOW" ]; then
+    # Our observation is the newest sample of this window, so the full parse
+    # would fold it into the crossing detection, not just into latest. It can
+    # only ADD a crossing by lifting the whole-percent value (the detector
+    # compares integer percents, and a crossing needs a strict rise), which
+    # would move span, delta, and possibly warming to active - none of them
+    # correctable without the rows. Adopt only when our sample cannot change
+    # them; then substituting latest is the entire difference.
+    [ $(( _CUR_BURN_PCT / 1000 )) -gt $(( l / 1000 )) ] && return 1
+    l=$_CUR_BURN_PCT
+  fi
   # ttr derives locally from the published window and our own NOW, so a
   # 1-3s-old estimate cannot trip the rebind gate into warming flicker.
   t=$(( rst - NOW )); [ "$t" -lt 0 ] && t=0
