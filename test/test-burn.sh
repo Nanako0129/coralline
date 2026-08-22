@@ -695,41 +695,60 @@ printf '1\t6\t9\n' > "$BURN_FILE"
 
 # Publish: winner shape, maintenance/no-raw refusal.
 _CUR_BURN_VALID=1; _B5_RAW='warming 0 0 41200 9000'; _B5_TTR=9000
-burn_est_publish
+burn_est_snap; burn_est_publish
 eq 'est publish: winner writes the claim-stamped line' "$(cat "$EST" 2>/dev/null)" '1000000 1009000 warming 0 0 41200 1015900 41200'
 rm -f "$EST"
 _CUR_BURN_VALID=0
-burn_est_publish
+burn_est_snap; burn_est_publish
 true_case 'est publish: maintenance winner never publishes' test ! -e "$EST"
 _CUR_BURN_VALID=1; _B5_RAW=''
-burn_est_publish
+burn_est_snap; burn_est_publish
 true_case 'est publish: no raw line, no publish' test ! -e "$EST"
 mkdir "$EST"
 _B5_RAW='warming 0 0 41200 9000'
-burn_est_publish
+burn_est_snap; burn_est_publish
 true_case 'est publish: directory at est name aborts' test -d "$EST"
 true_case 'est publish: aborted publish leaves no tmp' test ! -e "$CASE/burn.tsv.$$.tmp"
 rmdir "$EST"
 # A covering higher claim in the same (second, window) suppresses our publish;
 # a lower one does not.
 : > "$CASE/burn.tsv.1000000.1015900.60000.tick"
-burn_est_publish
+burn_est_snap; burn_est_publish
 true_case 'est publish: higher same-second claim suppresses ours' test ! -e "$EST"
 true_case 'est publish: suppressed publish leaves no tmp' test ! -e "$CASE/burn.tsv.$$.tmp"
 rm -f "$CASE/burn.tsv.1000000.1015900.60000.tick"
 : > "$CASE/burn.tsv.1000000.1015900.30000.tick"
-burn_est_publish
+burn_est_snap; burn_est_publish
 true_case 'est publish: lower claim does not suppress' test -f "$EST"
 rm -f "$EST" "$CASE/burn.tsv.1000000.1015900.30000.tick"
 : > "$CASE/burn.tsv.1000000.1016100.20000.tick"
-burn_est_publish
+burn_est_snap; burn_est_publish
 true_case 'est publish: newer-window claim suppresses ours' test ! -e "$EST"
 true_case 'est publish: cross-window suppression leaves no tmp' test ! -e "$CASE/burn.tsv.$$.tmp"
 rm -f "$CASE/burn.tsv.1000000.1016100.20000.tick"
 : > "$CASE/burn.tsv.1000000.1009000.90000.tick"
-burn_est_publish
+burn_est_snap; burn_est_publish
 true_case 'est publish: older-window claim does not suppress' test -f "$EST"
 rm -f "$EST" "$CASE/burn.tsv.1000000.1009000.90000.tick"
+# The estimate is versioned against the TSV as the parse read it, so a row
+# landing between parse and publish abandons the publication, and an
+# unversioned publish is refused outright.
+rm -f "$EST"
+burn_est_snap
+true_case 'est snap: marker created before the parse' test -f "$_BURN_SNAP"
+_SNAPPED=$_BURN_SNAP
+sleep 1; printf '2\t7\t9\n' >> "$BURN_FILE"
+burn_est_publish
+true_case 'est publish: TSV touched during the parse abandons publication' test ! -e "$EST"
+true_case 'est publish: abandoned publication releases the marker' test ! -e "$_SNAPPED"
+_BURN_SNAP=""
+burn_est_publish
+true_case 'est publish: unversioned publish refused' test ! -e "$EST"
+burn_est_snap; burn_est_publish
+true_case 'est publish: untouched TSV publishes normally' test -f "$EST"
+true_case 'est publish: successful publication releases the marker' test ! -e "$_SNAPPED"
+rm -f "$EST"
+
 # Discarding a temporary is a mutation: it must re-prove the path identity, so
 # an unlink can never traverse an ancestor swapped for a symlink mid-render.
 : > "$CASE/burn.tsv.4242.tmp"

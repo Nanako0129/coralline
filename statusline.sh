@@ -1136,7 +1136,42 @@ burn_est_discard() {  # $1=our publish temporary; remove only through revalidate
   return 0
 }
 
+# The estimate has to describe the TSV as it stood when the parse READ it,
+# not when the publish wrote it. A straggler appending in between would
+# otherwise hand followers a summary that silently omits its row: the
+# adopter's mtime test cannot catch that, because the estimate is written
+# afterwards and is therefore legitimately newer. A zero-byte marker taken
+# before the parse records that instant, and publication is abandoned if the
+# TSV moved past it. The marker lives in the <base>.<digits>.tmp namespace
+# burn_tmp_sweep owns, so a killed render leaves nothing permanent, and it is
+# named apart from the pid-named temporaries the trim and the publish use. A
+# trim rewrite during our own parse also trips the test and costs that
+# second's publication: rare (once per BURN_SLACK appends), and the next tick
+# publishes normally.
+burn_est_snap() {  # → _BURN_SNAP: marker recording the pre-parse TSV state
+  _BURN_SNAP=""
+  local snap="$_SB_BASE.$(( $$ + 1000000 )).tmp" had_c=0
+  state_paths_revalidate || return 0
+  state_no_symlink_path "$snap" && [ "$_SNP" = "$snap" ] || return 0
+  [ ! -e "$snap" ] && [ ! -L "$snap" ] || return 0
+  case $- in *C*) had_c=1 ;; esac
+  set -C
+  : 2>/dev/null > "$snap" && _BURN_SNAP=$snap
+  [ "$had_c" = 1 ] || set +C
+  return 0
+}
+
 burn_est_publish() {  # winner only: publish "<now> <maxrst> <state> <span> <delta> <latest>"
+  # Release the parse-time marker first and unconditionally: its only job is
+  # this comparison, and every later exit path must not leak it. No marker
+  # means the parse was never versioned, which is a refusal, not a licence.
+  local fresh=0
+  if [ -n "${_BURN_SNAP:-}" ]; then
+    [ "$_SB_BASE" -nt "$_BURN_SNAP" ] || fresh=1
+    burn_est_discard "$_BURN_SNAP"
+    _BURN_SNAP=""
+  fi
+  [ "$fresh" = 1 ] || return 0
   [ "${_CUR_BURN_VALID:-0}" = 1 ] || return 0
   [ -n "${_B5_RAW:-}" ] || return 0
   local est="$_SB_BASE.est" tmp="$_SB_BASE.$$.tmp" s sp d l t p f had_c=0 won=0
@@ -1291,6 +1326,7 @@ burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
   # when it validates, and everything else takes the plain read-only parse.
   [ "${_STATE_MUTATE:-0}" = 1 ] && state_burn_lead && m=1
   if [ "$m" = 1 ]; then
+    burn_est_snap
     burn_eta_5h 1
     burn_est_publish
   elif [ "${_BURN_LOST:-0}" = 1 ] && [ "${_CUR_BURN_VALID:-0}" = 1 ] && burn_est_adopt; then
