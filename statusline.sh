@@ -1149,17 +1149,27 @@ EOF
   [ "$had_c" = 1 ] || set +C
   [ "$won" = 1 ] || return 0
   # Divergent same-second winners publish in parse-completion order, which is
-  # not claim order: a lower-pct winner finishing late must never replace the
-  # estimate of a covering higher claim whose parse includes a row ours does
-  # not. If a higher claim exists by the time we are about to rename, yield;
-  # if it appears in the residual race window instead, its own publication
+  # not claim order: a winner finishing late must never replace the estimate
+  # of a covering claim whose parse includes a row ours does not. That covers
+  # a higher pct in our own window AND any claim for a newer window (whose
+  # estimate would supersede ours for every adopter our own would satisfy).
+  # If a covering claim exists by the time we are about to rename, yield; if
+  # it appears in the residual race window instead, its own publication
   # necessarily lands after ours and corrects the file.
-  for f in "$_SB_BASE.${NOW}.${_CUR_BURN_RST}".*.tick; do
+  local cr
+  for f in "$_SB_BASE.${NOW}".*.tick; do
     [ -e "$f" ] || [ -L "$f" ] || continue
-    p=${f#"$_SB_BASE.${NOW}.${_CUR_BURN_RST}".}; p=${p%.tick}
+    p=${f#"$_SB_BASE.${NOW}".}; p=${p%.tick}
+    case "$p" in *.*) ;; *) continue ;; esac
+    cr=${p%%.*}; p=${p#*.}
+    case "$cr" in (''|*[!0-9]*) continue ;; esac
+    [ "${#cr}" -le 12 ] || continue
     case "$p" in (''|*[!0-9]*) continue ;; esac
     [ "${#p}" -le 6 ] || continue
-    if [ "$p" -gt "$_CUR_BURN_PCT" ]; then rm -f "$tmp" 2>/dev/null; return 0; fi
+    if [ "$cr" -gt "$_CUR_BURN_RST" ]; then rm -f "$tmp" 2>/dev/null; return 0; fi
+    if [ "$cr" -eq "$_CUR_BURN_RST" ] && [ "$p" -gt "$_CUR_BURN_PCT" ]; then
+      rm -f "$tmp" 2>/dev/null; return 0
+    fi
   done
   if state_paths_revalidate && state_no_symlink_path "$est" && [ "$_SNP" = "$est" ] \
      && state_path_leaf "$est" f; then
@@ -1191,8 +1201,11 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   # An estimate for a window older than our own reading is a cache miss, not a
   # candidate: our observation alone would advance maxrst past it, so the full
   # parse must run. Without this, the 3s freshness allowance could span a 5h
-  # reset and briefly revive the closed window's ETA.
+  # reset and briefly revive the closed window's ETA. The far bound mirrors
+  # the TSV estimator's implausibility rule (reset beyond NOW + RL_MAX_5H is
+  # healed there, so it must never be adopted here either).
   [ "$rst" -ge "${_CUR_BURN_RST:-0}" ] || return 1
+  [ "$rst" -le $(( NOW + RL_MAX_5H )) ] || return 1
   case "${s:-}" in (active|idle|warming) ;; (*) return 1 ;; esac
   # Leading zeros are rejected outright (our publisher never emits them, and
   # bash arithmetic downstream would read them as octal): the (0|[1-9]...)

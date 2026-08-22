@@ -718,6 +718,15 @@ rm -f "$CASE/burn.tsv.1000000.1015900.60000.tick"
 burn_est_publish
 true_case 'est publish: lower claim does not suppress' test -f "$EST"
 rm -f "$EST" "$CASE/burn.tsv.1000000.1015900.30000.tick"
+: > "$CASE/burn.tsv.1000000.1016100.20000.tick"
+burn_est_publish
+true_case 'est publish: newer-window claim suppresses ours' test ! -e "$EST"
+true_case 'est publish: cross-window suppression leaves no tmp' test ! -e "$CASE/burn.tsv.$$.tmp"
+rm -f "$CASE/burn.tsv.1000000.1016100.20000.tick"
+: > "$CASE/burn.tsv.1000000.1009000.90000.tick"
+burn_est_publish
+true_case 'est publish: older-window claim does not suppress' test -f "$EST"
+rm -f "$EST" "$CASE/burn.tsv.1000000.1009000.90000.tick"
 
 # Adopt: fresh valid estimate is used without the awk (values differ from
 # anything the empty TSV could produce, so adoption is observable).
@@ -746,6 +755,10 @@ if burn_est_adopt; then bad 'est adopt: older-window estimate rejected' adopted;
 printf '1000000 1020000 active 300 5000 50000\n' > "$EST"
 true_case 'est adopt: newer-window estimate accepted' burn_est_adopt
 eq 'est adopt: newer-window ttr from published maxrst' "$_B5_TTR" 20000
+printf '1000000 1021601 active 300 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: reset beyond 5h horizon rejected' adopted; else ok 'est adopt: reset beyond 5h horizon rejected'; fi
+printf '1000000 1021600 active 300 5000 50000\n' > "$EST"
+true_case 'est adopt: reset at the 5h horizon accepted' burn_est_adopt
 printf '1000000 1015900 active a[$(touch %s/pwn)] 5000 50000\n' "$CASE" > "$EST"
 if burn_est_adopt; then bad 'est adopt: arithmetic injection rejected' adopted; else ok 'est adopt: arithmetic injection rejected'; fi
 true_case 'est adopt: injection produced no side effect' test ! -e "$CASE/pwn"
