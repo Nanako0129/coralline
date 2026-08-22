@@ -102,6 +102,11 @@ VL_BURN_GLYPH="↗"               # plain-Unicode, arrow family (kept in VL_ASCI
 VL_BG_BURN=""                   # empty → inherits VL_BG_5H at the use site
 BURN_FILE="${CORALLINE_BURN_FILE:-$CORALLINE_DIR/burn-5h.tsv}"
 BURN_TRIM=1500                  # internal: max rows kept in the sample file
+BURN_SLACK=500                  # internal: rows past BURN_TRIM tolerated before a trim rewrite.
+                                # Batches the steady-state trim: at the cap, appends land for
+                                # ~BURN_SLACK seconds before one render rewrites, instead of every
+                                # render rewriting every second. 1500+1000(max)+appends stays far
+                                # below the reader's 4096-physical-row bail-out.
 
 # Cross-session limit sync (opt-in). Claude Code only re-renders a session's
 # statusline on activity, and the rate-limit % in each render's JSON is that
@@ -608,6 +613,9 @@ state_gate() {  # canonicalize one render's values and state namespaces
   case "$BURN_TRIM" in (''|*[!0-9]*) BURN_TRIM=1500 ;; esac
   [ "${#BURN_TRIM}" -le 4 ] && [ "$BURN_TRIM" -ge 1 ] 2>/dev/null \
     && [ "$BURN_TRIM" -le 3000 ] 2>/dev/null || BURN_TRIM=1500
+  case "$BURN_SLACK" in (''|*[!0-9]*) BURN_SLACK=500 ;; esac
+  [ "${#BURN_SLACK}" -le 4 ] && [ "$BURN_SLACK" -ge 0 ] 2>/dev/null \
+    && [ "$BURN_SLACK" -le 1000 ] 2>/dev/null || BURN_SLACK=500
 
   _CUR5_VALID=0; _CUR7_VALID=0; _CUR_BURN_VALID=0
   _CUR5_PCT=0; _CUR5_CANON=""; _CUR5_TSV=""; _CUR5_RST=0
@@ -648,11 +656,82 @@ state_gate() {  # canonicalize one render's values and state namespaces
   _STATE_READY=1
 }
 
+# Per-(second, window) leader election for the burn write path. N concurrent
+# sessions on one account share one current 5h window and would otherwise each
+# append a near-identical row every second, keeping the file permanently past
+# BURN_TRIM so that every render pays a whole-file rewrite; measured at n=16
+# that write path alone is ~600ms CPU/s aggregate. One writer per (tick, reset)
+# collapses that to a single append without losing history: the reader already
+# dedups same-(reset, sample) rows to one observation (add_obs), and a session
+# holding a DIFFERENT window claims a different token, so per-window coverage
+# is exactly what every-session writes produce. Limit-store publishing
+# (rl_sample) is deliberately NOT elected: those entries are idempotent bounded
+# mkdirs with no rewrite cost, and any session may hold a newer window that
+# must be able to reach the store.
+# The claim is a noclobber `:` redirect (O_CREAT|O_EXCL, no fork). Losing, and
+# every guard failure around the claim, leaves the store untouched; only a
+# claim that fails while the token is genuinely absent (e.g. parent not yet
+# created) fails OPEN to today's every-session-writes behavior, because the
+# mutations downstream re-run their own TOCTOU guards and a fresh store must
+# keep sampling from its first render.
+state_burn_lead() {  # → 0 iff this render owns burn mutation for its (tick, window)
+  case "${_BURN_LEAD:-}" in 1) return 0 ;; 0) return 1 ;; esac
+  _BURN_LEAD=0
+  [ "${_STATE_BURN_SAFE:-0}" = 1 ] && [ "${_CUR_BURN_VALID:-0}" = 1 ] || return 1
+  local tok="${_SB_BASE%/*}/tick.${NOW}.${_CUR_BURN_RST}" had_c=0 won=0 f n e c=0
+  # Same discipline as every store mutation: revalidate immediately before
+  # touching the path. If revalidation cannot pass, fail open without creating
+  # or deleting anything here.
+  if ! state_paths_revalidate; then _BURN_LEAD=1; return 0; fi
+  # A pre-existing symlink (or other oddity) planted at the token name is not
+  # followed and not deleted; this render just loses the tick.
+  state_no_symlink_path "$tok" && [ "$_SNP" = "$tok" ] || return 1
+  case $- in *C*) had_c=1 ;; esac
+  set -C
+  if : 2>/dev/null > "$tok"; then won=1; fi
+  [ "$had_c" = 1 ] || set +C
+  if [ "$won" != 1 ]; then
+    # EEXIST: another session already owns this (tick, window).
+    if [ -e "$tok" ] || [ -L "$tok" ]; then return 1; fi
+    # Anything else (missing parent on a fresh store, transient fs error):
+    # fail open so sampling never silently stops.
+    _BURN_LEAD=1; return 0
+  fi
+  _BURN_LEAD=1
+  # Leader duty: clear other seconds' tokens. A token is swept only once it is
+  # at least 8s in the past: a render's NOW is fixed at startup, so a straggler
+  # still finishing second T must find T's token intact while the second-T+1
+  # leader runs, or it would reclaim T and double-write (observed in the n=16
+  # concurrency regression; 8s outlives any render that is not already
+  # pathological). Future-dated tokens (backwards clock step) drain
+  # immediately. Same-NOW tokens of other windows are live and stay. Only plain
+  # non-symlink files with a strictly numeric epoch.window name shape are ever
+  # deleted, and the identities are revalidated again before the batched rm
+  # (mirrors burn_tmp_sweep's cap-and-batch pattern).
+  state_paths_revalidate || return 0
+  set --
+  for f in "${_SB_BASE%/*}"/tick.*; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    n=${f##*/}; n=${n#tick.}
+    case "$n" in *.*) ;; *) continue ;; esac
+    e=${n%%.*}
+    case "$e" in (''|*[!0-9]*) continue ;; esac
+    n=${n#*.}
+    case "$n" in (''|*[!0-9]*) continue ;; esac
+    [ "$e" -le "$NOW" ] && [ "$e" -ge $(( NOW - 8 )) ] && continue
+    set -- "$@" "$f"; c=$(( c + 1 ))
+    [ "$c" -ge 8 ] && break
+  done
+  [ "$c" -gt 0 ] && rm -f "$@" 2>/dev/null
+  return 0
+}
+
 burn_sample() {  # append one canonical validated 5h row; $1=sample $2=pct $3=reset
   local parent
   _BURN_APPENDED=0
   [ "${_STATE_MUTATE:-0}" = 1 ] && [ "${_STATE_BURN_SAFE:-0}" = 1 ] \
     && [ "${_CUR_BURN_VALID:-0}" = 1 ] || return 0
+  state_burn_lead || return 0
   [ "$1" = "$_CUR_BURN_SAMP" ] && [ "$2" = "$_CUR_BURN_TSV" ] && [ "$3" = "$_CUR_BURN_RST" ] || return 0
   parent="${_SB_BASE%/*}"; [ -n "$parent" ] || parent=/
   if [ ! -d "$parent" ]; then
@@ -837,7 +916,8 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
        && [ ! -e "$tmp" ] && [ ! -L "$tmp" ]; then write_tmp=1; fi
   fi
   out=$(LC_ALL=C awk -F '\t' -v now="$NOW" -v win="$CORALLINE_BURN_WINDOW" \
-    -v trim="$BURN_TRIM" -v maxahead="$RL_MAX_5H" -v mutate="$write_tmp" -v tmp="$tmp" \
+    -v trim="$BURN_TRIM" -v slack="$BURN_SLACK" \
+    -v maxahead="$RL_MAX_5H" -v mutate="$write_tmp" -v tmp="$tmp" \
     -v curvalid="${_CUR_BURN_VALID:-0}" -v csamp="${_CUR_BURN_SAMP:-0}" \
     -v cpct="${_CUR_BURN_PCT:-0}" -v crst="${_CUR_BURN_RST:-0}" '
     function epoch(raw, value) {
@@ -892,7 +972,7 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
     }
     END {
       if (incomplete) { print "incomplete"; exit }
-      if (mutate && (physical > trim || heal)) {
+      if (mutate && (physical > trim + slack || heal)) {
         lo = n - trim + 1; if (lo < 1) lo = 1
         printf "%s", "" > tmp
         for (i = lo; i <= n; i++) printf "%.0f\t%s\t%.0f\n", sm[i], canon(pc[i]), rs[i] >> tmp
@@ -970,8 +1050,11 @@ burn_eta_7d() {  # → _B7_*; $1=pct_milli $2=reset epoch
 }
 
 burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
-  local f5=0 f7=0
-  burn_eta_5h "${_STATE_MUTATE:-0}"
+  local f5=0 f7=0 m=0
+  # Trim/heal mutation follows the same per-(tick, window) election as the
+  # append: only the tick leader rewrites, everyone else reads.
+  [ "${_STATE_MUTATE:-0}" = 1 ] && state_burn_lead && m=1
+  burn_eta_5h "$m"
   # The 5h projection needs the same rebinding the 7d one gets: whenever the synced
   # state is what the gauge draws, the ETA has to be projected from that same window.
   # Two ways they diverge. With no reading of our own the history can still sit on

@@ -49,6 +49,7 @@ RL_MAX_5H=21600
 RL_MAX_7D=691200
 CORALLINE_BURN_WINDOW=600
 BURN_TRIM=1500
+BURN_SLACK=0
 VL_LIMIT_SYNC=0
 CORALLINE_NO_SAMPLE=0
 BASH_BIN=${BASH:-bash}
@@ -115,7 +116,7 @@ unit_gate() {  # $1=root $2=now $3=5h pct $4=5h reset $5=7d pct $6=7d reset $7=r
   NOW="$2"; fh_pct="$3"; fh_rst="$4"; wd_pct="$5"; wd_rst="$6"; CORALLINE_NO_SAMPLE="$7"
   BURN_FILE="$root/burn.tsv"; RL5H_FILE="$root/limit5.tsv"; RL7D_FILE="$root/limit7.tsv"
   _STATE_BURN_GATE=1; _STATE_RL5_GATE=1; _STATE_RL7_GATE=1
-  VL_LIMIT_SYNC=1; CORALLINE_BURN_WINDOW=600; BURN_TRIM=1500
+  VL_LIMIT_SYNC=1; CORALLINE_BURN_WINDOW=600; BURN_TRIM=1500; BURN_SLACK=0
   state_gate
 }
 
@@ -128,10 +129,10 @@ eq 'burn sample canonical TSV row' "$_ROW" $'1000000\t41.200\t1015900'
 eq 'burn sample appended once' "$_BURN_APPENDED" 1
 
 run5h() {  # $1=fixture $2=now $3=mutate
-  local root="$TMPD/run5h" trim="$BURN_TRIM"
+  local root="$TMPD/run5h" trim="$BURN_TRIM" slack="$BURN_SLACK"
   rm -rf "$root"; mkdir -p "$root"
   unit_gate "$root" "$2" '' '' '' '' 1
-  BURN_TRIM=$trim
+  BURN_TRIM=$trim; BURN_SLACK=$slack
   printf '%b' "$1" > "$BURN_FILE"
   _CUR_BURN_VALID=0
   burn_eta_5h "$3"
@@ -409,6 +410,9 @@ else ok 'symlink limit fixture unavailable'; fi
 # Existing immutable burn.d and unrelated temp canaries are never touched.
 CASE="$TMPD/coexist"; mkdir -p "$CASE/state/burn.d"; printf 'immutable' > "$CASE/state/burn.d/canary"
 write_config "$CASE/conf" "$CASE/state" burn 0 3
+# Slack would let the file sit above trim between rewrites; pin it off so the
+# repeated-render bound below stays exact.
+printf 'BURN_SLACK=0\n' >> "$CASE/conf"
 make_payload "$CASE/input" 41.2 "$_r5" 30 "$_r7"
 snapshot_tree "$CASE/state/burn.d" "$CASE/before.tar"
 run_runtime "$BASH_BIN" "$CASE/conf" "$CASE/input" "$CASE/out" "$CASE/err" 0
@@ -524,12 +528,21 @@ run_concurrency() {  # $1=runtime $2=workers $3=tag
       [ ! -s "$path.err" ] && _CC_STDERR_EMPTY=$(( _CC_STDERR_EMPTY + 1 ))
     done
   done
-  if [ -f "$root/state/burn.tsv" ]; then _CC_ROWS=$(wc -l < "$root/state/burn.tsv" | tr -d ' '); else _CC_ROWS=0; fi
+  # Single-writer contract: the per-(second, window) election means N renders
+  # in the same second persist ONE row, so the row count equals the number of
+  # distinct (sample, reset) pairs -- never the render count -- and duplicates
+  # are the failure signature of a broken election.
+  _CC_ROWS=0; _CC_DUPES=0
+  if [ -f "$root/state/burn.tsv" ]; then
+    _CC_ROWS=$(wc -l < "$root/state/burn.tsv" | tr -d ' ')
+    _CC_DUPES=$(LC_ALL=C awk -F '\t' '{k=$1 FS $3} seen[k]++ {d++} END{print d+0}' "$root/state/burn.tsv")
+  fi
   _CC_IMMUTABLE=0
   [ "$(LC_ALL=C tr -d '\n' < "$root/state/burn.d/canary")" = immutable-concurrency-canary ] && _CC_IMMUTABLE=1
   [ "$_CC_RCFILES" -eq "$_CC_EXPECTED" ] && [ "$_CC_SUCCESS" -eq "$_CC_EXPECTED" ] \
     && [ "$_CC_NONEMPTY" -eq "$_CC_EXPECTED" ] && [ "$_CC_MATCH" -eq "$_CC_EXPECTED" ] \
-    && [ "$_CC_STDERR_EMPTY" -eq "$_CC_EXPECTED" ] && [ "$_CC_ROWS" -eq "$_CC_EXPECTED" ] \
+    && [ "$_CC_STDERR_EMPTY" -eq "$_CC_EXPECTED" ] \
+    && [ "$_CC_ROWS" -ge 1 ] && [ "$_CC_ROWS" -le "$_CC_EXPECTED" ] && [ "$_CC_DUPES" -eq 0 ] \
     && [ "$_CC_IMMUTABLE" -eq 1 ]
 }
 
@@ -547,10 +560,11 @@ for _N in 5 12 16; do
     eq "concurrency n=$_N successes" "$_CC_SUCCESS" $((_N * 2))
     eq "concurrency n=$_N exact outputs" "$_CC_MATCH" $((_N * 2))
     eq "concurrency n=$_N stderr empty" "$_CC_STDERR_EMPTY" $((_N * 2))
-    eq "concurrency n=$_N TSV rows" "$_CC_ROWS" $((_N * 2))
+    eq "concurrency n=$_N single writer per (second, window)" "$_CC_DUPES" 0
+    ok "concurrency n=$_N TSV rows within [1, renders] ($_CC_ROWS)"
     eq "concurrency n=$_N immutable store untouched" "$_CC_IMMUTABLE" 1
   else
-    bad "concurrency n=$_N" "expected=$_CC_EXPECTED rcfiles=$_CC_RCFILES success=$_CC_SUCCESS nonempty=$_CC_NONEMPTY match=$_CC_MATCH stderr=$_CC_STDERR_EMPTY rows=$_CC_ROWS immutable=$_CC_IMMUTABLE"
+    bad "concurrency n=$_N" "expected=$_CC_EXPECTED rcfiles=$_CC_RCFILES success=$_CC_SUCCESS nonempty=$_CC_NONEMPTY match=$_CC_MATCH stderr=$_CC_STDERR_EMPTY rows=$_CC_ROWS dupes=$_CC_DUPES immutable=$_CC_IMMUTABLE"
   fi
 done
 
@@ -573,6 +587,109 @@ true_case 'sweep keeps a non-temporary suffix' test -f "$_SB_BASE.333.bak"
 true_case 'sweep keeps a symlink' test -L "$_SB_BASE.444.tmp"
 true_case 'sweep keeps a temporary newer than the store' test -f "$_SB_BASE.555.tmp"
 true_case 'sweep leaves the store intact' test -s "$_SB_BASE"
+
+# Trim hysteresis: at the cap, appends accumulate for BURN_SLACK rows before one
+# render pays the rewrite; healing is never deferred by slack.
+CASE="$TMPD/slack"; mkdir -p "$CASE"
+unit_gate "$CASE" 6 '' '' '' '' 1
+BURN_TRIM=3; BURN_SLACK=2
+run5h '1\t6\t9\n2\t6\t9\n3\t7\t9\n4\t7\t9\n' 6 1
+eq 'slack holds the rewrite below trim+slack' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 4
+run5h '1\t6\t9\n2\t6\t9\n3\t7\t9\n4\t7\t9\n5\t8\t9\n6\t8\t9\n' 7 1
+eq 'past trim+slack rewrites down to trim' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 3
+run5h '1\t6\t9\n2\t7\t9\n9999000\t99\t99999999\n' 6 1
+if grep -q 99999999 "$BURN_FILE"; then bad 'heal is not deferred by slack' present; else ok 'heal is not deferred by slack'; fi
+BURN_TRIM=1500; BURN_SLACK=0
+
+# Per-(second, window) burn-write election. The token is the only coordination
+# point and every touch around it re-runs the store's TOCTOU guards.
+CASE="$TMPD/lead"; mkdir -p "$CASE"
+unit_gate "$CASE" 1000000 41.2 1015900 '' '' 0
+_BURN_LEAD=
+true_case 'lead: first claim wins' state_burn_lead
+true_case 'lead: winning claim leaves a token' test -f "$CASE/tick.1000000.1015900"
+_BURN_LEAD=
+if state_burn_lead; then bad 'lead: planted same-window token loses' won; else ok 'lead: planted same-window token loses'; fi
+rm -f "$CASE/tick.1000000.1015900"
+: > "$CASE/tick.1000000.1016000"
+_BURN_LEAD=
+true_case 'lead: same-second other-window token does not block' state_burn_lead
+true_case 'lead: other-window token kept by the sweep' test -f "$CASE/tick.1000000.1016000"
+rm -f "$CASE"/tick.*
+: > "$CASE/tick.999990.1015900"
+: > "$CASE/tick.999999.1015900"
+: > "$CASE/tick.1000002.1015900"
+: > "$CASE/tick.abc.1015900"
+: > "$CASE/tick.999997"
+ln -s /dev/null "$CASE/tick.999980.1015900"
+_BURN_LEAD=
+state_burn_lead || bad 'lead: sweep round claim' lost
+true_case 'lead sweep: stale token removed' test ! -e "$CASE/tick.999990.1015900"
+true_case 'lead sweep: recent-past token kept for stragglers' test -f "$CASE/tick.999999.1015900"
+true_case 'lead sweep: future token removed' test ! -e "$CASE/tick.1000002.1015900"
+true_case 'lead sweep: non-numeric epoch kept' test -f "$CASE/tick.abc.1015900"
+true_case 'lead sweep: single-field name kept' test -f "$CASE/tick.999997"
+true_case 'lead sweep: symlink kept' test -L "$CASE/tick.999980.1015900"
+rm -f "$CASE"/tick.* 2>/dev/null; rm -f "$CASE/tick.abc.1015900" "$CASE/tick.999997"
+ln -s "$CASE/linktarget" "$CASE/tick.1000000.1015900"
+_BURN_LEAD=
+if state_burn_lead; then bad 'lead: symlink at the token name loses' won; else ok 'lead: symlink at the token name loses'; fi
+true_case 'lead: symlink token never followed' test ! -e "$CASE/linktarget"
+true_case 'lead: symlink token never deleted' test -L "$CASE/tick.1000000.1015900"
+rm -f "$CASE/tick.1000000.1015900"
+_STATE_PATHS_OK=0
+_BURN_LEAD=
+true_case 'lead: revalidation failure fails open' state_burn_lead
+true_case 'lead: fail-open touches nothing' test ! -e "$CASE/tick.1000000.1015900"
+_STATE_PATHS_OK=1
+CASE="$TMPD/lead-fresh"
+unit_gate "$CASE/absent" 1000000 41.2 1015900 '' '' 0
+_BURN_LEAD=
+true_case 'lead: missing store parent fails open' state_burn_lead
+true_case 'lead: fail-open creates no token' test ! -e "$CASE/absent/tick.1000000.1015900"
+_BURN_LEAD=
+
+# Two-window coverage under election: a session holding a different (newer) 5h
+# window than the tick winner must still persist its rows and reach the limit
+# store, and the newer window's history must be enough for an active estimate.
+# The store starts absent, so the first render also proves the fail-open path
+# creates a working store from nothing.
+CASE="$TMPD/twowin"; mkdir -p "$CASE"
+_now=$(date +%s); _rA=$((_now + 9000)); _rB=$((_now + 12000))
+write_config "$CASE/conf" "$CASE/state" 'burn limit5h' 1
+_i=0
+while [ "$_i" -lt 3 ]; do
+  make_payload "$CASE/inA" "3$_i.5" "$_rA" '' ''
+  make_payload "$CASE/inB" "4$_i.5" "$_rB" '' ''
+  CORALLINE_CONFIG="$CASE/conf" CORALLINE_NO_SAMPLE=0 "$BASH_BIN" "$SCRIPT" < "$CASE/inA" > /dev/null 2> "$CASE/errA.$_i" &
+  _pidA=$!
+  CORALLINE_CONFIG="$CASE/conf" CORALLINE_NO_SAMPLE=0 "$BASH_BIN" "$SCRIPT" < "$CASE/inB" > /dev/null 2> "$CASE/errB.$_i" &
+  _pidB=$!
+  wait "$_pidA" "$_pidB" 2>/dev/null
+  _i=$((_i + 1))
+  sleep 1
+done
+_rowsA=$(awk -F '\t' -v r="$_rA" '$3 == r' "$CASE/state/burn.tsv" 2>/dev/null | wc -l | tr -d ' ')
+_rowsB=$(awk -F '\t' -v r="$_rB" '$3 == r' "$CASE/state/burn.tsv" 2>/dev/null | wc -l | tr -d ' ')
+true_case 'two-window: older-window rows persisted' test "$_rowsA" -ge 2
+true_case 'two-window: newer-window rows persisted' test "$_rowsB" -ge 2
+# Once the newer reset lands, rl_choose makes every session render (and thus
+# republish) that window, so the store legitimately converges on B's entries;
+# the non-suppression proof is that entries exist at all and include B's reset.
+entry_count "$CASE/state/limit5.d"; _ENTRIES=$_COUNT
+true_case 'two-window: limit store received entries' test "$_ENTRIES" -ge 1
+_LIM_B=0; for _e in "$CASE/state/limit5.d/${_rB}"_*; do [ -e "$_e" ] && _LIM_B=1; done
+eq 'two-window: newer reset reached the limit store' "$_LIM_B" 1
+# The newer window's persisted rows must feed an active estimate rather than
+# stranding that session on permanent warming. The estimator needs crossings
+# spanning >= win/10 seconds, which a 3s render loop cannot produce, so the
+# read fixture adds two backdated in-window rows for the same reset; the LAST
+# crossing still comes from a row the elected renders persisted above.
+CASE2="$TMPD/twowin-read"; mkdir -p "$CASE2"
+{ printf '%s\t38.000\t%s\n' "$((_now - 300))" "$_rB"; printf '%s\t39.000\t%s\n' "$((_now - 240))" "$_rB"; cat "$CASE/state/burn.tsv"; } > "$CASE2/burn.tsv"
+unit_gate "$CASE2" $((_now + 5)) 49.5 "$_rB" '' '' 1
+burn_eta_5h 0
+eq 'two-window: newer window estimates active' "$_B5_STATE" active
 
 # Binding and renderer regressions after state/storage tests. Stubs isolate the
 # already-tested estimators from the presentation logic.
