@@ -689,6 +689,9 @@ _BURN_LEAD=
 CASE="$TMPD/est"; mkdir -p "$CASE"
 unit_gate "$CASE" 1000000 41.2 1015900 '' '' 0
 EST="$CASE/burn.tsv.est"
+# An estimate summarizes the TSV, so the source has to exist for any of the
+# adoption cases below to describe a real situation.
+printf '1\t6\t9\n' > "$BURN_FILE"
 
 # Publish: winner shape, maintenance/no-raw refusal.
 _CUR_BURN_VALID=1; _B5_RAW='warming 0 0 41200 9000'; _B5_TTR=9000
@@ -805,6 +808,14 @@ printf '1000000 1015900 active 300 5000 50000 1015900 41200\n' > "$EST"
 touch -t 202001010000 "$EST"
 printf '1\t6\t9\n' >> "$BURN_FILE"
 if burn_est_adopt; then bad 'est adopt: TSV newer than estimate rejected' adopted; else ok 'est adopt: TSV newer than estimate rejected'; fi
+# A summary must not outlive the file it summarizes: with the TSV deleted the
+# mtime test is vacuous, so absence is checked on its own.
+cp "$BURN_FILE" "$CASE/tsv.keep"; rm -f "$BURN_FILE"
+printf '1000000 1015900 active 300 5000 50000 1015900 41200\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: missing source TSV rejected' adopted; else ok 'est adopt: missing source TSV rejected'; fi
+ln -s "$CASE/tsv.keep" "$BURN_FILE"
+if burn_est_adopt; then bad 'est adopt: symlinked source TSV rejected' adopted; else ok 'est adopt: symlinked source TSV rejected'; fi
+rm -f "$BURN_FILE"; cp "$CASE/tsv.keep" "$BURN_FILE"
 printf '1000000 1015900 active a[$(touch %s/pwn)] 5000 50000 1015900 41200\n' "$CASE" > "$EST"
 if burn_est_adopt; then bad 'est adopt: arithmetic injection rejected' adopted; else ok 'est adopt: arithmetic injection rejected'; fi
 true_case 'est adopt: injection produced no side effect' test ! -e "$CASE/pwn"

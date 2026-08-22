@@ -1207,12 +1207,17 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   state_path_object "$est" f || return 1
   [ -f "$est" ] && [ ! -L "$est" ] || return 1
   # Snapshot versioning: an estimate is a parse of the TSV as it stood at
-  # publish time. A straggler from a prior tick (its token still inside the
-  # sweep's grace window) may append after that publish; if the TSV has a
-  # later mtime than the estimate, the cached parse is missing rows a
-  # read-only parse would see, so fall back. Same-second mutations sit below
-  # test's mtime granularity and are corrected by the next second's publish,
-  # a strictly tighter bound than the 3s freshness allowance.
+  # publish time, so the source must still be there to be summarized. A
+  # deleted TSV (history reset) makes the mtime test below vacuous - nothing
+  # is newer than the estimate - and would let a summary outlive the file it
+  # describes, where a full parse would report warming.
+  [ -f "$_SB_BASE" ] && [ ! -L "$_SB_BASE" ] || return 1
+  # A straggler from a prior tick (its token still inside the sweep's grace
+  # window) may append after that publish; if the TSV has a later mtime than
+  # the estimate, the cached parse is missing rows a read-only parse would
+  # see, so fall back. Same-second mutations sit below test's mtime
+  # granularity and are corrected by the next second's publish, a strictly
+  # tighter bound than the 3s freshness allowance.
   [ "$_SB_BASE" -nt "$est" ] && return 1
   # -n (not -N: that is bash 4.1+) caps how much of a hostile oversized file
   # a render will ever ingest; trailing junk lands in the last field and
