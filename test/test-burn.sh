@@ -662,6 +662,27 @@ true_case 'lead: missing store parent fails open' state_burn_lead
 true_case 'lead: fail-open creates no token' test ! -e "$CASE/absent/burn.tsv.1000000.1015900.41200.tick"
 _BURN_LEAD=
 
+# Maintenance claim: a render with no valid 5h reading may still win the
+# mutate path (trim/heal/sweep never starve), under the reserved 0.0 name; it
+# loses to any same-second claimant, and a real claimant ignores it.
+CASE="$TMPD/lead-maint"; mkdir -p "$CASE"
+unit_gate "$CASE" 1000000 '' '' '' '' 0
+_BURN_LEAD=
+true_case 'maint: reading-less render claims maintenance' state_burn_lead
+true_case 'maint: reserved token created' test -f "$CASE/burn.tsv.1000000.0.0.tick"
+rm -f "$CASE"/burn.tsv.*.tick
+: > "$CASE/burn.tsv.1000000.1015900.41200.tick"
+_BURN_LEAD=
+if state_burn_lead; then bad 'maint: loses to a same-second claimant' won; else ok 'maint: loses to a same-second claimant'; fi
+rm -f "$CASE"/burn.tsv.*.tick
+: > "$CASE/burn.tsv.1000000.0.0.tick"
+unit_gate "$CASE" 1000000 41.2 1015900 '' '' 0
+_BURN_LEAD=
+true_case 'maint: real claimant ignores the maintenance token' state_burn_lead
+true_case 'maint: real claim landed beside it' test -f "$CASE/burn.tsv.1000000.1015900.41200.tick"
+rm -f "$CASE"/burn.tsv.*.tick
+_BURN_LEAD=
+
 # Two-window coverage under election: a session holding a different (newer) 5h
 # window than the tick winner must still persist its rows and reach the limit
 # store, and the newer window's history must be enough for an active estimate.

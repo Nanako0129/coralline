@@ -681,25 +681,41 @@ state_gate() {  # canonicalize one render's values and state namespaces
 # created) fails OPEN to today's every-session-writes behavior, because the
 # mutations downstream re-run their own TOCTOU guards and a fresh store must
 # keep sampling from its first render.
-state_burn_lead() {  # → 0 iff this render's burn reading must be persisted
+state_burn_lead() {  # → 0 iff this render must run the burn write path
   case "${_BURN_LEAD:-}" in 1) return 0 ;; 0) return 1 ;; esac
   _BURN_LEAD=0
-  [ "${_STATE_BURN_SAFE:-0}" = 1 ] && [ "${_CUR_BURN_VALID:-0}" = 1 ] || return 1
-  local slot="$_SB_BASE.${NOW}.${_CUR_BURN_RST}" tok had_c=0 won=0 f n e r p c=0 best=-1
-  tok="$slot.${_CUR_BURN_PCT}.tick"
+  [ "${_STATE_BURN_SAFE:-0}" = 1 ] || return 1
+  local slot tok had_c=0 won=0 f n e r p c=0 best=-1
   # Same discipline as every store mutation: revalidate immediately before
   # touching the path. If revalidation cannot pass, fail open without creating
   # or deleting anything here.
   if ! state_paths_revalidate; then _BURN_LEAD=1; return 0; fi
-  # Lose only to a claim that already covers this reading: the highest pct
-  # claimed for this (second, window) at or above ours makes our row redundant.
-  for f in "$slot".*.tick; do
-    [ -e "$f" ] || [ -L "$f" ] || continue
-    p=${f#"$slot".}; p=${p%.tick}
-    case "$p" in (''|*[!0-9]*) continue ;; esac
-    [ "$p" -gt "$best" ] && best=$p
-  done
-  [ "$_CUR_BURN_PCT" -gt "$best" ] || return 1
+  if [ "${_CUR_BURN_VALID:-0}" = 1 ]; then
+    slot="$_SB_BASE.${NOW}.${_CUR_BURN_RST}"
+    tok="$slot.${_CUR_BURN_PCT}.tick"
+    # Lose only to a claim that already covers this reading: the highest pct
+    # claimed for this (second, window) at or above ours makes our row
+    # redundant.
+    for f in "$slot".*.tick; do
+      [ -e "$f" ] || [ -L "$f" ] || continue
+      p=${f#"$slot".}; p=${p%.tick}
+      case "$p" in (''|*[!0-9]*) continue ;; esac
+      [ "$p" -gt "$best" ] && best=$p
+    done
+    [ "$_CUR_BURN_PCT" -gt "$best" ] || return 1
+  else
+    # No reading of our own: maintenance-only claim under the reserved
+    # window/pct 0.0, so trim, healing, and the tmp sweep never starve while
+    # every rendering session happens to lack a current 5h payload. Any
+    # same-second claimant (any window) makes maintenance redundant — a real
+    # claimant runs the same mutate path — and burn_sample's own gate keeps a
+    # maintenance winner from ever appending a row.
+    for f in "$_SB_BASE.${NOW}".*.tick; do
+      [ -e "$f" ] || [ -L "$f" ] || continue
+      return 1
+    done
+    tok="$_SB_BASE.${NOW}.0.0.tick"
+  fi
   # A pre-existing symlink (or other oddity) planted at the token name is not
   # followed and not deleted; this render just loses the tick.
   state_no_symlink_path "$tok" && [ "$_SNP" = "$tok" ] || return 1
