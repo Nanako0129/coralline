@@ -768,6 +768,13 @@ printf '1000000 1015900 active 300 5000 50000 1015900 50000\n' > "$EST"
 true_case 'est adopt: claim above the covering pct accepted' burn_est_adopt
 printf '1000000 1020000 active 300 5000 50000 1020000 5000\n' > "$EST"
 true_case 'est adopt: newer-window claim supersedes any pct' burn_est_adopt
+# A TSV strictly newer than the estimate means rows landed after the publish
+# (an older-tick straggler inside the sweep grace window): the snapshot is
+# incomplete and must not be adopted.
+printf '1000000 1015900 active 300 5000 50000 1015900 41200\n' > "$EST"
+touch -t 202001010000 "$EST"
+printf '1\t6\t9\n' >> "$BURN_FILE"
+if burn_est_adopt; then bad 'est adopt: TSV newer than estimate rejected' adopted; else ok 'est adopt: TSV newer than estimate rejected'; fi
 printf '1000000 1015900 active a[$(touch %s/pwn)] 5000 50000 1015900 41200\n' "$CASE" > "$EST"
 if burn_est_adopt; then bad 'est adopt: arithmetic injection rejected' adopted; else ok 'est adopt: arithmetic injection rejected'; fi
 true_case 'est adopt: injection produced no side effect' test ! -e "$CASE/pwn"

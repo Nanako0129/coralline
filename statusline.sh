@@ -1194,6 +1194,14 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   [ "${_STATE_BURN_SAFE:-0}" = 1 ] || return 1
   state_path_object "$est" f || return 1
   [ -f "$est" ] && [ ! -L "$est" ] || return 1
+  # Snapshot versioning: an estimate is a parse of the TSV as it stood at
+  # publish time. A straggler from a prior tick (its token still inside the
+  # sweep's grace window) may append after that publish; if the TSV has a
+  # later mtime than the estimate, the cached parse is missing rows a
+  # read-only parse would see, so fall back. Same-second mutations sit below
+  # test's mtime granularity and are corrected by the next second's publish,
+  # a strictly tighter bound than the 3s freshness allowance.
+  [ "$_SB_BASE" -nt "$est" ] && return 1
   # -n (not -N: that is bash 4.1+) caps how much of a hostile oversized file
   # a render will ever ingest; trailing junk lands in the last field and
   # fails its digit check, so a malformed line is rejected, never truncated
