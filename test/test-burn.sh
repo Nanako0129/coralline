@@ -539,10 +539,21 @@ run_concurrency() {  # $1=runtime $2=workers $3=tag
   fi
   _CC_IMMUTABLE=0
   [ "$(LC_ALL=C tr -d '\n' < "$root/state/burn.d/canary")" = immutable-concurrency-canary ] && _CC_IMMUTABLE=1
+  # Winner-published estimate: present, regular, six validly-shaped fields;
+  # and no orphaned publish temporaries once every render has exited.
+  _CC_EST=0
+  if [ -f "$root/state/burn.tsv.est" ] && [ ! -L "$root/state/burn.tsv.est" ]; then
+    _E1=""; _E2=""; _E3=""; _E4=""; _E5=""; _E6=""
+    read -r _E1 _E2 _E3 _E4 _E5 _E6 < "$root/state/burn.tsv.est" 2>/dev/null || :
+    case "$_E1$_E2$_E4$_E5$_E6" in (''|*[!0-9]*) ;; (*)
+      case "$_E3" in (active|idle|warming) _CC_EST=1 ;; esac ;; esac
+  fi
+  _CC_TMPS=$(ls "$root/state" 2>/dev/null | grep -c '\.tmp$')
   [ "$_CC_RCFILES" -eq "$_CC_EXPECTED" ] && [ "$_CC_SUCCESS" -eq "$_CC_EXPECTED" ] \
     && [ "$_CC_NONEMPTY" -eq "$_CC_EXPECTED" ] && [ "$_CC_MATCH" -eq "$_CC_EXPECTED" ] \
     && [ "$_CC_STDERR_EMPTY" -eq "$_CC_EXPECTED" ] \
     && [ "$_CC_ROWS" -ge 1 ] && [ "$_CC_ROWS" -le "$_CC_EXPECTED" ] && [ "$_CC_DUPES" -eq 0 ] \
+    && [ "$_CC_EST" -eq 1 ] && [ "$_CC_TMPS" -eq 0 ] \
     && [ "$_CC_IMMUTABLE" -eq 1 ]
 }
 
@@ -562,9 +573,11 @@ for _N in 5 12 16; do
     eq "concurrency n=$_N stderr empty" "$_CC_STDERR_EMPTY" $((_N * 2))
     eq "concurrency n=$_N single writer per (second, window)" "$_CC_DUPES" 0
     ok "concurrency n=$_N TSV rows within [1, renders] ($_CC_ROWS)"
+    eq "concurrency n=$_N estimate published and well-shaped" "$_CC_EST" 1
+    eq "concurrency n=$_N no orphaned publish temporaries" "$_CC_TMPS" 0
     eq "concurrency n=$_N immutable store untouched" "$_CC_IMMUTABLE" 1
   else
-    bad "concurrency n=$_N" "expected=$_CC_EXPECTED rcfiles=$_CC_RCFILES success=$_CC_SUCCESS nonempty=$_CC_NONEMPTY match=$_CC_MATCH stderr=$_CC_STDERR_EMPTY rows=$_CC_ROWS dupes=$_CC_DUPES immutable=$_CC_IMMUTABLE"
+    bad "concurrency n=$_N" "expected=$_CC_EXPECTED rcfiles=$_CC_RCFILES success=$_CC_SUCCESS nonempty=$_CC_NONEMPTY match=$_CC_MATCH stderr=$_CC_STDERR_EMPTY rows=$_CC_ROWS dupes=$_CC_DUPES est=$_CC_EST tmps=$_CC_TMPS immutable=$_CC_IMMUTABLE"
   fi
 done
 
@@ -643,6 +656,13 @@ true_case 'lead sweep: non-numeric epoch kept' test -f "$CASE/burn.tsv.abc.10159
 true_case 'lead sweep: two-field name kept' test -f "$CASE/burn.tsv.999990.1015900.tick"
 true_case 'lead sweep: foreign unprefixed file untouched' test -f "$CASE/tick.999990.1015900.41200.tick"
 true_case 'lead sweep: symlink kept' test -L "$CASE/burn.tsv.999980.1015900.41200.tick"
+rm -f "$CASE"/burn.tsv.*.tick 2>/dev/null
+: > "$CASE/burn.tsv.1000000.1015900.999999999999999999999999.tick"
+: > "$CASE/burn.tsv.999990.1015900.999999999999999999999999.tick"
+_BURN_LEAD=
+state_burn_lead 2> "$CASE/overflow.err" || bad 'lead: oversized field never blocks a claim' lost
+eq 'lead: oversized digit field leaks no stderr' "$(wc -c < "$CASE/overflow.err" | tr -d ' ')" 0
+true_case 'lead sweep: stale oversized name kept, not compared' test -f "$CASE/burn.tsv.999990.1015900.999999999999999999999999.tick"
 rm -f "$CASE"/burn.tsv.*.tick "$CASE"/tick.* 2>/dev/null
 ln -s "$CASE/linktarget" "$TOK"
 _BURN_LEAD=
@@ -661,6 +681,95 @@ _BURN_LEAD=
 true_case 'lead: missing store parent fails open' state_burn_lead
 true_case 'lead: fail-open creates no token' test ! -e "$CASE/absent/burn.tsv.1000000.1015900.41200.tick"
 _BURN_LEAD=
+
+# Published-estimate fast path: the election winner publishes its validated
+# awk result; a follower that lost to a covering claim adopts it only after
+# every field survives the same validation the awk output gets, and every
+# anomaly falls back to the full parse.
+CASE="$TMPD/est"; mkdir -p "$CASE"
+unit_gate "$CASE" 1000000 41.2 1015900 '' '' 0
+EST="$CASE/burn.tsv.est"
+
+# Publish: winner shape, maintenance/no-raw refusal.
+_CUR_BURN_VALID=1; _B5_RAW='warming 0 0 41200 9000'; _B5_TTR=9000
+burn_est_publish
+eq 'est publish: winner writes the six-field line' "$(cat "$EST" 2>/dev/null)" '1000000 1009000 warming 0 0 41200'
+rm -f "$EST"
+_CUR_BURN_VALID=0
+burn_est_publish
+true_case 'est publish: maintenance winner never publishes' test ! -e "$EST"
+_CUR_BURN_VALID=1; _B5_RAW=''
+burn_est_publish
+true_case 'est publish: no raw line, no publish' test ! -e "$EST"
+mkdir "$EST"
+_B5_RAW='warming 0 0 41200 9000'
+burn_est_publish
+true_case 'est publish: directory at est name aborts' test -d "$EST"
+true_case 'est publish: aborted publish leaves no tmp' test ! -e "$CASE/burn.tsv.$$.tmp"
+rmdir "$EST"
+
+# Adopt: fresh valid estimate is used without the awk (values differ from
+# anything the empty TSV could produce, so adoption is observable).
+printf '1000000 1015900 active 300 5000 50000\n' > "$EST"
+_CUR_BURN_VALID=1
+true_case 'est adopt: fresh valid estimate adopted' burn_est_adopt
+eq 'est adopt: state comes from the estimate' "$_B5_STATE" active
+eq 'est adopt: ttr derives from window and local NOW' "$_B5_TTR" 15900
+printf '999996 1015900 active 300 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: stale estimate rejected' adopted; else ok 'est adopt: stale estimate rejected'; fi
+printf '1000002 1015900 active 300 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: future-dated estimate rejected' adopted; else ok 'est adopt: future-dated estimate rejected'; fi
+printf '1000000 1015900 active 90000 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: span beyond window cap rejected' adopted; else ok 'est adopt: span beyond window cap rejected'; fi
+printf '1000000 1015900 active 300 200000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: delta beyond pct cap rejected' adopted; else ok 'est adopt: delta beyond pct cap rejected'; fi
+printf '1000000 1015900 active 300 5000 100001\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: latest beyond pct cap rejected' adopted; else ok 'est adopt: latest beyond pct cap rejected'; fi
+printf '1000000 1015900 hacked 300 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: unknown state token rejected' adopted; else ok 'est adopt: unknown state token rejected'; fi
+printf '1000000 253402300799 active 300 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: reset beyond the 5h horizon rejected' adopted; else ok 'est adopt: reset beyond the 5h horizon rejected'; fi
+printf '1000000 1021600 active 300 5000 50000\n' > "$EST"
+true_case 'est adopt: reset at the 5h horizon accepted' burn_est_adopt
+printf '1000000 1015900 active 08 5000 50000\n' > "$EST"
+if burn_est_adopt 2> "$CASE/octal.err"; then bad 'est adopt: leading-zero span rejected' adopted; else ok 'est adopt: leading-zero span rejected'; fi
+eq 'est adopt: leading-zero rejection leaks no stderr' "$(wc -c < "$CASE/octal.err" | tr -d ' ')" 0
+printf '1000000 1015900 active 300 08 50000\n' > "$EST"
+if burn_est_adopt 2>/dev/null; then bad 'est adopt: leading-zero delta rejected' adopted; else ok 'est adopt: leading-zero delta rejected'; fi
+printf '1000000 1015900 active 300 5000 08000\n' > "$EST"
+if burn_est_adopt 2>/dev/null; then bad 'est adopt: leading-zero latest rejected' adopted; else ok 'est adopt: leading-zero latest rejected'; fi
+printf '1000000 1015900 active a[$(touch %s/pwn)] 5000 50000\n' "$CASE" > "$EST"
+if burn_est_adopt; then bad 'est adopt: arithmetic injection rejected' adopted; else ok 'est adopt: arithmetic injection rejected'; fi
+true_case 'est adopt: injection produced no side effect' test ! -e "$CASE/pwn"
+{ printf '1000000 1015900 active 300 5000 50000 '; head -c 400 /dev/zero | tr '\0' '9'; printf '\n'; } > "$EST"
+if burn_est_adopt; then bad 'est adopt: oversized line rejected' adopted; else ok 'est adopt: oversized line rejected'; fi
+rm -f "$EST"; ln -s "$CASE/esttarget" "$EST"
+if burn_est_adopt; then bad 'est adopt: symlink est rejected' adopted; else ok 'est adopt: symlink est rejected'; fi
+true_case 'est adopt: symlink est not followed' test ! -e "$CASE/esttarget"
+true_case 'est adopt: symlink est not deleted' test -L "$EST"
+rm -f "$EST"
+printf '999998 1015900 active 300 5000 50000\n' > "$EST"
+true_case 'est adopt: two-second-old estimate still adopts' burn_est_adopt
+eq 'est adopt: aged estimate ttr still local' "$_B5_TTR" 15900
+_CUR_BURN_VALID=0
+rm -f "$EST"
+
+# Read-only wiring: a CORALLINE_NO_SAMPLE render never consumes a published
+# estimate (test/preview determinism, rule #32) and never writes one. The
+# planted est claims an active state no empty TSV could produce, so any
+# adoption would be visible in the output.
+CASE="$TMPD/est-ro"; mkdir -p "$CASE/state"
+write_config "$CASE/conf" "$CASE/state" burn 0
+_now=$(date +%s)
+make_payload "$CASE/input" 41.2 "$((_now + 9000))" '' ''
+printf '%s %s active 300 5000 50000\n' "$_now" "$((_now + 9000))" > "$CASE/state/burn.tsv.est"
+cp "$CASE/state/burn.tsv.est" "$CASE/est.before"
+run_runtime "$BASH_BIN" "$CASE/conf" "$CASE/input" "$CASE/out" "$CASE/err" 1
+printf '\033[0m B … \033[0m\n' > "$CASE/oracle"
+if cmp -s "$CASE/out" "$CASE/oracle"; then ok 'est read-only: no-sample render ignores a fresh estimate'; else bad 'est read-only: no-sample render ignores a fresh estimate' "$(cat "$CASE/out")"; fi
+if cmp -s "$CASE/state/burn.tsv.est" "$CASE/est.before"; then ok 'est read-only: estimate file untouched'; else bad 'est read-only: estimate file untouched' changed; fi
+eq 'est read-only: no tokens created' "$(ls "$CASE/state" | grep -c '\.tick$')" 0
+eq 'est read-only: stderr empty' "$(wc -c < "$CASE/err" | tr -d ' ')" 0
 
 # Maintenance claim: a render with no valid 5h reading may still win the
 # mutate path (trim/heal/sweep never starve), under the reserved 0.0 name; it

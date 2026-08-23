@@ -699,10 +699,17 @@ state_burn_lead() {  # → 0 iff this render must run the burn write path
     for f in "$slot".*.tick; do
       [ -e "$f" ] || [ -L "$f" ] || continue
       p=${f#"$slot".}; p=${p%.tick}
+      # Length caps mirror state_epoch's width rule: a planted name with an
+      # oversized digit run must not reach [ -gt ] (integer overflow would
+      # leak an error line onto the render's stderr).
       case "$p" in (''|*[!0-9]*) continue ;; esac
+      [ "${#p}" -le 6 ] || continue
       [ "$p" -gt "$best" ] && best=$p
     done
-    [ "$_CUR_BURN_PCT" -gt "$best" ] || return 1
+    # A covering claim (pct at or above ours) is the one loss reason a
+    # follower may trust: it proves a winner is computing this second, so the
+    # published estimate is safe to adopt (_BURN_LOST gates burn_est_adopt).
+    [ "$_CUR_BURN_PCT" -gt "$best" ] || { _BURN_LOST=1; return 1; }
   else
     # No reading of our own: maintenance-only claim under the reserved
     # window/pct 0.0, so trim, healing, and the tmp sweep never starve while
@@ -724,7 +731,10 @@ state_burn_lead() {  # → 0 iff this render must run the burn write path
   if : 2>/dev/null > "$tok"; then won=1; fi
   [ "$had_c" = 1 ] || set +C
   if [ "$won" != 1 ]; then
-    # EEXIST: another session already claimed this exact reading.
+    # EEXIST from a regular file: another session claimed this exact reading,
+    # which also counts as a covering claim for adoption purposes.
+    if [ -f "$tok" ] && [ ! -L "$tok" ]; then _BURN_LOST=1; return 1; fi
+    # A non-file object raced in: lose without trusting it.
     if [ -e "$tok" ] || [ -L "$tok" ]; then return 1; fi
     # Anything else (missing parent on a fresh store, transient fs error):
     # fail open so sampling never silently stops.
@@ -748,11 +758,14 @@ state_burn_lead() {  # → 0 iff this render must run the burn write path
     n=${f#"$_SB_BASE".}; n=${n%.tick}
     e=${n%%.*}
     case "$e" in (''|*[!0-9]*) continue ;; esac
+    [ "${#e}" -le 12 ] || continue
     n=${n#*.}
     case "$n" in *.*) ;; *) continue ;; esac
     r=${n%%.*}; p=${n#*.}
     case "$r" in (''|*[!0-9]*) continue ;; esac
+    [ "${#r}" -le 12 ] || continue
     case "$p" in (''|*[!0-9]*) continue ;; esac
+    [ "${#p}" -le 6 ] || continue
     [ "$e" -le "$NOW" ] && [ "$e" -ge $(( NOW - 8 )) ] && continue
     set -- "$@" "$f"; c=$(( c + 1 ))
     [ "$c" -ge 8 ] && break
@@ -940,9 +953,35 @@ burn_tmp_sweep() {  # remove trim temporaries orphaned by killed renders
   return 0
 }
 
+# The single parser for one "state span delta latest ttr" estimator line.
+# burn_eta_5h feeds it the awk's stdout; burn_est_adopt feeds it a line
+# reconstructed from a published estimate. Exactly one validator existing is a
+# deliberate security property: _B5_ETA and _B5_TTR flow into bash arithmetic
+# downstream, so every producer must pass this same gate.
+burn_b5_line() {  # → _B5_* from one estimator line; 1 = line rejected
+  local state span delta latest ttr
+  read -r state span delta latest ttr <<EOF
+$1
+EOF
+  case "$state" in
+    (active)
+      case "$span$delta$latest$ttr" in (''|*[!0-9]*) return 1 ;; esac
+      [ "$span" -gt 0 ] && [ "$delta" -gt 0 ] || return 1
+      state_rate10 $(( delta * 10000000000 )) "$span"; _B5_RATE=$_RATE10
+      state_round_even $(( (100000 - latest) * span )) $(( delta * 1000 )) || return 1
+      _B5_STATE=active; _B5_ETA=$_RE; _B5_TTR=$ttr
+      ;;
+    (idle|warming)
+      case "$ttr" in (''|*[!0-9]*) ttr=0 ;; esac
+      _B5_STATE=$state; _B5_TTR=$ttr
+      ;;
+    (*) return 1 ;;
+  esac
+}
+
 burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
-  local mutate="${1:-0}" src=/dev/null tmp="" write_tmp=0 out="" rc state span delta latest ttr
-  _B5_STATE=warming; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0
+  local mutate="${1:-0}" src=/dev/null tmp="" write_tmp=0 out="" rc
+  _B5_STATE=warming; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0; _B5_RAW=""
   if [ "${_STATE_BURN_SAFE:-0}" = 1 ] && state_path_object "$_SB_BASE" f; then src=$_SB_BASE; fi
   if [ "$mutate" = 1 ] && [ "$src" != /dev/null ]; then
     burn_tmp_sweep
@@ -1055,22 +1094,8 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
     fi
   fi
   [ "$rc" -eq 0 ] || return 0
-  read -r state span delta latest ttr <<EOF
-$out
-EOF
-  case "$state" in
-    (active)
-      case "$span$delta$latest$ttr" in (''|*[!0-9]*) return 0 ;; esac
-      [ "$span" -gt 0 ] && [ "$delta" -gt 0 ] || return 0
-      state_rate10 $(( delta * 10000000000 )) "$span"; _B5_RATE=$_RATE10
-      state_round_even $(( (100000 - latest) * span )) $(( delta * 1000 )) || return 0
-      _B5_STATE=active; _B5_ETA=$_RE; _B5_TTR=$ttr
-      ;;
-    (idle|warming)
-      case "$ttr" in (''|*[!0-9]*) ttr=0 ;; esac
-      _B5_STATE=$state; _B5_TTR=$ttr
-      ;;
-  esac
+  burn_b5_line "$out" || return 0
+  _B5_RAW=$out
 }
 
 burn_eta_7d() {  # → _B7_*; $1=pct_milli $2=reset epoch
@@ -1084,12 +1109,110 @@ burn_eta_7d() {  # → _B7_*; $1=pct_milli $2=reset epoch
   state_round_even $(( (100000 - pct) * elapsed )) "$pct"; _B7_ETA=$_RE
 }
 
+# Cross-session estimate sharing. The election winner already paid for the
+# full TSV parse; publishing its validated result lets every same-second loser
+# skip that parse entirely (the read side is ~75ms of a 141ms state-enabled
+# render at n=16 — the dominant multi-session cost after the write election).
+# The published file is display-only derived data with the TSV as the source
+# of truth: ANY anomaly on the read side falls back to the full parse.
+# Publish is rename-only through the store's tmp discipline — never an
+# in-place write, which would follow a planted hardlink and tear reads. The
+# tmp reuses "$_SB_BASE".$$.tmp strictly AFTER burn_eta_5h's own trim tmp
+# lifecycle has ended (burn_estimate calls publish only once burn_eta_5h has
+# returned), so burn_tmp_sweep's <base>.<digits>.tmp rule covers orphans from
+# a killed render. Fork budget: one mv per second per store, paid by the
+# winner, replacing N-1 whole-file awk parses.
+burn_est_publish() {  # winner only: publish "<now> <maxrst> <state> <span> <delta> <latest>"
+  [ "${_CUR_BURN_VALID:-0}" = 1 ] || return 0
+  [ -n "${_B5_RAW:-}" ] || return 0
+  local est="$_SB_BASE.est" tmp="$_SB_BASE.$$.tmp" s sp d l t p had_c=0 won=0
+  state_paths_revalidate || return 0
+  # The est file is a seventh state object outside state_paths_validate's
+  # six-path distinctness matrix; refuse to publish over any configured
+  # namespace (state_same_path is conservative: unsure means same).
+  for p in "$_SB_BASE" "$_SB_ROOT" "$_SL5_BASE" "$_SL5_ROOT" "$_SL7_BASE" "$_SL7_ROOT"; do
+    if state_same_path "$est" "$p"; then return 0; fi
+  done
+  # A symlink or directory planted at the est name is not followed, not
+  # deleted, and aborts the publish; same rule as the election tokens.
+  state_no_symlink_path "$est" && [ "$_SNP" = "$est" ] || return 0
+  state_path_leaf "$est" f || return 0
+  state_no_symlink_path "$tmp" && [ "$_SNP" = "$tmp" ] || return 0
+  [ ! -e "$tmp" ] && [ ! -L "$tmp" ] || return 0
+  read -r s sp d l t <<EOF
+$_B5_RAW
+EOF
+  case $- in *C*) had_c=1 ;; esac
+  set -C
+  if printf '%s %s %s %s %s %s\n' "$NOW" $(( NOW + ${_B5_TTR:-0} )) "$s" "$sp" "$d" "$l" \
+       2>/dev/null > "$tmp"; then won=1; fi
+  [ "$had_c" = 1 ] || set +C
+  [ "$won" = 1 ] || return 0
+  if state_paths_revalidate && state_no_symlink_path "$est" && [ "$_SNP" = "$est" ] \
+     && state_path_leaf "$est" f; then
+    mv -f "$tmp" "$est" 2>/dev/null && return 0
+  fi
+  rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
+burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated estimate
+  local est="$_SB_BASE.est" LC_ALL=C pub rst s sp d l t
+  # Same defaults burn_eta_5h starts from: the adopter replaces that call
+  # entirely, and downstream comparisons assume every _B5_* is populated.
+  _B5_STATE=warming; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0; _B5_RAW=""
+  [ "${_STATE_BURN_SAFE:-0}" = 1 ] || return 1
+  state_path_object "$est" f || return 1
+  [ -f "$est" ] && [ ! -L "$est" ] || return 1
+  # -n (not -N: that is bash 4.1+) caps how much of a hostile oversized file
+  # a render will ever ingest; trailing junk lands in the last field and
+  # fails its digit check, so a malformed line is rejected, never truncated
+  # into a plausible one.
+  read -r -n 128 pub rst s sp d l < "$est" 2>/dev/null || :
+  # Every field is validated before it reaches any arithmetic context; the
+  # published values bypass the awk whose internal caps normally guarantee
+  # these bounds, so the reader must re-impose them itself.
+  state_epoch "${pub:-}" 12 || return 1; pub=$_SE_VALUE
+  state_epoch "${rst:-}" 12 || return 1; rst=$_SE_VALUE
+  [ "$pub" -le "$NOW" ] && [ "$pub" -ge $(( NOW - 3 )) ] || return 1
+  # The TSV parser heals a reset beyond NOW + RL_MAX_5H as implausible, so a
+  # record carrying one is a record no parse produced. Without this the cache
+  # is materially weaker than the file it summarizes: the same planted reset
+  # renders warming through the TSV and an adopted active estimate through
+  # the cache.
+  [ "$rst" -le $(( NOW + RL_MAX_5H )) ] || return 1
+  case "${s:-}" in (active|idle|warming) ;; (*) return 1 ;; esac
+  # Canonical form, the same rule state_epoch applies: a leading zero is
+  # rejected rather than tolerated, because these three fields reach bash
+  # arithmetic in burn_b5_line, where 08 is an invalid octal literal and
+  # leaks a diagnostic onto the render's stderr instead of falling back.
+  case "${sp:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
+  [ "${#sp}" -le 5 ] && [ "$sp" -le 86400 ] || return 1
+  case "${d:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
+  [ "${#d}" -le 6 ] && [ "$d" -le 100000 ] || return 1
+  case "${l:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
+  [ "${#l}" -le 6 ] && [ "$l" -le 100000 ] || return 1
+  # ttr derives locally from the published window and our own NOW, so a
+  # 1-3s-old estimate cannot trip the rebind gate into warming flicker.
+  t=$(( rst - NOW )); [ "$t" -lt 0 ] && t=0
+  burn_b5_line "$s $sp $d $l $t"
+}
+
 burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
   local f5=0 f7=0 m=0
-  # Trim/heal mutation follows the same per-(tick, window) election as the
-  # append: only the tick leader rewrites, everyone else reads.
+  # Trim/heal mutation follows the same per-(tick, window, pct) election as
+  # the append: a claim winner runs the full parse (and publishes its result);
+  # a session that lost to a covering claim adopts the published estimate
+  # when it validates, and everything else takes the plain read-only parse.
   [ "${_STATE_MUTATE:-0}" = 1 ] && state_burn_lead && m=1
-  burn_eta_5h "$m"
+  if [ "$m" = 1 ]; then
+    burn_eta_5h 1
+    burn_est_publish
+  elif [ "${_BURN_LOST:-0}" = 1 ] && [ "${_CUR_BURN_VALID:-0}" = 1 ] && burn_est_adopt; then
+    :
+  else
+    burn_eta_5h 0
+  fi
   # The 5h projection needs the same rebinding the 7d one gets: whenever the synced
   # state is what the gauge draws, the ETA has to be projected from that same window.
   # Two ways they diverge. With no reading of our own the history can still sit on
