@@ -24,7 +24,7 @@ This is the runtime default rendered from the bundled sample in a clean `main` w
 | `model` | yes | active Claude model |
 | `effort` | no | reasoning effort: `low`, `med`, `high`, `xhigh`, or `max` |
 | `ctx` | yes | context gauge and input, output, and cache token counts |
-| `cache` | no | prompt-cache hit ratio, and the countdown to the warm cache expiring |
+| `cache` | no | prompt-cache hit ratio, and the countdown to the cache expiring or `cold` once it has |
 | `limit5h` | yes | five-hour rate-limit gauge and reset countdown |
 | `limit7d` | yes | seven-day rate-limit gauge and reset countdown |
 | `burn` | no | projected time until the binding 5h or 7d limit reaches 100% |
@@ -37,7 +37,7 @@ This is the runtime default rendered from the bundled sample in a clean `main` w
 
 Gauges change from green to yellow at 50% and red at 75%; both thresholds are configurable. `cache` reads the same thresholds inverted, because a high hit ratio is the good outcome: it turns yellow at 50% and red at 25%.
 
-`cache` needs Claude Code v2.1.263 or newer, which is where `prompt_cache` appears in the statusline payload. It hides itself before the session's first request, and drops the countdown once the cache has gone cold. Below an hour the countdown carries seconds (`10m12s`, `42s`), above it does not (`1h06m`). The countdown is the value at the last render, not a live clock: Claude Code refreshes the statusline on payload events (and once at the expiry itself), not every second, unless you set `statusLine.refreshInterval` in your settings.
+`cache` needs Claude Code v2.1.263 or newer, which is where `prompt_cache` appears in the statusline payload. It hides itself before the session's first request. Below an hour the countdown carries seconds (`10m12s`, `42s`), above it does not (`1h06m`); once the cache has gone cold, or if it never went warm, the countdown is replaced by `cold`. The percentage is the session's cumulative hit ratio, so it stays accurate either way and is never zeroed: what the marker tells you is whether there is still a cache behind it. The countdown is the value at the last render, not a live clock: Claude Code refreshes the statusline on payload events (and once at the expiry itself), not every second, unless you set `statusLine.refreshInterval` in your settings.
 
 ## Install
 
