@@ -3,3 +3,8 @@ __pycache__/
 .DS_Store
 .claude/worktrees/
 docs/superpowers/
+
+# Benchmark output. Derived artifacts: nothing in the repo reads them, and a
+# committed CSV outlives the harness revision that produced it, so a reader
+# cannot tell which defects were present when the numbers were measured.
+tools/bench/results/
