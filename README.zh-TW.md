@@ -63,7 +63,7 @@ Claude 會依環境選擇路徑、在更改偏好前詢問，並使用對應 ins
 curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash
 ```
 
-它會建議最新 release tag，也能選擇可變的 `main`。使用 `--ref v0.15.0` 或其他 ref 可略過詢問。若一行安裝無法執行，使用 [`INSTALL.md` 的 manual fallback](./INSTALL.md#manual-fallback)。
+它會建議最新 release tag，也能選擇可變的 `main`。使用 `--ref v0.16.0` 或其他 ref 可略過詢問。若一行安裝無法執行，使用 [`INSTALL.md` 的 manual fallback](./INSTALL.md#manual-fallback)。
 
 ### Windows 無 Git Bash
 
