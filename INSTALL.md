@@ -95,7 +95,7 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 
 This path is non-interactive, so it installs from `main` and skips the version prompt. To
 install a tagged release instead, ask the user which they want and pass `--ref`, e.g.
-`--ref v0.16.0` (latest release) or leave it as `main` (latest development).
+`--ref v0.16.1` (latest release) or leave it as `main` (latest development).
 
 If the user is testing a fork, keep the downloaded installer and runtime files on the same
 repo:
