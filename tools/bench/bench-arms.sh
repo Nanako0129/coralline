@@ -95,7 +95,13 @@ while [ "$r" -lt "$ROUNDS" ]; do
   done
   for arm in $order; do
     extra=""
-    case "$arm" in seeded|seedro) extra="--seed-burn 1600" ;; esac
+    # Above BURN_TRIM + BURN_SLACK (2000), so the seeded arms actually cross the
+    # rewrite threshold; 1600 sat under it and measured the read path only. The
+    # engine restores this fixture before every cohort, so each cohort gets one
+    # rewrite and then amortises, which is the steady state BURN_SLACK is for.
+    # Without that restore the warmup would have spent the single rewrite before
+    # any measurement, and 2100 would have behaved exactly like 1500.
+    case "$arm" in seeded|seedro) extra="--seed-burn 2100" ;; esac
     [ -n "$SL" ] && extra="$extra --statusline $SL"
     BASH_BIN= bash "$ENGINE" \
       --bash "$BASH_BIN" \
