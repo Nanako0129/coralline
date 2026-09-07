@@ -120,11 +120,21 @@ VL_FLOAT=0
 EOF
 fi
 
-# Steady-state fixture: a burn TSV already past BURN_TRIM makes every mutating
-# render exercise the trim/rewrite path, which an empty store never reaches.
-# Rows are valid per the reader: sample <= now, sample < reset <= now + 6h,
-# pct in canonical d.ddd form, monotonically rising toward the payload's 41.2.
-if [ "$SEED_BURN" -gt 0 ] 2>/dev/null; then
+# Steady-state fixture. Rows are valid per the reader: sample <= now,
+# sample < reset <= now + 6h, pct in canonical d.ddd form, monotonically rising
+# toward the payload's 41.2.
+#
+# What this does and does not exercise. The reader rewrites when the physical row
+# count exceeds BURN_TRIM + BURN_SLACK, 2000 with the shipped defaults, not
+# BURN_TRIM alone: an earlier version of this comment said 1500 and the widely
+# used --seed-burn 1600 therefore never reached the rewrite path at all. What a
+# large seed does reach, and what dominates steady-state cost, is the read path:
+# every render parses the whole file. Seeding above 2000 does reach the rewrite,
+# but only once, because the batching is the point of BURN_SLACK: after that
+# render the file is back under the cap. Forcing a rewrite per render would
+# measure a case the design exists to avoid.
+seed_burn_store() {
+  [ "$SEED_BURN" -gt 0 ] 2>/dev/null || return 0
   now_s="$(date +%s)"
   awk -v n="$SEED_BURN" -v now="$now_s" 'BEGIN {
     rst = now + 3600
@@ -133,6 +143,11 @@ if [ "$SEED_BURN" -gt 0 ] 2>/dev/null; then
       printf "%d\t%.3f\t%d\n", now - i, p, rst
     }
   }' > "$HOME/.claude/coralline/burn-5h.tsv"
+}
+seed_burn_store
+if [ "$SEED_BURN" -gt 0 ] 2>/dev/null && [ "$SEED_BURN" -le 2000 ]; then
+  echo "note: --seed-burn $SEED_BURN stays under the rewrite threshold (BURN_TRIM+BURN_SLACK=2000);" >&2
+  echo "      this measures the read path, not the trim/rewrite path" >&2
 fi
 
 # Payload: real repo cwd so the git probe actually runs (fork cost included).
@@ -165,6 +180,10 @@ while [ "$i" -lt 5 ]; do
   fi
   i=$((i + 1))
 done
+# The warmup appends five rows and, above the threshold, spends the one rewrite
+# the seed was good for. Restore the fixture so the timed renders start at the
+# size the flag asked for rather than at whatever the warmup left behind.
+seed_burn_store
 
 # Worker: time each statusline invoke.
 # Prefer pure-bash timing on bash 5+ (EPOCHREALTIME) so Git Bash/Windows needs no Python.
@@ -326,7 +345,7 @@ input="$TMP/input.json"
 home="$HOME"
 i=0
 while [ "\$i" -lt "\$n" ]; do
-  bash "\$worker" "\$lat_dir/w.\$i" "\$renders" "\$bash_bin" "\$statusline" "\$input" "\$home" &
+  "\$bash_bin" "\$worker" "\$lat_dir/w.\$i" "\$renders" "\$bash_bin" "\$statusline" "\$input" "\$home" &
   i=\$((i + 1))
 done
 wait
@@ -375,6 +394,18 @@ BATCH
   fi
 
   cat "$lat_dir"/w.* > "$TMP/all.$n.lat" 2>/dev/null || : > "$TMP/all.$n.lat"
+  # The marker above catches a render that ran and failed. This catches a worker
+  # that never got that far: a missing python3 on the 3.2 path kills it before it
+  # can write one, and the worker's own `exit 0` hid that from the parent. Count
+  # what actually arrived instead of trusting the workers to report, so no row can
+  # claim total_renders it does not have.
+  got_lat="$(awk 'END{print NR+0}' "$TMP/all.$n.lat")"
+  want_lat=$(( n * RENDERS ))
+  if [ "$got_lat" -ne "$want_lat" ]; then
+    echo "n=$n aborted: collected $got_lat latency samples, expected $want_lat" >&2
+    echo "no CSV row written for n=$n" >&2
+    exit 1
+  fi
   # Avoid set -- word-split pitfalls: read stats as one line
   stats_line="$(stats_file "$TMP/all.$n.lat")"
   mean_ms="$(echo "$stats_line" | awk '{print $1}')"

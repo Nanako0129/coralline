@@ -190,8 +190,11 @@ function Get-Percentile {
 if (-not $Out) {
   $resultsDir = Join-Path $RepoRoot 'tools\bench\results'
   if (-not (Test-Path $resultsDir)) {
-    # fallback under tmp parent if repo has no tools/bench
-    $resultsDir = Join-Path $Tmp 'results'
+    # Copied-alone mode: no tools/bench next to the renderer. The fallback must
+    # outlive the run. It used to sit under $Tmp, which the cleanup deletes
+    # recursively before the final line prints the path, so a successful
+    # benchmark ended by naming a file that no longer existed.
+    $resultsDir = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.coralline-bench'
   }
   New-Item -ItemType Directory -Path $resultsDir -Force | Out-Null
   $safeLabel = ($Label -replace '[\\/:*?"<>|]', '_')
