@@ -146,10 +146,23 @@ jq --arg cwd "$ROOT" --arg r5 "$RST5" --arg r7 "$RST7" '
   | .rate_limits.seven_day = {used_percentage: 78.9, resets_at: $r7}
 ' "$ROOT/test/sample-input.json" > "$TMP/input.json"
 
-# Warmup (JIT nothing, but fills burn sample + page cache)
+# Warmup (JIT nothing, but fills burn sample + page cache). A failure here is
+# fatal under set -e, but silently: the script exited with the renderer's own
+# status and no message, which reads as the harness itself crashing. Say what
+# happened instead, since a renderer that cannot start is the single most likely
+# reason someone is looking at this output.
 i=0
 while [ "$i" -lt 5 ]; do
-  "$BASH_BIN" "$STATUSLINE" < "$TMP/input.json" >/dev/null
+  # `|| rc=$?` and not `if ! cmd; then rc=$?`: inside the negated branch $? is the
+  # status of the negation, which is always 0, so the guard reported "exited 0"
+  # and exited 0 itself.
+  rc=0
+  "$BASH_BIN" "$STATUSLINE" < "$TMP/input.json" >/dev/null || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "warmup aborted: $STATUSLINE exited $rc" >&2
+    echo "no CSV written" >&2
+    exit "$rc"
+  fi
   i=$((i + 1))
 done
 
@@ -172,7 +185,13 @@ if [ -n "${EPOCHREALTIME-}" ] || [ "${BASH_VERSINFO[0]}" -ge 5 ] 2>/dev/null; th
   while [ "$r" -lt "$renders" ]; do
     start=$EPOCHREALTIME
     "$bash_bin" "$statusline" < "$input" >/dev/null 2>&1
+    rc=$?
     end=$EPOCHREALTIME
+    # A render that failed took a plausible amount of time and would otherwise be
+    # appended as a latency sample. Refuse it and let the parent abort the wave:
+    # a failure that only appears after warmup, or only under concurrency, is
+    # exactly the one a benchmark must not average into a clean-looking row.
+    if [ "$rc" -ne 0 ]; then printf 'rc=%s\n' "$rc" > "$out.failed"; exit 1; fi
     # awk portable float ms
     awk -v s="$start" -v e="$end" 'BEGIN{printf "%.3f\n", (e-s)*1000}' >> "$out"
     r=$((r + 1))
@@ -190,14 +209,19 @@ with open(input_path, "rb") as inf:
 with open(out, "w") as f:
     for _ in range(renders):
         t0 = time.perf_counter()
-        subprocess.run(
+        cp = subprocess.run(
             [bash_bin, statusline],
             input=payload,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env=env,
         )
-        f.write(f"{(time.perf_counter() - t0) * 1000.0:.3f}\n")
+        elapsed = (time.perf_counter() - t0) * 1000.0
+        if cp.returncode != 0:
+            with open(out + ".failed", "w") as ff:
+                ff.write("rc=%d\n" % cp.returncode)
+            raise SystemExit(1)
+        f.write(f"{elapsed:.3f}\n")
 PY
 fi
 exit 0
@@ -340,6 +364,15 @@ BATCH
   case "$real_s" in
     0|0.0|0.00|0.000) real_s="$wall_s" ;;
   esac
+
+  # Workers drop a .failed marker rather than a latency line. One is enough to
+  # discard the wave: the CSV must not carry a row assembled from fewer renders
+  # than it claims, or from a renderer that was not working.
+  if ls "$lat_dir"/*.failed >/dev/null 2>&1; then
+    echo "n=$n aborted: a render exited non-zero ($(cat "$lat_dir"/*.failed | tr '\n' ' '))" >&2
+    echo "no CSV row written for n=$n" >&2
+    exit 1
+  fi
 
   cat "$lat_dir"/w.* > "$TMP/all.$n.lat" 2>/dev/null || : > "$TMP/all.$n.lat"
   # Avoid set -- word-split pitfalls: read stats as one line

@@ -21,6 +21,27 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+# Two rules installed once at process scope rather than at each spawn or format
+# site. This file has two ProcessStartInfo sites and bench-windows-detail.ps1 has
+# five; patching each one leaves the next one that gets added to remember the
+# rule on its own, which is how the Bash harness and this one drifted apart.
+#
+# 1. Strip inherited coralline configuration from this process. Every child, and
+#    every runspace worker, then inherits a clean environment: CORALLINE_CONFIG
+#    would point the renderer at a config outside the fixture, CLAUDE_CONFIG_DIR
+#    would move the state store, CORALLINE_BURN_FILE would let the benchmark read
+#    and write a developer's live store, and CORALLINE_NO_SAMPLE would silence the
+#    writes the steady-state arm exists to measure.
+foreach ($_v in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
+  if ($_v -like 'CORALLINE_*' -or $_v -like 'REMORA_*' -or $_v -eq 'CLAUDE_CONFIG_DIR') {
+    [Environment]::SetEnvironmentVariable($_v, $null, 'Process')
+  }
+}
+# 2. Format numbers invariantly. Under a culture with a comma decimal separator,
+#    '{0:F3}' renders 123,456 and the comma join then splits one value across two
+#    CSV columns, so the row stops matching its header.
+[System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture
+
 if (-not $RepoRoot) {
   # tools/bench -> repo root
   $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)

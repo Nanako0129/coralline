@@ -21,6 +21,24 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+# Installed once at process scope, not at each spawn site. This file has five
+# ProcessStartInfo sites and two of them set no environment at all, so a per-site
+# rule is a rule that the next site will not have.
+#
+# 1. Strip inherited coralline configuration. Every child and every runspace then
+#    starts clean: an inherited CORALLINE_BURN_FILE would make each matrix arm read
+#    and write a developer's live store, CLAUDE_CONFIG_DIR would move the state
+#    store out of the fixture, and CORALLINE_NO_SAMPLE would change the measured
+#    workload by silencing writes.
+foreach ($_v in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
+  if ($_v -like 'CORALLINE_*' -or $_v -like 'REMORA_*' -or $_v -eq 'CLAUDE_CONFIG_DIR') {
+    [Environment]::SetEnvironmentVariable($_v, $null, 'Process')
+  }
+}
+# 2. Format numbers invariantly, so a comma decimal separator cannot split one
+#    value across two CSV columns.
+[System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture
+
 # ── fixed paths ──────────────────────────────────────────────────────────────
 if (-not (Test-Path -LiteralPath $RepoRoot)) { throw "RepoRoot missing: $RepoRoot" }
 # Both renderers default out of RepoRoot. Preferring the installed copy for one
@@ -128,6 +146,21 @@ function Set-BenchConf([string]$Name) {
   return $conf
 }
 
+# `times` prints two "<min>m<sec>s <min>m<sec>s" lines: this shell, then every
+# child it waited for. Sum all four so the figure covers the wrapper and the
+# renderer together. One home for the parse; the concurrency runspace cannot see
+# functions from this scope and repeats the arithmetic inline.
+function Get-BashCpuSeconds([string]$Stdout) {
+  $i = $Stdout.IndexOf('CORALLINE_TIMES')
+  if ($i -lt 0) { return 0.0 }
+  $inv = [Globalization.CultureInfo]::InvariantCulture
+  $total = 0.0
+  foreach ($m in [regex]::Matches($Stdout.Substring($i), '([0-9]+)m([0-9.]+)s')) {
+    $total += [double]::Parse($m.Groups[1].Value, $inv) * 60.0 + [double]::Parse($m.Groups[2].Value, $inv)
+  }
+  return $total
+}
+
 function ConvertTo-UnixPath([string]$Win) {
   if ($Win -match '^([A-Za-z]):\\(.*)$') {
     return '/' + $Matches[1].ToLower() + '/' + ($Matches[2] -replace '\\', '/')
@@ -143,9 +176,18 @@ $BashHelper = Join-Path $Work 'run-sh.sh'
   'export HOME="$1"'
   'export CORALLINE_CONFIG="$2"'
   'sl="$3"; in="$4"; mode="${5:-statusline}"'
-  'if [ "$mode" = "true" ]; then true; exit $?; fi'
-  '"$sl" < "$in" >/dev/null'
-  'exit $?'
+  '# Report this shell own CPU plus every child it waited for. The PowerShell'
+  '# parent can only see this bash wrapper, and TotalProcessorTime excludes'
+  '# children, so measuring the parent omitted statusline.sh entirely along with'
+  '# its jq and git descendants. times covers both halves in one place, which'
+  '# also keeps the spawn-baseline mode honest: there the wrapper IS the subject,'
+  '# and a renderer-only measurement would report zero for it. Called directly,'
+  '# never inside $(...), which would fork and report the subshell instead.'
+  'if [ "$mode" = "true" ]; then true; else "$sl" < "$in" >/dev/null 2>/dev/null; fi'
+  'rc=$?'
+  'echo CORALLINE_TIMES'
+  'times'
+  'exit $rc'
 ) -join "`n" | Set-Content -LiteralPath $BashHelper -Encoding ASCII -NoNewline
 # ensure trailing newline for bash
 Add-Content -LiteralPath $BashHelper -Value '' -Encoding ASCII
@@ -199,6 +241,7 @@ function Invoke-PsEmpty {
   [void]$p.Start()
   $null = $p.StandardOutput.ReadToEnd(); $null = $p.StandardError.ReadToEnd()
   $p.WaitForExit(); $sw.Stop()
+  if ($p.ExitCode -ne 0) { throw "control powershell spawn exited $($p.ExitCode)" }
   $cpu = 0.0; try { $cpu = $p.TotalProcessorTime.TotalSeconds } catch {}
   [pscustomobject]@{ Ms = $sw.Elapsed.TotalMilliseconds; Cpu = $cpu }
 }
@@ -257,9 +300,12 @@ function Invoke-BashHelper {
   $p.StartInfo = $psi
   $sw = [Diagnostics.Stopwatch]::StartNew()
   [void]$p.Start()
-  $null = $p.StandardOutput.ReadToEnd(); $null = $p.StandardError.ReadToEnd()
+  $stdout = $p.StandardOutput.ReadToEnd(); $stderr = $p.StandardError.ReadToEnd()
   $p.WaitForExit(); $sw.Stop()
-  $cpu = 0.0; try { $cpu = $p.TotalProcessorTime.TotalSeconds } catch {}
+  if ($p.ExitCode -ne 0) {
+    throw ("bash helper exited {0}: {1}" -f $p.ExitCode, ($stderr + $stdout).Trim())
+  }
+  $cpu = Get-BashCpuSeconds $stdout
   [pscustomobject]@{ Ms = $sw.Elapsed.TotalMilliseconds; Cpu = $cpu; Code = $p.ExitCode }
 }
 
@@ -436,6 +482,7 @@ if (-not $SkipConcurrency) {
             $p.StandardInput.Close()
             $null = $p.StandardOutput.ReadToEnd(); $null = $p.StandardError.ReadToEnd()
             $p.WaitForExit(); $t.Stop()
+            if ($p.ExitCode -ne 0) { throw "concurrency render exited $($p.ExitCode)" }
             $L.Add($t.Elapsed.TotalMilliseconds)
             try { $C += $p.TotalProcessorTime.TotalSeconds } catch {}
           }
@@ -468,10 +515,17 @@ if (-not $SkipConcurrency) {
             $p.StartInfo = $psi
             $t = [Diagnostics.Stopwatch]::StartNew()
             [void]$p.Start()
-            $null = $p.StandardOutput.ReadToEnd(); $null = $p.StandardError.ReadToEnd()
+            $so = $p.StandardOutput.ReadToEnd(); $null = $p.StandardError.ReadToEnd()
             $p.WaitForExit(); $t.Stop()
+            if ($p.ExitCode -ne 0) { throw "concurrency bash render exited $($p.ExitCode)" }
             $L.Add($t.Elapsed.TotalMilliseconds)
-            try { $C += $p.TotalProcessorTime.TotalSeconds } catch {}
+            # $p is the bash wrapper; the renderer is its child and is excluded from
+            # TotalProcessorTime. The helper prints `times` instead, covering both.
+            $inv = [Globalization.CultureInfo]::InvariantCulture
+            $tail = $so.Substring([Math]::Max(0, $so.IndexOf('CORALLINE_TIMES')))
+            foreach ($mm in [regex]::Matches($tail, '([0-9]+)m([0-9.]+)s')) {
+              $C += [double]::Parse($mm.Groups[1].Value, $inv) * 60.0 + [double]::Parse($mm.Groups[2].Value, $inv)
+            }
           }
           ,@{ Lat = $L.ToArray(); Cpu = $C }
         }
