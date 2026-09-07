@@ -188,12 +188,18 @@ function Get-Percentile {
 }
 
 if (-not $Out) {
-  $resultsDir = Join-Path $RepoRoot 'tools\bench\results'
-  if (-not (Test-Path $resultsDir)) {
-    # Copied-alone mode: no tools/bench next to the renderer. The fallback must
-    # outlive the run. It used to sit under $Tmp, which the cleanup deletes
-    # recursively before the final line prints the path, so a successful
-    # benchmark ended by naming a file that no longer existed.
+  # Detect copied-alone mode from tools\bench, not from results\. results\ is
+  # gitignored and therefore absent in every clean checkout, so testing for it
+  # sent normal repository runs to the fallback. When tools\bench exists this is
+  # a repository, and the missing results\ is created rather than avoided.
+  $benchDir = Join-Path $RepoRoot 'tools\bench'
+  if (Test-Path -LiteralPath $benchDir) {
+    $resultsDir = Join-Path $benchDir 'results'
+  } else {
+    # Copied alone next to the renderer. The fallback must outlive the run: it
+    # used to sit under $Tmp, which the cleanup deletes recursively before the
+    # final line prints the path, so a successful benchmark ended by naming a
+    # file that no longer existed.
     $resultsDir = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.coralline-bench'
   }
   New-Item -ItemType Directory -Path $resultsDir -Force | Out-Null

@@ -161,6 +161,19 @@ jq --arg cwd "$ROOT" --arg r5 "$RST5" --arg r7 "$RST7" '
   | .rate_limits.seven_day = {used_percentage: 78.9, resets_at: $r7}
 ' "$ROOT/test/sample-input.json" > "$TMP/input.json"
 
+# Immutable fixture. Every render mutates the store: it appends a burn sample and,
+# above the threshold, spends the single rewrite the seed was good for. Without a
+# restore, the warmup consumes it and then each concurrency cohort inherits what
+# the previous one appended, so n=2 parses a longer history than n=1 and the
+# reported N-scaling is partly a history-size curve. Snapshot the seeded state
+# here, before anything has run against it, and restore it before every cohort.
+STATE_TEMPLATE="$TMP/state-template"
+cp -R "$HOME/.claude/coralline" "$STATE_TEMPLATE"
+restore_state() {
+  rm -rf "$HOME/.claude/coralline"
+  cp -R "$STATE_TEMPLATE" "$HOME/.claude/coralline"
+}
+
 # Warmup (JIT nothing, but fills burn sample + page cache). A failure here is
 # fatal under set -e, but silently: the script exited with the renderer's own
 # status and no message, which reads as the harness itself crashing. Say what
@@ -180,10 +193,6 @@ while [ "$i" -lt 5 ]; do
   fi
   i=$((i + 1))
 done
-# The warmup appends five rows and, above the threshold, spends the one rewrite
-# the seed was good for. Restore the fixture so the timed renders start at the
-# size the flag asked for rather than at whatever the warmup left behind.
-seed_burn_store
 
 # Worker: time each statusline invoke.
 # Prefer pure-bash timing on bash 5+ (EPOCHREALTIME) so Git Bash/Windows needs no Python.
@@ -327,6 +336,8 @@ for cand in /usr/bin/time /bin/time gtime; do
 done
 
 for n in $NS; do
+  # Identical fixture per cohort, so n is the only thing that varies.
+  restore_state
   lat_dir="$TMP/lat.$n"
   rm -rf "$lat_dir"
   mkdir -p "$lat_dir"

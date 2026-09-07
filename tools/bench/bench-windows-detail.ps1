@@ -99,6 +99,23 @@ if (-not (Test-Path (Join-Path $GitCwd '.git'))) {
 $NoGitCwd = Join-Path $Work 'not-a-repo'
 New-Item -ItemType Directory -Path $NoGitCwd -Force | Out-Null
 
+# Immutable per-arm fixture. Every burn-enabled render appends to the store under
+# $HomeIso, and the arms run in sequence against the same directory: the Git Bash
+# arm of a matrix entry starts after PowerShell has already added its warmups and
+# $Samples renders, and later entries inherit all of it. Runtime differences then
+# include a history-size difference. Snapshot the clean state now and restore it
+# before each arm, which is what BENCHMARK.md's identical-per-arm fixture means.
+$StateTemplate = Join-Path $Work 'state-template'
+function Save-StateTemplate {
+  if (Test-Path -LiteralPath $StateTemplate) { Remove-Item -LiteralPath $StateTemplate -Recurse -Force }
+  Copy-Item -LiteralPath (Join-Path $HomeIso '.claude\coralline') -Destination $StateTemplate -Recurse -Force
+}
+function Restore-State {
+  $live = Join-Path $HomeIso '.claude\coralline'
+  if (Test-Path -LiteralPath $live) { Remove-Item -LiteralPath $live -Recurse -Force }
+  Copy-Item -LiteralPath $StateTemplate -Destination $live -Recurse -Force
+}
+
 function New-BenchPayload([string]$Cwd) {
   $now = [DateTime]::UtcNow
   $o = [ordered]@{
@@ -129,6 +146,8 @@ $PayloadNoGit = Join-Path $Work 'payload-nogit.json'
 $utf8 = New-Object System.Text.UTF8Encoding $false
 [IO.File]::WriteAllText($PayloadGit, (New-BenchPayload $GitCwd), $utf8)
 [IO.File]::WriteAllText($PayloadNoGit, (New-BenchPayload $NoGitCwd), $utf8)
+
+Save-StateTemplate
 
 $Presets = [ordered]@{
   'minimal' = "VL_STYLE=`"pill`"`nVL_LAYOUT=`"fixed`"`nVL_SEGMENTS=`"model clock`"`nVL_LIMIT_SYNC=0`nVL_FLOAT=0`nVL_CLOCK=`"24h`"`nVL_CLOCK_SECONDS=0`n"
@@ -279,6 +298,12 @@ function Invoke-PsStatusline {
   $null = $p.StandardOutput.ReadToEnd(); $null = $p.StandardError.ReadToEnd()
   $p.WaitForExit(); $sw.Stop()
   $cpu = 0.0; try { $cpu = $p.TotalProcessorTime.TotalSeconds } catch {}
+  # Throw rather than hand the caller a Code it will not look at. Every caller of
+  # this function ignored it, including the warmup, so a failed render became a
+  # matrix sample. Invoke-BashHelper and Invoke-PsEmpty already throw; this was the
+  # sequential path a grep for 'ExitCode' wrongly reported as covered, because the
+  # name appears in the object being returned rather than in a check.
+  if ($p.ExitCode -ne 0) { throw "statusline.ps1 exited $($p.ExitCode)" }
   [pscustomobject]@{ Ms = $sw.Elapsed.TotalMilliseconds; Cpu = $cpu; Ws = $ws; Priv = $priv; Code = $p.ExitCode }
 }
 
@@ -403,6 +428,7 @@ $matrix = @(
 
 foreach ($m in $matrix) {
   $conf = Set-BenchConf $m.name
+  Restore-State
   1..3 | ForEach-Object { [void](Invoke-PsStatusline -InputPath $m.path -ConfPath $conf) }
 
   $lat = New-Object Collections.Generic.List[double]
@@ -423,6 +449,7 @@ foreach ($m in $matrix) {
     $m.name, $s.mean_ms, $net, $s.p95_ms, $s.cpu_s_per_render, $s.peak_ws_mb)
 
   if (-not $SkipGitBash) {
+    Restore-State
     1..3 | ForEach-Object { [void](Invoke-BashHelper -ConfPath $conf -InputPath $m.path -Mode statusline) }
     $lat = New-Object Collections.Generic.List[double]
     $cpu = 0.0
