@@ -63,7 +63,7 @@ Run the interactive installer:
 curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash
 ```
 
-It recommends the latest tagged release or lets you choose mutable `main`. Skip the prompt with `--ref v0.16.0` or another ref. If the one-line path cannot run, use the [manual fallback in `INSTALL.md`](./INSTALL.md#manual-fallback).
+It recommends the latest tagged release or lets you choose mutable `main`. Skip the prompt with `--ref v0.16.1` or another ref. If the one-line path cannot run, use the [manual fallback in `INSTALL.md`](./INSTALL.md#manual-fallback).
 
 ### Windows without Git Bash
 
