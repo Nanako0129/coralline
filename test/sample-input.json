@@ -13,6 +13,12 @@
       "cache_creation_input_tokens": 4321
     }
   },
+  "prompt_cache": {
+    "warm": true,
+    "ttl": "5m",
+    "expires_at": 1893456000,
+    "hit_ratio": 0.9812
+  },
   "rate_limits": {
     "five_hour": { "used_percentage": 41.2, "resets_at": "2030-01-01T09:30:00Z" },
     "seven_day": { "used_percentage": 78.9, "resets_at": "2030-01-03T00:00:00Z" }

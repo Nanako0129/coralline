@@ -15,7 +15,7 @@ P10K_FILE="${P10K_CONFIG:-$HOME/.p10k.zsh}"
 
 # Fallback list, used only when the runtime statusline cannot be scanned.
 # The live list is derived from statusline.sh's seg_* functions by load_segment_choices.
-SEGMENT_CHOICES="dir project git node python model effort ctx limit5h limit7d burn lines cost style duration stash clock"
+SEGMENT_CHOICES="dir project git node python model effort ctx cache limit5h limit7d burn lines cost style duration stash clock"
 DEFAULT_SEGMENTS="dir git model ctx limit5h limit7d cost clock"
 THEME_CHOICES=""
 theme_choices_loaded=0
@@ -308,7 +308,12 @@ prepare_preview_input() {
   [ -n "$sample" ] && need_file "$sample"
   input=$(mktemp "${TMPDIR:-/tmp}/coralline-input.XXXXXX") || exit 1
   if [ -n "$sample" ]; then
-    jq --arg cwd "$SCRIPT_DIR" '.cwd = $cwd | .workspace.current_dir = $cwd' "$sample" > "$input" 2>/dev/null || cp "$sample" "$input"
+    # The sample's fixed prompt_cache.expires_at would preview as a countdown
+    # years long; rebase it onto jq's own clock so `cache` previews a plausible
+    # remaining TTL. jq's `now` keeps this inside the existing call (no fork).
+    jq --arg cwd "$SCRIPT_DIR" '.cwd = $cwd | .workspace.current_dir = $cwd
+      | if has("prompt_cache") then .prompt_cache.expires_at = (now + 600 | floor) else . end' \
+      "$sample" > "$input" 2>/dev/null || cp "$sample" "$input"
   else
     jq -n --arg cwd "$SCRIPT_DIR" '{cwd: $cwd, workspace: {current_dir: $cwd}}' > "$input"
   fi

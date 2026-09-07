@@ -92,5 +92,19 @@ render 'VL_CTX_GLYPH="◔"
 '
 check "VL_CTX_GLYPH leaves ⬢ alone"         "$(has '⬢')"
 
+# (6) VL_CACHE_GLYPH / seg_cache. ⛁ U+26C1 is plain Unicode too, and is absent
+#     from every Nerd Font on the machine this was written on (JetBrainsMono and
+#     Meslo, all weights, cmap-checked), so it depends on the same fallback path
+#     #47 is about. The segment is opt-in, so the extra config adds it to the row.
+render 'VL_SEGMENTS="project ctx cache"
+'
+check "default cache glyph is ⛁"            "$(has '⛁')"
+render 'VL_SEGMENTS="project ctx cache"
+VL_CACHE_GLYPH="◍"
+'
+check "VL_CACHE_GLYPH renders the override" "$(has '◍')"
+check "VL_CACHE_GLYPH drops the default ⛁"  "$(lacks '⛁')"
+check "VL_CACHE_GLYPH leaves ⬡ alone"       "$(has '⬡')"
+
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES\n'
 exit "$fail"

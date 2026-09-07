@@ -24,6 +24,7 @@
 | `model` | 是 | 目前使用的 Claude model |
 | `effort` | 否 | 推理強度：`low`、`med`、`high`、`xhigh` 或 `max` |
 | `ctx` | 是 | context 用量條與輸入、輸出、快取 token 數 |
+| `cache` | 否 | prompt cache 命中率，以及快取失效的倒數 |
 | `limit5h` | 是 | 五小時額度量表與重置倒數 |
 | `limit7d` | 是 | 七天額度量表與重置倒數 |
 | `burn` | 否 | 綁定中的 5h 或 7d 額度到達 100% 的預估時間 |
@@ -34,7 +35,9 @@
 | `stash` | 否 | git stash 數量 |
 | `clock` | 是 | 12 或 24 小時制時鐘 |
 
-量表會從綠色變成 50% 的黃色與 75% 的紅色；兩個門檻都能自訂。
+量表會從綠色變成 50% 的黃色與 75% 的紅色；兩個門檻都能自訂。`cache` 使用同樣的門檻但方向相反，因為命中率高才是好結果：低於 50% 轉黃、低於 25% 轉紅。
+
+`cache` 需要 Claude Code v2.1.263 以上，`prompt_cache` 是從該版本開始出現在 statusline payload 裡。session 送出第一個 request 之前這一段會自我隱藏，快取變冷之後則只省略倒數。倒數在一小時以內會顯示秒數（`10m12s`、`42s`），超過一小時則不顯示（`1h06m`）。倒數顯示的是「上次 render 當下」的值，不是即時時鐘：Claude Code 只在 payload 事件（以及快取到期的那一刻）重繪 statusline，不會每秒重繪，除非你在 settings 裡設定 `statusLine.refreshInterval`。
 
 ## 安裝
 
@@ -111,7 +114,7 @@ Bash 讀取 `~/.claude/coralline.conf`，原生 renderer 也能讀同一個檔�
 | `VL_CLOCK` / `VL_CLOCK_SECONDS` | `12h` / `1` | `12h`、`24h` 或 `off`；秒數開關 |
 | `VL_BAR_WIDTH` | `5` | 量表寬度 |
 | `VL_BAR_FILL` / `VL_BAR_EMPTY` | `▰` / `▱` | 量表字符 |
-| `VL_CTX_GLYPH` / `VL_PROJECT_GLYPH` | `⬡` / `⬢` | context 與 project 字符 |
+| `VL_CTX_GLYPH` / `VL_PROJECT_GLYPH` / `VL_CACHE_GLYPH` | `⬡` / `⬢` / `⛁` | context、project 與 cache 字符 |
 | `VL_PATH_DEPTH` / `VL_NAME_MAX` | `4` / `0` | 路徑摺疊與選用的名稱截斷 |
 | `VL_COST_DECIMALS` | `2` | 費用顯示精度 |
 | `VL_CTX_ALWAYS_SHOW` / `VL_COST_ALWAYS_SHOW` | `0` / `0` | 把有效但缺失／空白的 context 或 cost 顯示為零 |
