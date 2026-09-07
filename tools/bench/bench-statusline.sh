@@ -4,7 +4,7 @@
 #
 # Usage:
 #   bash tools/bench/bench-statusline.sh [--bash /path/to/bash] [--label NAME]
-#                                        [--renders N] [--waves W] [--out FILE]
+#                                        [--renders N] [--pace-s S] [--out FILE]
 #
 # Isolates HOME + CORALLINE_* state under a temp dir and removes it on exit.
 set -eu
@@ -14,7 +14,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BASH_BIN="${BASH_BIN:-bash}"
 LABEL=""
 RENDERS=20          # per-worker renders at each concurrency n
-WAVES=1             # reserved; workers each do RENDERS sequential loops
+PACE_S=0            # --pace-s S: hold render starts at least S seconds apart
+ALLOW_LIVE=0        # --allow-live-statusline: measure anyway with a live statusline configured
 OUT=""
 NS="1 2 4 8 16"
 KEEP_TMP=0
@@ -31,6 +32,8 @@ while [ $# -gt 0 ]; do
     --ns)     NS="$2"; shift 2 ;;
     --conf)   CONF_SRC="$2"; shift 2 ;;
     --seed-burn) SEED_BURN="$2"; shift 2 ;;
+    --pace-s) PACE_S="$2"; shift 2 ;;
+    --allow-live-statusline) ALLOW_LIVE=1; shift ;;
     --statusline) STATUSLINE="$2"; shift 2 ;;
     --keep-tmp) KEEP_TMP=1; shift ;;
     -h|--help)
@@ -65,6 +68,31 @@ if [ "$HAVE_PY" != "1" ]; then
     echo "python3 (with time/statistics) required for bash < 5" >&2
     exit 1
   fi
+fi
+
+REAL_CFG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+
+# BENCHMARK.md requires that no live statusline runs during a measurement: an
+# open Claude Code session re-executes the same renderer once per second for the
+# whole run, and that load already invalidated one set of results. Recording the
+# load average does not undo it, and pairing does not cancel it either, because
+# the interference is not constant across arms.
+#
+# This refuses rather than editing the user's settings. A script that disables a
+# live statusline has to restore it, and a restore path that fails on a signal
+# leaves the user with no statusline and no idea why. Naming the file and the key
+# is enough for the operator to do it deliberately.
+if [ "$ALLOW_LIVE" != "1" ]; then
+  for _st in "$REAL_CFG_DIR/settings.json" "$REAL_CFG_DIR/settings.local.json"; do
+    [ -f "$_st" ] || continue
+    if jq -e 'has("statusLine") or has("subagentStatusLine")' "$_st" >/dev/null 2>&1; then
+      echo "refusing to measure: a statusline is configured in $_st" >&2
+      echo "  an open Claude Code session runs it once per second for the whole run" >&2
+      echo "  remove the statusLine / subagentStatusLine keys, or pass --allow-live-statusline" >&2
+      exit 1
+    fi
+  done
+  unset _st
 fi
 
 # ── isolated state ──────────────────────────────────────────────────────────
@@ -199,7 +227,7 @@ done
 # Fall back to a short python3 helper on bash 3.2 (macOS stock).
 cat > "$TMP/worker.sh" << 'WORKER'
 #!/usr/bin/env bash
-# args: out renders bash_bin statusline input home
+# args: out renders bash_bin statusline input home pace_s
 set +e
 out="$1"
 renders="$2"
@@ -207,6 +235,25 @@ bash_bin="$3"
 statusline="$4"
 input="$5"
 export HOME="$6"
+pace_s="${7:-0}"
+# Claude Code re-renders once per second, and statusline.sh elects one burn
+# writer per (second, window, pct). A tight loop therefore lets one render write
+# and the rest take the read path, so a fast cohort measures a mutation rate the
+# real client never has. Pacing restores it. The wait must not fork: a per-render
+# `sleep` would add its own CPU to the wave total, which is the verdict metric.
+# read -t on a fifo nobody writes to blocks for exactly the timeout, and costs one
+# mkfifo per worker rather than one process per render.
+pace_fd_ready=0
+if [ "$pace_s" != "0" ]; then
+  # Not "$out.pace": the parent collects latencies with w.*, and cat on a fifo
+  # blocks forever. Same reason the failure marker is named failed.w.N.
+  pace_fifo="${out%/*}/pace.${out##*/}"
+  if mkfifo "$pace_fifo" 2>/dev/null; then exec 9<>"$pace_fifo"; pace_fd_ready=1; fi
+fi
+pace_wait() {  # $1 = seconds to wait, may be fractional on bash 5
+  [ "$pace_fd_ready" = 1 ] || return 0
+  read -t "$1" -u 9 _pace_discard 2>/dev/null || :
+}
 : > "$out"
 r=0
 if [ -n "${EPOCHREALTIME-}" ] || [ "${BASH_VERSINFO[0]}" -ge 5 ] 2>/dev/null; then
@@ -219,17 +266,22 @@ if [ -n "${EPOCHREALTIME-}" ] || [ "${BASH_VERSINFO[0]}" -ge 5 ] 2>/dev/null; th
     # appended as a latency sample. Refuse it and let the parent abort the wave:
     # a failure that only appears after warmup, or only under concurrency, is
     # exactly the one a benchmark must not average into a clean-looking row.
-    if [ "$rc" -ne 0 ]; then printf 'rc=%s\n' "$rc" > "$out.failed"; exit 1; fi
+    if [ "$rc" -ne 0 ]; then printf 'rc=%s\n' "$rc" > "${out%/*}/failed.${out##*/}"; exit 1; fi
     # awk portable float ms
     awk -v s="$start" -v e="$end" 'BEGIN{printf "%.3f\n", (e-s)*1000}' >> "$out"
     r=$((r + 1))
+    if [ "$pace_s" != "0" ] && [ "$r" -lt "$renders" ]; then
+      rest="$(awk -v s="$start" -v n="$EPOCHREALTIME" -v p="$pace_s" 'BEGIN{d=p-(n-s); print (d>0)?d:0}')"
+      [ "$rest" = "0" ] || pace_wait "$rest"
+    fi
   done
 else
   # bash 3.2: python3 high-res timer wrapper (one process per worker, not per render)
-  python3 - "$out" "$renders" "$bash_bin" "$statusline" "$input" "$HOME" << 'PY'
+  python3 - "$out" "$renders" "$bash_bin" "$statusline" "$input" "$HOME" "$pace_s" << 'PY'
 import os, subprocess, sys, time
-out, renders_s, bash_bin, statusline, input_path, home = sys.argv[1:7]
+out, renders_s, bash_bin, statusline, input_path, home, pace_s = sys.argv[1:8]
 renders = int(renders_s)
+pace = float(pace_s)
 env = os.environ.copy()
 env["HOME"] = home
 with open(input_path, "rb") as inf:
@@ -246,10 +298,17 @@ with open(out, "w") as f:
         )
         elapsed = (time.perf_counter() - t0) * 1000.0
         if cp.returncode != 0:
-            with open(out + ".failed", "w") as ff:
+            marker = out.rsplit("/", 1)
+            marker = marker[0] + "/failed." + marker[1] if len(marker) == 2 else "failed." + out
+            with open(marker, "w") as ff:
                 ff.write("rc=%d\n" % cp.returncode)
             raise SystemExit(1)
         f.write(f"{elapsed:.3f}\n")
+        # Same 1 Hz reasoning as the bash branch; time.sleep costs no process.
+        if pace > 0 and _ < renders - 1:
+            rest = pace - (time.perf_counter() - t0)
+            if rest > 0:
+                time.sleep(rest)
 PY
 fi
 exit 0
@@ -354,9 +413,10 @@ bash_bin="$BASH_BIN"
 statusline="$STATUSLINE"
 input="$TMP/input.json"
 home="$HOME"
+pace_s="$PACE_S"
 i=0
 while [ "\$i" -lt "\$n" ]; do
-  "\$bash_bin" "\$worker" "\$lat_dir/w.\$i" "\$renders" "\$bash_bin" "\$statusline" "\$input" "\$home" &
+  "\$bash_bin" "\$worker" "\$lat_dir/w.\$i" "\$renders" "\$bash_bin" "\$statusline" "\$input" "\$home" "\$pace_s" &
   i=\$((i + 1))
 done
 wait
@@ -398,8 +458,8 @@ BATCH
   # Workers drop a .failed marker rather than a latency line. One is enough to
   # discard the wave: the CSV must not carry a row assembled from fewer renders
   # than it claims, or from a renderer that was not working.
-  if ls "$lat_dir"/*.failed >/dev/null 2>&1; then
-    echo "n=$n aborted: a render exited non-zero ($(cat "$lat_dir"/*.failed | tr '\n' ' '))" >&2
+  if ls "$lat_dir"/failed.* >/dev/null 2>&1; then
+    echo "n=$n aborted: a render exited non-zero ($(cat "$lat_dir"/failed.* | tr '\n' ' '))" >&2
     echo "no CSV row written for n=$n" >&2
     exit 1
   fi

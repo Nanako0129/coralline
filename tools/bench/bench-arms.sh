@@ -12,6 +12,14 @@
 # Usage:
 #   bash tools/bench/bench-arms.sh [--bash /path/to/bash] [--rounds R]
 #                                  [--renders N] [--ns "1 4 8 16"] [--outdir DIR]
+#                                  [--pace-s S] [--allow-live-statusline]
+#
+# Renders are paced to 1 Hz by default, because that is the cadence the client
+# actually runs at and the burn writer is elected once per second: a tight loop
+# lets one render in three write and then reports the average as a per-second
+# figure. Pacing is what makes agg_cpu_ms_per_s_at_1hz mean what it says, and it
+# is also what makes a full default run take on the order of a quarter hour.
+# --pace-s 0 restores the old tight loop for latency-only questions.
 set -eu
 # bash 3.2-safe: no mapfile, no arrays required beyond positional lists
 
@@ -23,6 +31,8 @@ RENDERS=10
 NS="1 4 8 16"
 OUTDIR=""
 SL=""
+PACE_S=1            # the client re-renders at 1 Hz; see the note above the arms
+ALLOW_LIVE_FLAG=""  # forwarded to the engine, which refuses to measure otherwise
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -32,6 +42,8 @@ while [ $# -gt 0 ]; do
     --ns)      NS="$2"; shift 2 ;;
     --outdir)  OUTDIR="$2"; shift 2 ;;
     --statusline) SL="$2"; shift 2 ;;
+    --pace-s)  PACE_S="$2"; shift 2 ;;
+    --allow-live-statusline) ALLOW_LIVE_FLAG="--allow-live-statusline"; shift ;;
     -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -45,6 +57,11 @@ mkdir -p "$OUTDIR"
 # control:  byte-identical to stateon — its delta vs stateon is the noise floor
 # stateoff: same segments minus burn, no limit sync (no state store at all)
 # nogit:    stateoff minus git/stash (no git fork)
+# floor:    a bare interpreter. nogit still runs the whole renderer (config load,
+#           JSON parse, dir, model, ctx, limits, cost, clock, layout), so it is
+#           not the interpreter/fork floor this script's header attributes the
+#           residual to. This arm is: spawn the interpreter, do nothing, exit.
+#           stateoff - floor is rendering cost; floor is what no change can remove.
 cat > "$OUTDIR/conf.stateon" << 'EOF'
 . ~/.claude/coralline/themes/claude-coral.conf
 VL_STYLE="pill"
@@ -61,12 +78,15 @@ sed -e 's/ burn//' -e 's/VL_LIMIT_SYNC=1/VL_LIMIT_SYNC=0/' \
 sed -e 's/ git//' "$OUTDIR/conf.stateoff" > "$OUTDIR/conf.nogit"
 # seeded: same config as stateon, but the burn TSV starts past BURN_TRIM so
 # every mutating render pays the steady-state trim/rewrite path.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$OUTDIR/floor.sh"
+chmod +x "$OUTDIR/floor.sh"
+cp "$OUTDIR/conf.stateon" "$OUTDIR/conf.floor"
 cp "$OUTDIR/conf.stateon" "$OUTDIR/conf.seeded"
 # seedro: seeded store, read-only render (conf is sourced bash, so the no-sample
 # guard can be set there). seeded - seedro = the write/trim path at cap.
 { cat "$OUTDIR/conf.stateon"; echo 'CORALLINE_NO_SAMPLE=1'; } > "$OUTDIR/conf.seedro"
 
-ARMS="stateon control stateoff nogit seeded seedro"
+ARMS="stateon control stateoff nogit floor seeded seedro"
 ARM_COUNT=6
 
 loadavg() { sysctl -n vm.loadavg 2>/dev/null || uptime; }
@@ -102,12 +122,16 @@ while [ "$r" -lt "$ROUNDS" ]; do
     # Without that restore the warmup would have spent the single rewrite before
     # any measurement, and 2100 would have behaved exactly like 1500.
     case "$arm" in seeded|seedro) extra="--seed-burn 2100" ;; esac
-    [ -n "$SL" ] && extra="$extra --statusline $SL"
+    arm_sl="$SL"
+    case "$arm" in floor) arm_sl="$OUTDIR/floor.sh" ;; esac
+    [ -n "$arm_sl" ] && extra="$extra --statusline $arm_sl"
     BASH_BIN= bash "$ENGINE" \
       --bash "$BASH_BIN" \
       --label "$arm.r$r" \
       --conf "$OUTDIR/conf.$arm" \
       --renders "$RENDERS" \
+      --pace-s "$PACE_S" \
+      $ALLOW_LIVE_FLAG \
       --ns "$NS" \
       $extra \
       --out "$OUTDIR/raw.$arm.r$r.csv" >/dev/null
