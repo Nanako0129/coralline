@@ -306,6 +306,12 @@ function New-Payload([string]$Cwd) {
                 cache_creation_input_tokens = 4321
             }
         }
+        prompt_cache = [ordered]@{
+            warm = $true
+            ttl = '5m'
+            expires_at = 1000300
+            hit_ratio = 0.9812
+        }
         rate_limits = [ordered]@{
             five_hour = [ordered]@{ used_percentage = 41.2; resets_at = '' }
             seven_day = [ordered]@{ used_percentage = 78.9; resets_at = '' }
@@ -549,7 +555,7 @@ esac
     Check 'reparse validation precedes config read' ($source.IndexOf('Test-SafeRegularFile $Path') -lt $source.IndexOf('Read-StrictUtf8File $Path'))
     Check 'Bash oracle main extraction contains central scrub' ($bashSource.Contains('] | map(scrub) | join('))
 
-    $expectedRegistry = @('burn','clock','cost','ctx','dir','duration','effort','git','limit5h','limit7d','lines','model','node','project','python','stash','style')
+    $expectedRegistry = @('burn','cache','clock','cost','ctx','dir','duration','effort','git','limit5h','limit7d','lines','model','node','project','python','stash','style')
     $builderBlock = [regex]::Match($source, '(?s)\$SegmentBuilders = \[ordered\]@\{(.*?)\n\}').Groups[1].Value
     $actualRegistry = @([regex]::Matches($builderBlock, '(?m)^    ([A-Za-z0-9]+) =') | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
     Check 'closed PowerShell registry equals WIN-02 inventory' (($actualRegistry -join ' ') -eq (($expectedRegistry | Sort-Object) -join ' '))
@@ -1354,6 +1360,9 @@ fi
     $burnPayload.rate_limits.seven_day.resets_at = '1345600'
     $segmentCases = [ordered]@{
         burn = [pscustomobject]@{ Show=@('VL_SEGMENTS=burn','VL_CLOCK=off'); Needle=((Glyph 0x2197) + ' 7d ' + (Glyph 0x21E2)); Payload=$burnPayload; Environment=@{CORALLINE_TEST_NOW='1000000'}; Suppress={ param($p) $p.rate_limits.five_hour.used_percentage=$null; $p.rate_limits.seven_day.used_percentage=$null; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=burn' }
+        # The payload's expires_at (1000300) is 300s past the pinned CORALLINE_TEST_NOW,
+        # so the countdown lands on the seconds-carrying side of the one-hour boundary.
+        cache = [pscustomobject]@{ Show=@('VL_SEGMENTS=cache','VL_CLOCK=off'); Needle=((Glyph 0x26C1) + ' 98% ' + (Glyph 0x21BA) + '5m00s'); Environment=@{CORALLINE_TEST_NOW='1000000'}; Suppress={ param($p) $p.prompt_cache.hit_ratio=$null; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=cache' }
         clock = [pscustomobject]@{ Show=@('VL_SEGMENTS=clock','VL_CLOCK=24h','VL_CLOCK_SECONDS=0'); Needle=(Glyph 0x2299); Suppress={ param($p) $p }; SuppressConfig=@('VL_SEGMENTS=clock','VL_CLOCK=off') }
         cost = [pscustomobject]@{ Show=@('VL_SEGMENTS=cost','VL_CLOCK=off'); Needle='$1.23'; Suppress={ param($p) $p.cost.total_cost_usd=0; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=cost' }
         ctx = [pscustomobject]@{ Show=@('VL_SEGMENTS=ctx','VL_CLOCK=off'); Needle='62%'; Suppress={ param($p) $p.context_window.used_percentage=$null; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=ctx' }
