@@ -69,33 +69,40 @@ check "<ok> C 98% <dim>↺59m59s " "just under 1h"     "$(render '98.12' '100359
 check "<ok> C 98% <dim>↺1h00m "  "1h TTL at issue"   "$(render '98.12' '1003600')"
 check "<ok> C 98% <dim>↺1h00m "  "one second past 1h" "$(render '98.12' '1003601')"
 
-# expires_at keeps its last value after the cache goes cold, so a non-positive
-# remainder is the cold case and must print no countdown at all.
-check "<ok> C 98%  "  "expired (cold)"   "$(render '98.12' '999999')"
-check "<ok> C 98%  "  "expiring exactly" "$(render '98.12' '1000000')"
-check "<ok> C 98%  "  "no expires_at"    "$(render '98.12' '')"
+# ── Cold marker ──────────────────────────────────────────────────────────────
+# expires_at keeps its last value after the cache goes cold, and is absent entirely
+# when the cache never went warm. Both must say so: a bare percentage next to a
+# missing countdown reads as a live cache, and the two states differing only by an
+# absence is what the marker exists to fix. The percentage is the session's
+# cumulative hit ratio and stays true either way, so it is never zeroed.
+check "<ok> C 98% <dim>cold "  "expired"          "$(render '98.12' '999999')"
+check "<ok> C 98% <dim>cold "  "expiring exactly" "$(render '98.12' '1000000')"
+check "<ok> C 98% <dim>cold "  "no expires_at"    "$(render '98.12' '')"
+check "<ok> C 98% <dim>cold "  "unparseable expiry" "$(render '98.12' 'not-a-time')"
+# One second either side of the boundary must not look alike.
+check "<ok> C 98% <dim>↺1s "   "one second left"  "$(render '98.12' '1000001')"
 
 # ── Inverted thresholds ──────────────────────────────────────────────────────
 # A high hit ratio is the good outcome, so the color roles run opposite to a
 # usage gauge: pct_fg is fed 100-v. With WARN 50 / HOT 75 that puts the warn
 # boundary at 50% hit and the hot boundary at 25% hit.
-check "<ok> C 100%  "  "100% hit is ok"    "$(render '100' '')"
-check "<ok> C 51%  "   "51% hit is ok"     "$(render '51' '')"
-check "<warn> C 50%  " "50% hit warns"     "$(render '50' '')"
-check "<warn> C 26%  " "26% hit warns"     "$(render '26' '')"
-check "<hot> C 25%  "  "25% hit is hot"    "$(render '25' '')"
-check "<hot> C 0%  "   "0% hit is hot"     "$(render '0' '')"
+check "<ok> C 100% <dim>cold "  "100% hit is ok"    "$(render '100' '')"
+check "<ok> C 51% <dim>cold "   "51% hit is ok"     "$(render '51' '')"
+check "<warn> C 50% <dim>cold " "50% hit warns"     "$(render '50' '')"
+check "<warn> C 26% <dim>cold " "26% hit warns"     "$(render '26' '')"
+check "<hot> C 25% <dim>cold "  "25% hit is hot"    "$(render '25' '')"
+check "<hot> C 0% <dim>cold "   "0% hit is hot"     "$(render '0' '')"
 
 # ── Rounding and malformed input ─────────────────────────────────────────────
 # jq hands over hit_ratio * 100, which routinely arrives with float noise.
-check "<ok> C 98%  " "98.4 rounds down"  "$(render '98.4' '')"
-check "<ok> C 99%  " "98.6 rounds up"    "$(render '98.6' '')"
+check "<ok> C 98% <dim>cold " "98.4 rounds down"  "$(render '98.4' '')"
+check "<ok> C 99% <dim>cold " "98.6 rounds up"    "$(render '98.6' '')"
 # printf %.0f is IEEE round-half-to-even, the same rule seg_ctx and seg_limit
 # already display under. Both ties land on 98, not on 98 and 99.
-check "<ok> C 98%  " "98.5 ties to even" "$(render '98.5' '')"
-check "<ok> C 98%  " "97.5 ties to even" "$(render '97.5' '')"
-check "<ok> C 98%  " "float noise"       "$(render '98.00000000000001' '')"
-check "<hot> C 0%  " "non-numeric → 0%"  "$(render 'abc' '' 2>/dev/null)"
+check "<ok> C 98% <dim>cold " "98.5 ties to even" "$(render '98.5' '')"
+check "<ok> C 98% <dim>cold " "97.5 ties to even" "$(render '97.5' '')"
+check "<ok> C 98% <dim>cold " "float noise"       "$(render '98.00000000000001' '')"
+check "<hot> C 0% <dim>cold " "non-numeric → 0%"  "$(render 'abc' '' 2>/dev/null)"
 
 # ── Background fallback ──────────────────────────────────────────────────────
 # Themes that define no cache swatch must inherit the ctx pill, not a hardcoded

@@ -1535,25 +1535,32 @@ seg_ctx() {  # context-window gauge with input/output/cache token counts
   push "$VL_BG_CTX" "${fgc} ${VL_CTX_GLYPH} ${_BAR} ${ci}% ${fgd}↑${ti} ↓${to} cr:${tcr} cw:${tcw} "
 }
 
-seg_cache() {  # prompt-cache hit ratio and time left before the warm cache expires
+seg_cache() {  # prompt-cache hit ratio, and the countdown to the cache expiring
   [ -n "$cache_pct" ] || return 0
-  local v fgc left="" diff
+  local v fgc dfg left diff
   printf -v v '%.0f' "$cache_pct" 2>/dev/null || v=0
   # Inverted thresholds: cache hits are the good outcome, so 98% must read green
   # where the same number on a usage gauge reads red.
   pct_fg $(( 100 - v ))
   fg "$_PFG"; fgc="$_FG"
-  # expires_at stays at its last value once the cache goes cold, so a non-positive
-  # remainder is the cold case and prints nothing. Under an hour the seconds are
-  # shown, because the short TTL is 5 minutes and a minute-only countdown would
-  # sit on 4m for most of it; from an hour up they are dropped, since the long TTL
-  # has no use for that precision and the pill stays narrow. The row only refreshes
-  # on payload events, so read it as the value at the last render, not a live clock.
+  fg "$VL_FG_DIM"; dfg="$_FG"
+  # The percentage is the session's cumulative hit ratio, so it stays true after the
+  # cache goes cold and is never zeroed. What changes is whether anything about it is
+  # still live, and that has to be visible: without a marker a cold pill and a warm
+  # one differ only by an absence, which reads as 98% of a cache that is gone.
+  # expires_at keeps its last value once the cache goes cold and is absent entirely
+  # when the cache never went warm; both are the same thing to read, so both take the
+  # marker. Under an hour the countdown carries seconds, because the short TTL is 5
+  # minutes and a minute-only countdown would sit on 4m for most of it; from an hour
+  # up they are dropped, where the long TTL has no use for that precision and the pill
+  # stays narrow. The row only refreshes on payload events, so read the countdown as
+  # the value at the last render, not a live clock.
+  left="${dfg}cold"
   if to_epoch "$cache_exp"; then
     diff=$(( _EP - NOW ))
     if [ "$diff" -gt 0 ]; then
       fmt_duration $(( diff * 1000 )) $(( diff < 3600 ))
-      fg "$VL_FG_DIM"; left="${_FG}↺${_DUR}"
+      left="${dfg}↺${_DUR}"
     fi
   fi
   push "${VL_BG_CACHE:-$VL_BG_CTX}" "${fgc} ${VL_CACHE_GLYPH} ${v}% ${left} "
