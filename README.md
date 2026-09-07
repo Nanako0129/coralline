@@ -24,6 +24,7 @@ This is the runtime default rendered from the bundled sample in a clean `main` w
 | `model` | yes | active Claude model |
 | `effort` | no | reasoning effort: `low`, `med`, `high`, `xhigh`, or `max` |
 | `ctx` | yes | context gauge and input, output, and cache token counts |
+| `cache` | no | prompt-cache hit ratio, and the countdown to the warm cache expiring |
 | `limit5h` | yes | five-hour rate-limit gauge and reset countdown |
 | `limit7d` | yes | seven-day rate-limit gauge and reset countdown |
 | `burn` | no | projected time until the binding 5h or 7d limit reaches 100% |
@@ -34,7 +35,9 @@ This is the runtime default rendered from the bundled sample in a clean `main` w
 | `stash` | no | git stash count |
 | `clock` | yes | 12- or 24-hour clock |
 
-Gauges change from green to yellow at 50% and red at 75%; both thresholds are configurable.
+Gauges change from green to yellow at 50% and red at 75%; both thresholds are configurable. `cache` reads the same thresholds inverted, because a high hit ratio is the good outcome: it turns yellow at 50% and red at 25%.
+
+`cache` needs Claude Code v2.1.263 or newer, which is where `prompt_cache` appears in the statusline payload. It hides itself before the session's first request, and drops the countdown once the cache has gone cold. Below an hour the countdown carries seconds (`10m12s`, `42s`), above it does not (`1h06m`). The countdown is the value at the last render, not a live clock: Claude Code refreshes the statusline on payload events (and once at the expiry itself), not every second, unless you set `statusLine.refreshInterval` in your settings.
 
 ## Install
 
@@ -111,7 +114,7 @@ Bash reads `~/.claude/coralline.conf`; the native renderer can read the same fil
 | `VL_CLOCK` / `VL_CLOCK_SECONDS` | `12h` / `1` | `12h`, `24h`, or `off`; seconds toggle |
 | `VL_BAR_WIDTH` | `5` | gauge width |
 | `VL_BAR_FILL` / `VL_BAR_EMPTY` | `▰` / `▱` | gauge glyphs |
-| `VL_CTX_GLYPH` / `VL_PROJECT_GLYPH` | `⬡` / `⬢` | context and project glyphs |
+| `VL_CTX_GLYPH` / `VL_PROJECT_GLYPH` / `VL_CACHE_GLYPH` | `⬡` / `⬢` / `⛁` | context, project, and cache glyphs |
 | `VL_PATH_DEPTH` / `VL_NAME_MAX` | `4` / `0` | path collapsing and optional name truncation |
 | `VL_COST_DECIMALS` | `2` | cost precision |
 | `VL_CTX_ALWAYS_SHOW` / `VL_COST_ALWAYS_SHOW` | `0` / `0` | show valid missing/empty context or cost as zero |

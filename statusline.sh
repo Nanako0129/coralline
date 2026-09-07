@@ -52,6 +52,7 @@ VL_BAR_EMPTY="▱"
 # out of alignment (#47). Override with characters your terminal font carries.
 VL_CTX_GLYPH="⬡"                # glyph for the ctx segment (main bar and subagent rows)
 VL_PROJECT_GLYPH="⬢"            # glyph for the project segment
+VL_CACHE_GLYPH="⛁"              # glyph for the cache segment
 VL_CLOCK="12h"                  # 12h | 24h | off
 VL_CLOCK_SECONDS=1
 VL_PATH_DEPTH=4                 # collapse paths deeper than this
@@ -153,6 +154,7 @@ VL_BG_DURATION=60
 VL_BG_EFFORT=141
 VL_BG_NODE=""                   # optional; falls back to VL_BG_MODEL when empty
 VL_BG_PYTHON=""                 # optional; falls back to VL_BG_MODEL when empty
+VL_BG_CACHE=""                  # optional; falls back to VL_BG_CTX when empty
 VL_BG_BAR=""                   # classic style only — the uniform bar behind the whole
                                # row ("R,G,B" or a 256 index); empty → p10k's 238.
                                # An explicit VL_LEAN_BG overrides it.
@@ -1533,6 +1535,30 @@ seg_ctx() {  # context-window gauge with input/output/cache token counts
   push "$VL_BG_CTX" "${fgc} ${VL_CTX_GLYPH} ${_BAR} ${ci}% ${fgd}↑${ti} ↓${to} cr:${tcr} cw:${tcw} "
 }
 
+seg_cache() {  # prompt-cache hit ratio and time left before the warm cache expires
+  [ -n "$cache_pct" ] || return 0
+  local v fgc left="" diff
+  printf -v v '%.0f' "$cache_pct" 2>/dev/null || v=0
+  # Inverted thresholds: cache hits are the good outcome, so 98% must read green
+  # where the same number on a usage gauge reads red.
+  pct_fg $(( 100 - v ))
+  fg "$_PFG"; fgc="$_FG"
+  # expires_at stays at its last value once the cache goes cold, so a non-positive
+  # remainder is the cold case and prints nothing. Under an hour the seconds are
+  # shown, because the short TTL is 5 minutes and a minute-only countdown would
+  # sit on 4m for most of it; from an hour up they are dropped, since the long TTL
+  # has no use for that precision and the pill stays narrow. The row only refreshes
+  # on payload events, so read it as the value at the last render, not a live clock.
+  if to_epoch "$cache_exp"; then
+    diff=$(( _EP - NOW ))
+    if [ "$diff" -gt 0 ]; then
+      fmt_duration $(( diff * 1000 )) $(( diff < 3600 ))
+      fg "$VL_FG_DIM"; left="${_FG}↺${_DUR}"
+    fi
+  fi
+  push "${VL_BG_CACHE:-$VL_BG_CTX}" "${fgc} ${VL_CACHE_GLYPH} ${v}% ${left} "
+}
+
 seg_limit() {  # $1=label $2=pct $3=resets_at $4=bg $5=canonical pct_milli(optional)
   [ -n "$2" ] || return 0
   local v fgc rst=""
@@ -2082,14 +2108,19 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
     (member(member(.; "cost"); "total_lines_removed") // 0),
     (member(member(.; "output_style"); "name") // ""),
     (member(member(.; "cost"); "total_duration_ms") // 0),
-    (member(member(.; "effort"); "level") // "")
+    (member(member(.; "effort"); "level") // ""),
+    ((member(member(.; "prompt_cache"); "hit_ratio")) as $h |
+      if ($h|type) == "number" then ($h * 100 | tostring) else "" end),
+    ((member(member(.; "prompt_cache"); "expires_at")) as $x |
+      if ($x|type) == "number" then ($x | tostring) else "" end)
   ] | map(scrub) | join("\u001f")
   end' 2>/dev/null); then
   _JSON_OK=1
 fi
 IFS=$'\037' read -r cwd model ctx_pct _CTX_EMPTY tok_in tok_out tok_cr tok_cw \
                  fh_pct fh_rst wd_pct wd_rst cost _COST_KIND \
-                 lines_add lines_del out_style dur_ms effort <<JSON
+                 lines_add lines_del out_style dur_ms effort \
+                 cache_pct cache_exp <<JSON
 $_JSON_FIELDS
 JSON
 

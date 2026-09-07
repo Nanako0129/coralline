@@ -102,6 +102,7 @@ $Defaults = [ordered]@{
     VL_BAR_EMPTY = (Glyph 0x25B1)
     VL_CTX_GLYPH = (Glyph 0x2B21)
     VL_PROJECT_GLYPH = (Glyph 0x2B22)
+    VL_CACHE_GLYPH = (Glyph 0x26C1)
     VL_CLOCK = '12h'
     VL_CLOCK_SECONDS = '1'
     VL_PATH_DEPTH = '4'
@@ -167,6 +168,7 @@ $Defaults = [ordered]@{
     VL_BG_EFFORT = '141'
     VL_BG_NODE = ''
     VL_BG_PYTHON = ''
+    VL_BG_CACHE = ''
     VL_BG_BAR = ''
     VL_NODE_GLYPH = (Glyph 0xE718)
     VL_PY_GLYPH = (Glyph 0xE73C)
@@ -2472,6 +2474,24 @@ $fhPct = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('rate_limits
 $fhRst = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('rate_limits', 'five_hour', 'resets_at')))
 $wdPct = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('rate_limits', 'seven_day', 'used_percentage')))
 $wdRst = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('rate_limits', 'seven_day', 'resets_at')))
+# prompt_cache is absent entirely until the session's first request, and either
+# field can be null after that. Both are accepted only as JSON numbers, mirroring
+# the Bash renderer's `type == "number"` guard, so a string or an object leaves the
+# segment suppressed rather than rendering a bogus gauge. hit_ratio arrives as a
+# 0..1 ratio and is scaled here, the way the Bash side scales it inside jq.
+$cacheHit = ''
+$cacheExp = ''
+$cacheParent = Get-JsonMember $J 'prompt_cache'
+if ($cacheParent -is [pscustomobject] -or $cacheParent -is [System.Collections.IDictionary]) {
+    $hitNode = Get-JsonMember $cacheParent 'hit_ratio'
+    if ($hitNode -is [double] -or $hitNode -is [decimal] -or $hitNode -is [long] -or $hitNode -is [int]) {
+        $cacheHit = To-InvariantString ([double]$hitNode * 100)
+    }
+    $expNode = Get-JsonMember $cacheParent 'expires_at'
+    if ($expNode -is [double] -or $expNode -is [decimal] -or $expNode -is [long] -or $expNode -is [int]) {
+        $cacheExp = To-InvariantString $expNode
+    }
+}
 $costParent = Get-JsonMember $J 'cost'
 $costNode = $null
 $costKind = 'missing'
@@ -2938,6 +2958,32 @@ function Add-CtxSegment {
     Push-Segment $Cfg.VL_BG_CTX "${pfg} $($Cfg.VL_CTX_GLYPH) ${bar} ${pct}% ${dfg}$($G.Up)${ti} $($G.Down)${to} cr:${tcr} cw:${tcw} "
 }
 
+function Add-CacheSegment {
+    $pct = 0
+    if (-not (Get-PctValue $cacheHit ([ref]$pct))) { return }
+    # Inverted thresholds: cache hits are the good outcome, so 98% must read green
+    # where the same number on a usage gauge reads red.
+    $pfg = Get-Fg (Get-PctFg (100 - $pct))
+    # expires_at stays at its last value once the cache goes cold, so a non-positive
+    # remainder is the cold case and prints nothing. Under an hour the seconds are
+    # shown, because the short TTL is 5 minutes and a minute-only countdown would sit
+    # on 4m for most of it; from an hour up they are dropped. Format-Countdown is not
+    # reused here: it reports an elapsed reset as "now", which is right for a limit
+    # window and wrong for a cache that simply is not warm any more.
+    $left = ''
+    $ep = ConvertTo-Epoch $cacheExp
+    if ($null -ne $ep) {
+        $diff = [long]$ep - $Now
+        if ($diff -gt 0) {
+            $dfg = Get-Fg $Cfg.VL_FG_DIM
+            $left = "${dfg}$($G.Reset)$(Format-Duration ([double]$diff * 1000) ($diff -lt 3600))"
+        }
+    }
+    $bg = $Cfg.VL_BG_CACHE
+    if ([string]::IsNullOrEmpty($bg)) { $bg = $Cfg.VL_BG_CTX }
+    Push-Segment $bg "${pfg} $($Cfg.VL_CACHE_GLYPH) ${pct}% ${left} "
+}
+
 function Add-LimitSegment([string]$Label, [string]$RawPct, [string]$ResetsAt, [string]$Bg, [int]$PctMilli = -1) {
     $pct = 0
     if ($PctMilli -ge 0) { $pct = [int](Get-RoundEvenInt64 ([long]$PctMilli) 1000L) }
@@ -3145,6 +3191,7 @@ function Add-PythonSegment {
 
 $SegmentBuilders = [ordered]@{
     burn = { Add-BurnSegment }
+    cache = { Add-CacheSegment }
     clock = { Add-ClockSegment }
     cost = { Add-CostSegment }
     ctx = { Add-CtxSegment }

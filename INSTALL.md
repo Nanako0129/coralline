@@ -213,9 +213,12 @@ Ask concise questions. If the user says "you decide", choose the defaults.
    else `node` on `PATH`) and `python` the active env (`$VIRTUAL_ENV` / conda /
    `.python-version`, else `python3`); each stays hidden until something is detected.
    Write the chosen segments to `VL_SEGMENTS` in this canonical order (keep only the
-   ones the user wants): `dir project git node python model effort ctx limit5h limit7d
-   burn lines cost style duration stash clock`. So opting in `effort` lands it right
-   after `model`.
+   ones the user wants): `dir project git node python model effort ctx cache limit5h
+   limit7d burn lines cost style duration stash clock`. So opting in `effort` lands it
+   right after `model`.
+   `cache` (prompt-cache hit ratio plus the countdown to the cache expiring) reads
+   `prompt_cache` from the payload, which Claude Code only sends on v2.1.263 and newer;
+   on an older build it stays hidden with no other effect.
    `burn` (projected time until a rate limit binds) writes a small sample file to
    `~/.claude/coralline/burn-5h.tsv` while it is in the list, and nothing when it is not.
 4. **Layout**: responsive default (`VL_LAYOUT="auto"`, `VL_MAX_LINES=3`), single line,
