@@ -229,6 +229,9 @@ cat > "$TMP/worker.sh" << 'WORKER'
 #!/usr/bin/env bash
 # args: out renders bash_bin statusline input home pace_s
 set +e
+# EPOCHREALTIME uses the locale decimal separator, and the microsecond split below
+# assumes a dot. printf's float formatting has the same dependency.
+export LC_ALL=C
 out="$1"
 renders="$2"
 bash_bin="$3"
@@ -257,22 +260,34 @@ pace_wait() {  # $1 = seconds to wait, may be fractional on bash 5
 : > "$out"
 r=0
 if [ -n "${EPOCHREALTIME-}" ] || [ "${BASH_VERSINFO[0]}" -ge 5 ] 2>/dev/null; then
+  # No helper process may run inside the timed wave. The wave is measured with
+  # `time` (or `time -p`), which charges every process the pipeline spawns, so the
+  # per-render awk that used to convert timestamps here was billed to
+  # cpu_s_per_render, and on the Git Bash path that was the only timing mechanism
+  # available. Even the interpreter-floor arm was measuring harness work. Integer
+  # microseconds come out of EPOCHREALTIME by deleting the separator, which is
+  # parameter expansion, and one awk converts the whole file after the wave.
   while [ "$r" -lt "$renders" ]; do
-    start=$EPOCHREALTIME
+    start_us=${EPOCHREALTIME/./}
     "$bash_bin" "$statusline" < "$input" >/dev/null 2>&1
     rc=$?
-    end=$EPOCHREALTIME
+    end_us=${EPOCHREALTIME/./}
     # A render that failed took a plausible amount of time and would otherwise be
     # appended as a latency sample. Refuse it and let the parent abort the wave:
     # a failure that only appears after warmup, or only under concurrency, is
     # exactly the one a benchmark must not average into a clean-looking row.
     if [ "$rc" -ne 0 ]; then printf 'rc=%s\n' "$rc" > "${out%/*}/failed.${out##*/}"; exit 1; fi
-    # awk portable float ms
-    awk -v s="$start" -v e="$end" 'BEGIN{printf "%.3f\n", (e-s)*1000}' >> "$out"
+    printf '%s %s\n' "$start_us" "$end_us" >> "$out"
     r=$((r + 1))
     if [ "$pace_s" != "0" ] && [ "$r" -lt "$renders" ]; then
-      rest="$(awk -v s="$start" -v n="$EPOCHREALTIME" -v p="$pace_s" 'BEGIN{d=p-(n-s); print (d>0)?d:0}')"
-      [ "$rest" = "0" ] || pace_wait "$rest"
+      # Integer microsecond arithmetic, then one printf builtin to build the
+      # decimal `read -t` wants. Both are shell builtins; the previous awk here
+      # was a second per-render process inside the timed wave.
+      rem_us=$(( pace_s * 1000000 - (${EPOCHREALTIME/./} - start_us) ))
+      if [ "$rem_us" -gt 0 ]; then
+        printf -v rest '%d.%06d' $(( rem_us / 1000000 )) $(( rem_us % 1000000 ))
+        pace_wait "$rest"
+      fi
     fi
   done
 else
@@ -303,7 +318,7 @@ with open(out, "w") as f:
             with open(marker, "w") as ff:
                 ff.write("rc=%d\n" % cp.returncode)
             raise SystemExit(1)
-        f.write(f"{elapsed:.3f}\n")
+        f.write("%d %d\n" % (int(t0 * 1e6), int((t0 + elapsed / 1000.0) * 1e6)))
         # Same 1 Hz reasoning as the bash branch; time.sleep costs no process.
         if pace > 0 and _ < renders - 1:
             rest = pace - (time.perf_counter() - t0)
@@ -464,7 +479,10 @@ BATCH
     exit 1
   fi
 
-  cat "$lat_dir"/w.* > "$TMP/all.$n.lat" 2>/dev/null || : > "$TMP/all.$n.lat"
+  # Workers record "<start_us> <end_us>"; the conversion to milliseconds happens
+  # here, outside the timed region, in one process for the whole wave.
+  cat "$lat_dir"/w.* 2>/dev/null | awk 'NF==2 {printf "%.3f\n", ($2 - $1) / 1000.0}' \
+    > "$TMP/all.$n.lat" || : > "$TMP/all.$n.lat"
   # The marker above catches a render that ran and failed. This catches a worker
   # that never got that far: a missing python3 on the 3.2 path kills it before it
   # can write one, and the worker's own `exit 0` hid that from the parent. Count

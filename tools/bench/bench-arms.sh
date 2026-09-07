@@ -87,7 +87,12 @@ cp "$OUTDIR/conf.stateon" "$OUTDIR/conf.seeded"
 { cat "$OUTDIR/conf.stateon"; echo 'CORALLINE_NO_SAMPLE=1'; } > "$OUTDIR/conf.seedro"
 
 ARMS="stateon control stateoff nogit floor seeded seedro"
-ARM_COUNT=6
+# Derived, never restated. It was 6 while ARMS held seven entries, so rotation
+# wrapped at round 6 and the last arm could never lead one, leaving it in the same
+# cache and load position every round.
+ARM_COUNT=0
+for _a in $ARMS; do ARM_COUNT=$((ARM_COUNT + 1)); done
+unset _a
 
 loadavg() { sysctl -n vm.loadavg 2>/dev/null || uptime; }
 

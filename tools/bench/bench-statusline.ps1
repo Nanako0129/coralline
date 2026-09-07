@@ -15,7 +15,8 @@ param(
   [int]$Renders = 20,
   [int[]]$Ns = @(1, 2, 4, 8, 16),
   [string]$Out = '',
-  [switch]$KeepTmp
+  [switch]$KeepTmp,
+  [switch]$AllowLiveStatusline
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,6 +33,12 @@ $ProgressPreference = 'SilentlyContinue'
 #    would move the state store, CORALLINE_BURN_FILE would let the benchmark read
 #    and write a developer's live store, and CORALLINE_NO_SAMPLE would silence the
 #    writes the steady-state arm exists to measure.
+# Captured before the strip below removes CLAUDE_CONFIG_DIR, which names the very
+# directory the live-statusline check has to read. Reading it afterwards silently
+# fell back to the default path, so an operator whose config lives elsewhere would
+# have passed the check with a statusline running.
+$RealCfgDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.claude' }
+
 foreach ($_v in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
   if ($_v -like 'CORALLINE_*' -or $_v -like 'REMORA_*' -or $_v -eq 'CLAUDE_CONFIG_DIR') {
     [Environment]::SetEnvironmentVariable($_v, $null, 'Process')
@@ -41,6 +48,21 @@ foreach ($_v in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
 #    '{0:F3}' renders 123,456 and the comma join then splits one value across two
 #    CSV columns, so the row stops matching its header.
 [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture
+# 3. Refuse to measure while a statusline is configured. An open Claude session
+#    re-executes the same renderer once per second for the whole run, and pairing
+#    does not cancel interference that is not constant across cohorts. This
+#    refuses rather than editing settings.json: a restore path that fails on a
+#    signal would leave the user with no statusline and no explanation.
+if (-not $AllowLiveStatusline) {
+  foreach ($f in @('settings.json', 'settings.local.json')) {
+    $path = Join-Path $RealCfgDir $f
+    if (-not (Test-Path -LiteralPath $path)) { continue }
+    try { $cfg = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json } catch { continue }
+    if ($cfg.PSObject.Properties['statusLine'] -or $cfg.PSObject.Properties['subagentStatusLine']) {
+      throw "refusing to measure: a statusline is configured in $path. An open Claude Code session runs it once per second for the whole run. Remove the statusLine / subagentStatusLine keys, or pass -AllowLiveStatusline."
+    }
+  }
+}
 
 if (-not $RepoRoot) {
   # tools/bench -> repo root
@@ -172,6 +194,20 @@ function Invoke-StatuslineOnce {
   return $p
 }
 
+# Immutable fixture. Every render appends to the store under $HomeIso, so without
+# a restore the warmup mutates it and each cohort then inherits what the previous
+# one appended: n=2 parses a longer history than n=1 and the reported N-scaling is
+# partly a history-size curve. Snapshot before anything runs, restore before each
+# cohort. Same mechanism as the Bash harness.
+$StateTemplate = Join-Path $Tmp 'state-template'
+$LiveState = Join-Path $ClaudeDir ''
+function Restore-BenchState {
+  if (-not (Test-Path -LiteralPath $StateTemplate)) { return }
+  if (Test-Path -LiteralPath $ClaudeDir) { Remove-Item -LiteralPath $ClaudeDir -Recurse -Force }
+  Copy-Item -LiteralPath $StateTemplate -Destination $ClaudeDir -Recurse -Force
+}
+Copy-Item -LiteralPath $ClaudeDir -Destination $StateTemplate -Recurse -Force
+
 # Warmup. The return value matters here only for the exit-code check inside.
 1..5 | ForEach-Object { [void](Invoke-StatuslineOnce -EnvMap $isoEnv) }
 
@@ -216,6 +252,8 @@ Write-Host "renders/worker=$Renders  ns=$($Ns -join ',')"
 Write-Host "tmp=$Tmp"
 
 foreach ($n in $Ns) {
+  # Identical fixture per cohort, so n is the only thing that varies.
+  Restore-BenchState
   $latencies = New-Object System.Collections.Generic.List[double]
   # Split user and kernel the way the Bash arm's `time -p` does. System.Diagnostics
   # .Process exposes both directly, so the earlier note about Windows not splitting
