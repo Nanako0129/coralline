@@ -2145,7 +2145,8 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
     ((member(member(.; "prompt_cache"); "expires_at")) as $x |
       if ($x|type) == "number" then ($x | tostring) else "" end),
     ((member(.; "trigger")) as $t |
-      if ($t|type) == "string" then $t else "" end)
+      if ($t|type) == "string" then $t else "" end),
+    (member(.; "transcript_path") // "")
   ] | map(scrub) | join("\u001f")
   end' 2>/dev/null); then
   _JSON_OK=1
@@ -2153,9 +2154,40 @@ fi
 IFS=$'\037' read -r cwd model ctx_pct _CTX_EMPTY tok_in tok_out tok_cr tok_cw \
                  fh_pct fh_rst wd_pct wd_rst cost _COST_KIND \
                  lines_add lines_del out_style dur_ms effort \
-                 cache_pct cache_exp _GROK_TRIGGER <<JSON
+                 cache_pct cache_exp _GROK_TRIGGER _TRANSCRIPT_PATH <<JSON
 $_JSON_FIELDS
 JSON
+
+# Grok's cost.total_cost_usd is attach-scoped after resume. The session
+# usage.json ledger is the conversation total (same meaning as Claude's field).
+grok_session_cost() {  # $1=transcript_path
+  local usage line ticks d r
+  case "${_GROK_TRIGGER:-}" in state|refresh_interval) ;; *) return 0 ;; esac
+  [ -n "$1" ] || return 0
+  usage="${1%/*}/usage.json"
+  [ "$usage" != "/usage.json" ] && [ "$usage" != "$1" ] || return 0
+  [ -f "$usage" ] && [ -r "$usage" ] || return 0
+  ticks=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *'"costUsdTicks":'*)
+        ticks="${line#*\"costUsdTicks\":}"
+        ticks="${ticks%%,*}"
+        ticks="${ticks%%\}*}"
+        ticks="${ticks#"${ticks%%[![:space:]]*}"}"
+        ticks="${ticks%"${ticks##*[![:space:]]}"}"
+        break
+        ;;
+    esac
+  done < "$usage"
+  case "$ticks" in (''|*[!0-9]*) return 0 ;; esac
+  [ "${#ticks}" -le 18 ] || return 0
+  d=$((10#$ticks / 10000000000))
+  r=$((10#$ticks % 10000000000))
+  printf -v cost '%d.%010d' "$d" "$r"
+  _COST_KIND=scalar
+}
+grok_session_cost "${_TRANSCRIPT_PATH:-}"
 
 _SEG_SCAN=" $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 "
 [ "$VL_FLOAT" = "1" ] && _SEG_SCAN="$_SEG_SCAN$VL_FLOAT_SEGMENTS "

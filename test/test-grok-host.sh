@@ -107,4 +107,16 @@ check "Grok payload does not sync 5h from a Claude store" "$(lacks '5h')"
 check "Grok payload does not sync 7d from a Claude store" "$(lacks '7d')"
 check "Grok payload does not sync burn from a Claude store" "$(lacks '↗')"
 
+# (7) Grok conversation total comes from usage.json, not attach-scoped payload cost.
+sess=$(mktemp -d "${TMPDIR:-/tmp}/coralline-grok-usage.XXXXXX") || exit 1
+printf '%s\n' '{"session":{"costUsdTicks":41943147200}}' > "$sess/usage.json"
+: > "$sess/updates.jsonl"
+ledger=$(mktemp "${TMPDIR:-/tmp}/coralline-grok-ledger.XXXXXX") || exit 1
+jq --arg t "$sess/updates.jsonl" '.transcript_path=$t' "$GROK" > "$ledger" || exit 1
+render "$ledger" "model cost"
+rm -f "$ledger"
+rm -rf "$sess"
+check "Grok usage.json session total overrides attach-scoped payload cost" "$(has '$4.19')"
+check "Grok usage.json does not keep the attach-scoped \$1.23" "$(lacks '$1.23')"
+
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi

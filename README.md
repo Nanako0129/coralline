@@ -29,7 +29,7 @@ This is the runtime default rendered from the bundled sample in a clean `main` w
 | `limit7d` | yes | seven-day rate-limit gauge and reset countdown |
 | `burn` | no | projected time until the binding 5h or 7d limit reaches 100% |
 | `lines` | no | lines added and removed in this session |
-| `cost` | yes | session cost in USD |
+| `cost` | yes | session cost in USD. On Grok this is the conversation ledger (`usage.json`), not the attach-scoped payload field after a resume |
 | `style` | no | active output style |
 | `duration` | no | session wall-clock duration |
 | `stash` | no | git stash count |

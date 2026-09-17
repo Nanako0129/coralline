@@ -29,7 +29,7 @@
 | `limit7d` | 是 | 七天額度量表與重置倒數 |
 | `burn` | 否 | 綁定中的 5h 或 7d 額度到達 100% 的預估時間 |
 | `lines` | 否 | 本次 session 新增與刪除的行數 |
-| `cost` | 是 | 本次 session 花費（USD） |
+| `cost` | 是 | 本次 session 花費（USD）。Grok 上是整段對話的 ledger（`usage.json`），不是 resume 之後 payload 那個只算本次 attach 的欄位 |
 | `style` | 否 | 目前 output style |
 | `duration` | 否 | session 經過時間 |
 | `stash` | 否 | git stash 數量 |
