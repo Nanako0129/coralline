@@ -91,9 +91,10 @@ check "missing config.toml exits 0" "$([ "$RG_RC" -eq 0 ] && echo 1 || echo 0)"
 grep -q '^\[ui.status_line\]$' "$cfg" && check "created table header" 1 || check "created table header" 0
 grep -q '^type = "command"$' "$cfg" && check "created type = command" 1 || check "created type = command" 0
 grep -q '^refresh_interval = 1$' "$cfg" && check "created refresh_interval = 1" 1 || check "created refresh_interval = 1" 0
-grep -Fq "$cmd" "$cfg" && grep -Fq "CORALLINE_CONFIG=" "$cfg" && grep -Fq "CORALLINE_DIR=" "$cfg" \
-  && check "created command pins Grok conf/dir and statusline-grok.sh" 1 \
-  || check "created command pins Grok conf/dir and statusline-grok.sh" 0
+case "$(cat "$cfg")" in
+  *"bash $cmd"*|*"bash \"$cmd\""*) check "created command runs statusline-grok.sh via bash" 1 ;;
+  *) check "created command runs statusline-grok.sh via bash" 0 ;;
+esac
 [ -f "$GROK_HOME/coralline.conf" ] && grep -q 'VL_LIMIT_SYNC=0' "$GROK_HOME/coralline.conf" \
   && check "created Grok coralline.conf with VL_LIMIT_SYNC=0" 1 \
   || check "created Grok coralline.conf with VL_LIMIT_SYNC=0" 0

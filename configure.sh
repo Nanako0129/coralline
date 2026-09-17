@@ -1415,7 +1415,11 @@ register_grok() {  # append [ui.status_line] to Grok config.toml if the table is
   dir=$(dirname "$cfg")
   mkdir -p "$dir" || die "could not create $dir"
   sl="$gdir/statusline-grok.sh"
-  cmd="env CORALLINE_CONFIG=\"$gconf\" CORALLINE_DIR=\"$gdir\" \"$sl\""
+  # Grok execs a path directly when it names an executable. `env VAR=... "script"`
+  # is not a path and can fail with Permission denied (os error 13). Invoke via
+  # bash, same as Claude Code's statusLine.command. The Grok entrypoint itself
+  # defaults CORALLINE_CONFIG/DIR under GROK_HOME.
+  printf -v cmd 'bash %q' "$sl"
   cmd="${cmd//\\/\\\\}"
   cmd="${cmd//\"/\\\"}"
   if [ -f "$cfg" ] && [ -s "$cfg" ]; then
