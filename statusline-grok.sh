@@ -13,6 +13,12 @@ RENDERER="$HERE/statusline.sh"
 GROK_ROOT="${GROK_HOME:-$HOME/.grok}"
 export CORALLINE_CONFIG="${CORALLINE_CONFIG:-$GROK_ROOT/coralline.conf}"
 export CORALLINE_DIR="${CORALLINE_DIR:-$GROK_ROOT/coralline}"
+# statusline.sh (unchanged) sets CORALLINE_DIR from CLAUDE_CONFIG_DIR.
+# Point that at Grok's store so the Claude renderer does not use ~/.claude.
+case "$CORALLINE_DIR" in
+  */coralline) export CLAUDE_CONFIG_DIR="${CORALLINE_DIR%/coralline}" ;;
+  *)           export CLAUDE_CONFIG_DIR="$CORALLINE_DIR" ;;
+esac
 
 # -d '' reads until NUL (all of stdin) without forking.
 # -t 5 prevents zombie bash on MSYS2 where pipe EOF may never arrive.
@@ -98,4 +104,9 @@ mapped=$(printf '%s' "$input" | jq -c --arg usd "${_GUSD:-}" '
 ' 2>/dev/null) || mapped=""
 
 [ -n "$mapped" ] || exit 0
-printf '%s' "$mapped" | bash "$RENDERER"
+# statusline.sh always prints ↑/↓/cr:/cw: and treats missing counts as 0.
+# Strip the zeros Grok cannot source, rather than changing the Claude renderer.
+out=$(printf '%s' "$mapped" | bash "$RENDERER")
+[ -n "$out" ] || exit 0
+out="${out// ↓0 cr:0 cw:0/}"
+printf '%s\n' "$out"

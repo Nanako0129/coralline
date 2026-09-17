@@ -95,15 +95,21 @@ rm -f "$zeroin"
 check "present total_input_tokens 0 wins over context_tokens" "$(has '↑0')"
 check "present total_input_tokens 0 does not fall through to 99.9k" "$(lacks '99.9k')"
 
-# (6) A Grok payload must not paint 5h/7d/burn from a Claude VL_LIMIT_SYNC store.
-store=$(mktemp -d "${TMPDIR:-/tmp}/coralline-grok-store.XXXXXX") || exit 1
+# (6) Grok must not read Claude Code's VL_LIMIT_SYNC store. statusline.sh
+# derives CORALLINE_DIR from CLAUDE_CONFIG_DIR/HOME; the Grok entrypoint pins
+# CLAUDE_CONFIG_DIR to the Grok store parent.
+claude_home=$(mktemp -d "${TMPDIR:-/tmp}/coralline-grok-claude.XXXXXX") || exit 1
+grok_store=$(mktemp -d "${TMPDIR:-/tmp}/coralline-grok-store.XXXXXX") || exit 1
 rst=$(( $(date +%s) + 3600 ))
 printf -v entry '%010d_%03d.%03d' "$rst" 41 200
-mkdir -p "$store/limit-5h.d/$entry" "$store/limit-7d.d" || exit 1
+mkdir -p "$claude_home/.claude/coralline/limit-5h.d/$entry" \
+         "$claude_home/.claude/coralline/limit-7d.d" \
+         "$grok_store/coralline" || exit 1
 sync_extra='VL_LIMIT_SYNC=1
 '
-CORALLINE_DIR="$store" render "$GROK" "model ctx limit5h limit7d burn cost" "$sync_extra" "$GROK_SCRIPT"
-rm -rf "$store"
+HOME="$claude_home" CORALLINE_DIR="$grok_store/coralline" \
+  render "$GROK" "model ctx limit5h limit7d burn cost" "$sync_extra" "$GROK_SCRIPT"
+rm -rf "$claude_home" "$grok_store"
 check "Grok payload does not sync 5h from a Claude store" "$(lacks '5h')"
 check "Grok payload does not sync 7d from a Claude store" "$(lacks '7d')"
 check "Grok payload does not sync burn from a Claude store" "$(lacks '↗')"
