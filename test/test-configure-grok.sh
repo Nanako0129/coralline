@@ -78,7 +78,7 @@ run_register() {
 }
 
 abs_statusline() {
-  printf '%s/statusline-grok.sh\n' "$(cd "$CORALLINE_HOME" && pwd)"
+  printf '%s/statusline-grok.sh\n' "$(cd "$GROK_HOME/coralline" && pwd)"
 }
 
 # --- missing config.toml is created with the table --------------------------------
@@ -99,6 +99,9 @@ grep -Fq "$cmd" "$cfg" && grep -Fq "CORALLINE_CONFIG=" "$cfg" && grep -Fq "CORAL
   || check "created Grok coralline.conf with VL_LIMIT_SYNC=0" 0
 [ -d "$GROK_HOME/coralline" ] && check "created Grok CORALLINE_DIR" 1 \
   || check "created Grok CORALLINE_DIR" 0
+[ -x "$GROK_HOME/coralline/statusline-grok.sh" ] && [ -f "$GROK_HOME/coralline/statusline.sh" ] \
+  && check "Grok runtime scripts live under GROK_HOME/coralline" 1 \
+  || check "Grok runtime scripts live under GROK_HOME/coralline" 0
 case "$RG_OUT" in (*"Updated "*) check "prints Updated after append" 1 ;;
                  (*)             check "prints Updated after append" 0 ;; esac
 sentinels_ok && check "sentinels unmodified (create)" 1 || check "sentinels unmodified (create)" 0

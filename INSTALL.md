@@ -145,9 +145,12 @@ bash ~/.claude/coralline/configure.sh --register-grok
 `--register-grok` copies runtime files only when
 `~/.claude/coralline/statusline.sh` is missing, appends `[ui.status_line]` to
 `$GROK_HOME/config.toml` (or `~/.grok/config.toml`) when that table is absent,
-and exits. The command pins `CORALLINE_CONFIG` and `CORALLINE_DIR` under
-GROK_HOME (`~/.grok/coralline.conf` and `~/.grok/coralline/`) so Grok does not
-share Claude Code's conf or limit/burn store. It never rewrites an existing
+and exits. It copies `statusline.sh` and `statusline-grok.sh` into
+`~/.grok/coralline/`, and the command pins `CORALLINE_CONFIG` and
+`CORALLINE_DIR` under GROK_HOME (`~/.grok/coralline.conf` and
+`~/.grok/coralline/`) so Grok does not share Claude Code's conf or
+limit/burn store. The command runs `~/.grok/coralline/statusline-grok.sh`,
+not Claude's `~/.claude/coralline/statusline.sh`. It never rewrites an existing
 `[ui.status_line]`, Claude settings, or `~/.claude/coralline.conf`, and it does
 not open the wizard.
 

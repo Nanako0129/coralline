@@ -1363,7 +1363,9 @@ update_settings() {
 
 register_grok() {  # append [ui.status_line] to Grok config.toml if the table is absent
   local cfg dir target cmd last stamp backup n=0 grok_root gconf gdir sl theme
-  [ -f "$TARGET_DIR/statusline.sh" ] && [ -f "$TARGET_DIR/statusline-grok.sh" ] || install_files
+  need_file "$SCRIPT_DIR/statusline.sh"
+  need_file "$SCRIPT_DIR/statusline-grok.sh"
+  [ -f "$TARGET_DIR/statusline.sh" ] || install_files
   if [ -n "${GROK_HOME:-}" ]; then
     grok_root="$GROK_HOME"
   else
@@ -1378,7 +1380,27 @@ register_grok() {  # append [ui.status_line] to Grok config.toml if the table is
       *)  cfg="$dir/$target" ;;
     esac
   fi
+  mkdir -p "$grok_root/coralline" || die "could not create $grok_root/coralline"
+  gdir=$(cd "$grok_root/coralline" && pwd)
+  cp "$SCRIPT_DIR/statusline.sh" "$gdir/statusline.sh" \
+    || die "could not write $gdir/statusline.sh"
+  cp "$SCRIPT_DIR/statusline-grok.sh" "$gdir/statusline-grok.sh" \
+    || die "could not write $gdir/statusline-grok.sh"
+  chmod +x "$gdir/statusline.sh" "$gdir/statusline-grok.sh"
+  gconf=$(cd "$grok_root" && pwd)/coralline.conf
+  if [ ! -f "$gconf" ]; then
+    theme="$TARGET_DIR/themes/claude-coral.conf"
+    {
+      printf '# coralline config for Grok Build. Independent of ~/.claude/coralline.conf.\n'
+      if [ -f "$theme" ]; then
+        printf '. %q\n' "$theme"
+      fi
+      printf 'VL_SEGMENTS="dir git model effort ctx cost clock"\n'
+      printf 'VL_LIMIT_SYNC=0\n'
+    } > "$gconf" || die "could not write $gconf"
+  fi
   if [ -f "$cfg" ] && grep -qE '^[ \t]*\[ui\.status_line\][ \t]*(#.*)?$' "$cfg"; then
+    printf 'Updated Grok runtime in %s\n' "$gdir"
     printf 'Left unchanged: %s already has [ui.status_line]\n' "$cfg"
     return 0
   fi
@@ -1392,21 +1414,7 @@ register_grok() {  # append [ui.status_line] to Grok config.toml if the table is
   fi
   dir=$(dirname "$cfg")
   mkdir -p "$dir" || die "could not create $dir"
-  gconf=$(cd "$grok_root" && pwd)/coralline.conf
-  mkdir -p "$grok_root/coralline" || die "could not create $grok_root/coralline"
-  gdir=$(cd "$grok_root/coralline" && pwd)
-  if [ ! -f "$gconf" ]; then
-    theme="$TARGET_DIR/themes/claude-coral.conf"
-    {
-      printf '# coralline config for Grok Build. Independent of ~/.claude/coralline.conf.\n'
-      if [ -f "$theme" ]; then
-        printf '. %q\n' "$theme"
-      fi
-      printf 'VL_SEGMENTS="dir git model effort ctx cost clock"\n'
-      printf 'VL_LIMIT_SYNC=0\n'
-    } > "$gconf" || die "could not write $gconf"
-  fi
-  sl=$(cd "$TARGET_DIR" && pwd)/statusline-grok.sh
+  sl="$gdir/statusline-grok.sh"
   cmd="env CORALLINE_CONFIG=\"$gconf\" CORALLINE_DIR=\"$gdir\" \"$sl\""
   cmd="${cmd//\\/\\\\}"
   cmd="${cmd//\"/\\\"}"
