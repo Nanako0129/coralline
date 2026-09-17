@@ -21,7 +21,7 @@ This is the runtime default rendered from the bundled sample in a clean `main` w
 | `git` | yes | branch, staged `+`, modified `!`, untracked `?`, ahead `⇡`, behind `⇣` |
 | `node` | no | active Node version from a pin file, or `PATH` with `VL_RUNTIME_PROBE=1`; hidden when undetected |
 | `python` | no | active virtualenv, conda, or pinned Python version, or `PATH` with `VL_RUNTIME_PROBE=1`; hidden when undetected |
-| `model` | yes | active Claude model |
+| `model` | yes | active model |
 | `effort` | no | reasoning effort: `low`, `med`, `high`, `xhigh`, or `max` |
 | `ctx` | yes | context gauge and input, output, and cache token counts |
 | `cache` | no | prompt-cache hit ratio, and the countdown to the cache expiring or `cold` once it has |
@@ -36,6 +36,8 @@ This is the runtime default rendered from the bundled sample in a clean `main` w
 | `clock` | yes | 12- or 24-hour clock |
 
 Gauges change from green to yellow at 50% and red at 75%; both thresholds are configurable. `cache` reads the same thresholds inverted, because a high hit ratio is the good outcome: it turns yellow at 50% and red at 25%.
+
+`cache`, `limit5h`, `limit7d`, `burn`, `lines`, and `style` need Claude-only payload fields and hide when a host omits them. `ctx` still shows the gauge; extra token counts (`↓`, `cr:`, `cw:`) appear only when those fields are present.
 
 `cache` needs Claude Code v2.1.263 or newer, which is where `prompt_cache` appears in the statusline payload. It hides itself before the session's first request. Below an hour the countdown carries seconds (`10m12s`, `42s`), above it does not (`1h06m`); once the cache has gone cold, or if it never went warm, the countdown is replaced by `cold`. The percentage is the session's cumulative hit ratio, so it stays accurate either way and is never zeroed: what the marker tells you is whether there is still a cache behind it. The countdown is the value at the last render, not a live clock: Claude Code refreshes the statusline on payload events (and once at the expiry itself), not every second, unless you set `statusLine.refreshInterval` in your settings.
 
@@ -64,6 +66,16 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 ```
 
 It recommends the latest tagged release or lets you choose mutable `main`. Skip the prompt with `--ref v0.16.1` or another ref. If the one-line path cannot run, use the [manual fallback in `INSTALL.md`](./INSTALL.md#manual-fallback).
+
+### Grok Build
+
+Grok Build can invoke the same Bash renderer via `[ui.status_line]`. Claude Code remains the default host. After the runtime files are in place, register Grok without opening the wizard:
+
+```bash
+bash ~/.claude/coralline/configure.sh --register-grok
+```
+
+Restart Grok afterwards. `--install` / `--install-only` still only merge Claude `settings.json`. `--register-grok` appends Grok's config when `[ui.status_line]` is absent and never rewrites an existing table, `coralline.conf`, or Claude settings. On Grok payloads, Claude-only segments (`limit5h`, `limit7d`, `burn`, `cache`, `lines`, `style`, and subagent rows) hide instead of fabricating zeros.
 
 ### Windows without Git Bash
 

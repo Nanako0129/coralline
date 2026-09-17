@@ -21,7 +21,7 @@
 | `git` | 是 | 分支、已暫存 `+`、已修改 `!`、未追蹤 `?`、領先 `⇡`、落後 `⇣` |
 | `node` | 否 | pin 檔指定的 Node 版本，或以 `VL_RUNTIME_PROBE=1` 偵測 `PATH`；偵測不到時隱藏 |
 | `python` | 否 | 目前 virtualenv、conda 或 pin 檔指定的 Python 版本，或以 `VL_RUNTIME_PROBE=1` 偵測 `PATH`；偵測不到時隱藏 |
-| `model` | 是 | 目前使用的 Claude model |
+| `model` | 是 | 目前使用的 model |
 | `effort` | 否 | 推理強度：`low`、`med`、`high`、`xhigh` 或 `max` |
 | `ctx` | 是 | context 用量條與輸入、輸出、快取 token 數 |
 | `cache` | 否 | prompt cache 命中率，以及快取失效的倒數；失效後顯示 `cold` |
@@ -36,6 +36,8 @@
 | `clock` | 是 | 12 或 24 小時制時鐘 |
 
 量表會從綠色變成 50% 的黃色與 75% 的紅色；兩個門檻都能自訂。`cache` 使用同樣的門檻但方向相反，因為命中率高才是好結果：低於 50% 轉黃、低於 25% 轉紅。
+
+`cache`、`limit5h`、`limit7d`、`burn`、`lines` 與 `style` 需要 Claude 專用的 payload 欄位；host 沒有提供時會自行隱藏。`ctx` 仍會顯示用量條；額外的 token 計數（`↓`、`cr:`、`cw:`）只在對應欄位存在時才出現。
 
 `cache` 需要 Claude Code v2.1.263 以上，`prompt_cache` 是從該版本開始出現在 statusline payload 裡。session 送出第一個 request 之前這一段會自我隱藏。倒數在一小時以內會顯示秒數（`10m12s`、`42s`），超過一小時則不顯示（`1h06m`）；快取失效之後，或從來沒熱過的情況，倒數會換成 `cold`。百分比是這個 session 的累計命中率，兩種情況下都仍然是真實數字，不會被歸零：`cold` 告訴你的是後面還有沒有一份活著的快取。倒數顯示的是「上次 render 當下」的值，不是即時時鐘：Claude Code 只在 payload 事件（以及快取到期的那一刻）重繪 statusline，不會每秒重繪，除非你在 settings 裡設定 `statusLine.refreshInterval`。
 
@@ -64,6 +66,16 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 ```
 
 它會建議最新 release tag，也能選擇可變的 `main`。使用 `--ref v0.16.1` 或其他 ref 可略過詢問。若一行安裝無法執行，使用 [`INSTALL.md` 的 manual fallback](./INSTALL.md#manual-fallback)。
+
+### Grok Build
+
+Grok Build 可以透過 `[ui.status_line]` 呼叫同一個 Bash renderer。Claude Code 仍是預設 host。runtime 檔案就位後，用下面這行向 Grok 註冊，不會打開 wizard：
+
+```bash
+bash ~/.claude/coralline/configure.sh --register-grok
+```
+
+完成後請重啟 Grok。`--install` / `--install-only` 仍然只合併 Claude 的 `settings.json`。`--register-grok` 只在 `[ui.status_line]` 不存在時附加 Grok 設定，不會改寫既有 table、`coralline.conf` 或 Claude settings。在 Grok payload 上，Claude 專用區段（`limit5h`、`limit7d`、`burn`、`cache`、`lines`、`style`，以及 subagent 列）會隱藏，而不是填造假的零。
 
 ### Windows 無 Git Bash
 

@@ -71,6 +71,10 @@ Options:
                Register (or remove) the subagent panel renderer in Claude
                settings and exit — the non-interactive twin of the wizard's
                closing question, for AI installs and upgrades.
+  --register-grok
+               Append [ui.status_line] to Grok config.toml if absent, then exit.
+               Never rewrites an existing table, Claude settings, or
+               coralline.conf. Installs runtime files only when missing.
   --import-p10k
                Import ~/.p10k.zsh without opening the setup menu.
   --wizard     Open the visual wizard directly.
@@ -1351,6 +1355,53 @@ update_settings() {
   printf 'Updated %s\n' "$SETTINGS_FILE"
 }
 
+register_grok() {  # append [ui.status_line] to Grok config.toml if the table is absent
+  local cfg dir target cmd last stamp backup n=0
+  [ -f "$TARGET_DIR/statusline.sh" ] || install_files
+  if [ -n "${GROK_HOME:-}" ]; then
+    cfg="$GROK_HOME/config.toml"
+  else
+    cfg="$HOME/.grok/config.toml"
+  fi
+  if [ -L "$cfg" ]; then
+    dir=$(cd "$(dirname "$cfg")" && pwd -P) || die "could not resolve directory for $cfg"
+    target=$(readlink "$cfg") || die "could not read symlink $cfg"
+    case "$target" in
+      /*) cfg="$target" ;;
+      *)  cfg="$dir/$target" ;;
+    esac
+  fi
+  if [ -f "$cfg" ] && grep -qE '^[ \t]*\[ui\.status_line\]' "$cfg"; then
+    printf 'Left unchanged: %s already has [ui.status_line]\n' "$cfg"
+    return 0
+  fi
+  if [ -f "$cfg" ]; then
+    stamp=$(date +%Y%m%d%H%M%S)
+    backup="$cfg.bak.$stamp"
+    while [ -e "$backup" ]; do
+      n=$((n + 1)); backup="$cfg.bak.$stamp.$n"
+    done
+    cp "$cfg" "$backup" || die "could not back up $cfg; original left unchanged"
+  fi
+  dir=$(dirname "$cfg")
+  mkdir -p "$dir" || die "could not create $dir"
+  cmd=$(cd "$TARGET_DIR" && pwd)/statusline.sh
+  cmd="${cmd//\\/\\\\}"
+  cmd="${cmd//\"/\\\"}"
+  if [ -f "$cfg" ] && [ -s "$cfg" ]; then
+    last=$(tail -c 1 "$cfg"; printf x)
+    last="${last%x}"
+    [ "$last" = $'\n' ] || printf '\n' >> "$cfg" || die "could not write $cfg"
+  fi
+  {
+    printf '[ui.status_line]\n'
+    printf 'type = "command"\n'
+    printf 'command = "%s"\n' "$cmd"
+    printf 'refresh_interval = 1\n'
+  } >> "$cfg" || die "could not write $cfg"
+  printf 'Updated %s\n' "$cfg"
+}
+
 subagent_enabled() {  # exit 0 when settings.json registers the subagent renderer
   [ -f "$SETTINGS_FILE" ] || return 1
   jq -e '
@@ -1539,6 +1590,7 @@ for arg in "$@"; do
     --default) setup_mode="default" ;;
     --subagent-rows=on)  enable_subagent_statusline;  verify_subagent_render; exit 0 ;;
     --subagent-rows=off) disable_subagent_statusline; exit 0 ;;
+    --register-grok) register_grok; exit 0 ;;
     --import-p10k) setup_mode="import-p10k" ;;
     --wizard) setup_mode="wizard" ;;
     --help|-h) usage; exit 0 ;;

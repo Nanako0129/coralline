@@ -19,6 +19,9 @@
 
 Check the actual shell and tools before choosing a path:
 
+- If the user is on Grok Build, follow [Grok Build](#grok-build). Use
+  `--register-grok`. Do not merge Claude `settings.json` unless they also use
+  Claude Code. Skip the subagent interview.
 - If Bash is available, follow the Bash fast path and setup interview below.
 - If this is native Windows PowerShell 5.1 without Bash, follow the
   [native one-line installer](README.md#windows-without-git-bash). Do not run
@@ -117,6 +120,35 @@ The installer delegates to `configure.sh --install-only` for AI installs. It wil
 3. exit without opening the human setup menu or writing theme config.
 
 After bootstrap, do the AI interview below and write `~/.claude/coralline.conf`.
+
+## Grok Build
+
+You are Grok. Claude Code remains the default host; this path only registers the
+same Bash renderer with Grok. Do not run `--install` or `--install-only` unless
+the user also uses Claude Code — those flags merge `~/.claude/settings.json`.
+Skip the subagent interview.
+
+From a local checkout (or after the runtime files already exist under
+`~/.claude/coralline`):
+
+```bash
+bash configure.sh --register-grok
+```
+
+`--register-grok` copies runtime files only when
+`~/.claude/coralline/statusline.sh` is missing, appends `[ui.status_line]` to
+`$GROK_HOME/config.toml` (or `~/.grok/config.toml`) when that table is absent,
+and exits. It never rewrites an existing `[ui.status_line]`, Claude settings, or
+`coralline.conf`, and it does not open the wizard.
+
+Verify with a Grok-shaped stdin probe:
+
+```bash
+printf '%s' '{"cwd":"/tmp","workspace":{"current_dir":"/tmp"},"model":{"display_name":"Grok 4.6"},"context_window":{"used_percentage":25,"context_tokens":12345},"cost":{"total_cost_usd":1.25},"trigger":"state"}' | CORALLINE_NO_SAMPLE=1 bash ~/.claude/coralline/statusline.sh
+```
+
+Success means exit code `0` and a non-empty statusline on stdout. Tell the user
+to restart Grok if the statusline does not appear immediately.
 
 ## Prerequisites
 

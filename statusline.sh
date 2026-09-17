@@ -1521,18 +1521,31 @@ seg_ctx() {  # context-window gauge with input/output/cache token counts
     [ "$VL_CTX_ALWAYS_SHOW" = 1 ] && [ "${_JSON_OK:-0}" = 1 ] \
       && [ "${_CTX_EMPTY:-0}" = 1 ] || return 0
   fi
-  local ci fgc fgd ti to tcr tcw
+  local ci fgc fgd clause
   if [ -n "$ctx_pct" ]; then printf -v ci '%.0f' "$ctx_pct" 2>/dev/null || ci=0
   else ci=0
   fi
   make_bar "$ci"; pct_fg "$ci"
   fg "$_PFG";       fgc="$_FG"
   fg "$VL_FG_DIM";  fgd="$_FG"
-  fmt_tok "$tok_in"; ti="$_TOK"
-  fmt_tok "$tok_out"; to="$_TOK"
-  fmt_tok "$tok_cr"; tcr="$_TOK"
-  fmt_tok "$tok_cw"; tcw="$_TOK"
-  push "$VL_BG_CTX" "${fgc} ${VL_CTX_GLYPH} ${_BAR} ${ci}% ${fgd}↑${ti} ↓${to} cr:${tcr} cw:${tcw} "
+  clause=""
+  if [ -n "$tok_in" ]; then
+    fmt_tok "$tok_in"
+    clause="↑${_TOK}"
+  fi
+  if [ -n "$tok_out" ]; then
+    fmt_tok "$tok_out"
+    if [ -n "$clause" ]; then clause="${clause} ↓${_TOK}"; else clause="↓${_TOK}"; fi
+  fi
+  if [ -n "$tok_cr" ]; then
+    fmt_tok "$tok_cr"
+    if [ -n "$clause" ]; then clause="${clause} cr:${_TOK}"; else clause="cr:${_TOK}"; fi
+  fi
+  if [ -n "$tok_cw" ]; then
+    fmt_tok "$tok_cw"
+    if [ -n "$clause" ]; then clause="${clause} cw:${_TOK}"; else clause="cw:${_TOK}"; fi
+  fi
+  push "$VL_BG_CTX" "${fgc} ${VL_CTX_GLYPH} ${_BAR} ${ci}% ${fgd}${clause} "
 }
 
 seg_cache() {  # prompt-cache hit ratio, and the countdown to the cache expiring
@@ -2087,15 +2100,22 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
   def cost_value:
     member(member(.; "cost"); "total_cost_usd");
   if type != "object" then error("non-object root") else
+  (member(.; "context_window")) as $ctx |
   [
     (member(member(.; "workspace"); "current_dir") // member(.; "cwd") // ""),
     (member(member(.; "model"); "display_name") // ""),
     (ctx_value | if (. == null) or (. == false) then "" else tostring end),
     (ctx_empty | if . then "1" else "0" end),
-    (member(member(.; "context_window"); "total_input_tokens") // 0),
-    (member(member(.; "context_window"); "total_output_tokens") // 0),
-    (member(member(member(.; "context_window"); "current_usage"); "cache_read_input_tokens") // 0),
-    (member(member(member(.; "context_window"); "current_usage"); "cache_creation_input_tokens") // 0),
+    (member($ctx; "total_input_tokens") as $ti |
+      if $ti != null then $ti
+      else (member($ctx; "context_tokens") as $ct |
+        if $ct != null then $ct else 0 end) end),
+    (member($ctx; "total_output_tokens") as $to |
+      if $to != null then $to else "" end),
+    (member(member($ctx; "current_usage"); "cache_read_input_tokens") as $cr |
+      if $cr != null then $cr else "" end),
+    (member(member($ctx; "current_usage"); "cache_creation_input_tokens") as $cw |
+      if $cw != null then $cw else "" end),
     (member(member(member(.; "rate_limits"); "five_hour"); "used_percentage") // "" | tostring),
     (member(member(member(.; "rate_limits"); "five_hour"); "resets_at") // "" | tostring),
     (member(member(member(.; "rate_limits"); "seven_day"); "used_percentage") // "" | tostring),
