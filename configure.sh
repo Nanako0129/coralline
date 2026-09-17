@@ -1399,9 +1399,16 @@ register_grok() {  # append [ui.status_line] to Grok config.toml if the table is
       printf 'VL_LIMIT_SYNC=0\n'
     } > "$gconf" || die "could not write $gconf"
   fi
-  if [ -f "$cfg" ] && grep -qE '^[ \t]*\[ui\.status_line\][ \t]*(#.*)?$' "$cfg"; then
+  if [ -f "$cfg" ] && grep -qE $'^[ \t]*\\[ui\\.status_line\\][ \t]*(#.*)?\r?$' "$cfg"; then
     printf 'Updated Grok runtime in %s\n' "$gdir"
     printf 'Left unchanged: %s already has [ui.status_line]\n' "$cfg"
+    return 0
+  fi
+  # [ui.status_line.extra] already defines the ui.status_line parent. Appending
+  # [ui.status_line] after that child redefines the table and is invalid TOML.
+  if [ -f "$cfg" ] && grep -qE $'^[ \t]*\\[ui\\.status_line\\.' "$cfg"; then
+    printf 'Updated Grok runtime in %s\n' "$gdir"
+    printf 'Left unchanged: %s has [ui.status_line.*]; not appending [ui.status_line]\n' "$cfg"
     return 0
   fi
   if [ -f "$cfg" ]; then

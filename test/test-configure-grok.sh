@@ -173,19 +173,33 @@ settings_absent && check "CLAUDE_SETTINGS absent (symlink)" 1 \
   || check "CLAUDE_SETTINGS absent (symlink)" 0
 rm -rf "$SANDBOX"
 
-# --- [ui.status_line.extra] is not the status_line table -----------------------------
+# --- [ui.status_line.extra] already defines the parent; do not append -------------
 new_sandbox
 printf '[ui.status_line.extra]\nfoo = 1\n' > "$GROK_HOME/config.toml"
 run_register
-grep -q '^\[ui.status_line\]$' "$GROK_HOME/config.toml" \
-  && grep -q '^\[ui.status_line.extra\]$' "$GROK_HOME/config.toml" \
-  && check "nested extra table does not block [ui.status_line]" 1 \
-  || check "nested extra table does not block [ui.status_line]" 0
+if grep -q '^\[ui.status_line\]$' "$GROK_HOME/config.toml"; then
+  check "nested extra does not append [ui.status_line]" 0
+else
+  check "nested extra does not append [ui.status_line]" 1
+fi
+grep -q '^\[ui.status_line.extra\]$' "$GROK_HOME/config.toml" \
+  && check "nested extra table remains" 1 \
+  || check "nested extra table remains" 0
 check "nested extra path exits 0" "$([ "$RG_RC" -eq 0 ] && echo 1 || echo 0)"
 sentinels_ok && check "sentinels unmodified (nested extra)" 1 \
   || check "sentinels unmodified (nested extra)" 0
 conf_untouched && check "coralline.conf byte-identical (nested extra)" 1 \
   || check "coralline.conf byte-identical (nested extra)" 0
+rm -rf "$SANDBOX"
+
+# --- CRLF [ui.status_line] is still treated as present -----------------------------
+new_sandbox
+printf '[ui.status_line]\r\ntype = "command"\r\n' > "$GROK_HOME/config.toml"
+run_register
+grep -c '\[ui.status_line\]' "$GROK_HOME/config.toml" | grep -qx 1 \
+  && check "CRLF table is not duplicated" 1 \
+  || check "CRLF table is not duplicated" 0
+check "CRLF table path exits 0" "$([ "$RG_RC" -eq 0 ] && echo 1 || echo 0)"
 rm -rf "$SANDBOX"
 
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi

@@ -10,11 +10,25 @@
 HERE=$(cd "$(dirname "$0")" && pwd)
 RENDERER="$HERE/statusline.sh"
 
-GROK_ROOT="${GROK_HOME:-$HOME/.grok}"
-export CORALLINE_CONFIG="${CORALLINE_CONFIG:-$GROK_ROOT/coralline.conf}"
-export CORALLINE_DIR="${CORALLINE_DIR:-$GROK_ROOT/coralline}"
+# Production: conf and store follow this script's directory (~/.grok/coralline),
+# ignoring inherited CORALLINE_CONFIG/DIR from a Claude Code shell. Tests set
+# CORALLINE_NO_SAMPLE=1 and pin those paths themselves.
+if [ "${CORALLINE_NO_SAMPLE:-0}" = 1 ]; then
+  GROK_ROOT="${GROK_HOME:-$HOME/.grok}"
+  export CORALLINE_CONFIG="${CORALLINE_CONFIG:-$GROK_ROOT/coralline.conf}"
+  export CORALLINE_DIR="${CORALLINE_DIR:-$HERE}"
+else
+  export CORALLINE_DIR="$HERE"
+  case "$HERE" in
+    */coralline)
+      export CORALLINE_CONFIG="${HERE%/coralline}/coralline.conf"
+      ;;
+    *)
+      export CORALLINE_CONFIG="${GROK_HOME:-$HOME/.grok}/coralline.conf"
+      ;;
+  esac
+fi
 # statusline.sh (unchanged) sets CORALLINE_DIR from CLAUDE_CONFIG_DIR.
-# Point that at Grok's store so the Claude renderer does not use ~/.claude.
 case "$CORALLINE_DIR" in
   */coralline) export CLAUDE_CONFIG_DIR="${CORALLINE_DIR%/coralline}" ;;
   *)           export CLAUDE_CONFIG_DIR="$CORALLINE_DIR" ;;
