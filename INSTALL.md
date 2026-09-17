@@ -128,18 +128,27 @@ same Bash renderer with Grok. Do not run `--install` or `--install-only` unless
 the user also uses Claude Code — those flags merge `~/.claude/settings.json`.
 Skip the subagent interview.
 
-From a local checkout (or after the runtime files already exist under
-`~/.claude/coralline`):
+From a local checkout:
 
 ```bash
 bash configure.sh --register-grok
 ```
 
+If the runtime files are already installed, call that copy instead of depending
+on the current directory:
+
+```bash
+bash ~/.claude/coralline/configure.sh --register-grok
+```
+
 `--register-grok` copies runtime files only when
 `~/.claude/coralline/statusline.sh` is missing, appends `[ui.status_line]` to
 `$GROK_HOME/config.toml` (or `~/.grok/config.toml`) when that table is absent,
-and exits. It never rewrites an existing `[ui.status_line]`, Claude settings, or
-`coralline.conf`, and it does not open the wizard.
+and exits. The command pins `CORALLINE_CONFIG` and `CORALLINE_DIR` under
+GROK_HOME (`~/.grok/coralline.conf` and `~/.grok/coralline/`) so Grok does not
+share Claude Code's conf or limit/burn store. It never rewrites an existing
+`[ui.status_line]`, Claude settings, or `~/.claude/coralline.conf`, and it does
+not open the wizard.
 
 Verify with a Grok-shaped stdin probe:
 

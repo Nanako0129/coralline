@@ -94,4 +94,17 @@ rm -f "$zeroin"
 check "present total_input_tokens 0 wins over context_tokens" "$(has '↑0')"
 check "present total_input_tokens 0 does not fall through to 99.9k" "$(lacks '99.9k')"
 
+# (6) A Grok payload must not paint 5h/7d/burn from a Claude VL_LIMIT_SYNC store.
+store=$(mktemp -d "${TMPDIR:-/tmp}/coralline-grok-store.XXXXXX") || exit 1
+rst=$(( $(date +%s) + 3600 ))
+printf -v entry '%010d_%03d.%03d' "$rst" 41 200
+mkdir -p "$store/limit-5h.d/$entry" "$store/limit-7d.d" || exit 1
+sync_extra='VL_LIMIT_SYNC=1
+'
+CORALLINE_DIR="$store" render "$GROK" "model ctx limit5h limit7d burn cost" "$sync_extra"
+rm -rf "$store"
+check "Grok payload does not sync 5h from a Claude store" "$(lacks '5h')"
+check "Grok payload does not sync 7d from a Claude store" "$(lacks '7d')"
+check "Grok payload does not sync burn from a Claude store" "$(lacks '↗')"
+
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi

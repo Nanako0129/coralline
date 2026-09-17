@@ -90,9 +90,14 @@ check "missing config.toml exits 0" "$([ "$RG_RC" -eq 0 ] && echo 1 || echo 0)"
 grep -q '^\[ui.status_line\]$' "$cfg" && check "created table header" 1 || check "created table header" 0
 grep -q '^type = "command"$' "$cfg" && check "created type = command" 1 || check "created type = command" 0
 grep -q '^refresh_interval = 1$' "$cfg" && check "created refresh_interval = 1" 1 || check "created refresh_interval = 1" 0
-grep -Fq "command = \"$cmd\"" "$cfg" \
-  && check "created command points at sandbox statusline.sh" 1 \
-  || check "created command points at sandbox statusline.sh" 0
+grep -Fq "$cmd" "$cfg" && grep -Fq "CORALLINE_CONFIG=" "$cfg" && grep -Fq "CORALLINE_DIR=" "$cfg" \
+  && check "created command pins Grok conf/dir and statusline.sh" 1 \
+  || check "created command pins Grok conf/dir and statusline.sh" 0
+[ -f "$GROK_HOME/coralline.conf" ] && grep -q 'VL_LIMIT_SYNC=0' "$GROK_HOME/coralline.conf" \
+  && check "created Grok coralline.conf with VL_LIMIT_SYNC=0" 1 \
+  || check "created Grok coralline.conf with VL_LIMIT_SYNC=0" 0
+[ -d "$GROK_HOME/coralline" ] && check "created Grok CORALLINE_DIR" 1 \
+  || check "created Grok CORALLINE_DIR" 0
 case "$RG_OUT" in (*"Updated "*) check "prints Updated after append" 1 ;;
                  (*)             check "prints Updated after append" 0 ;; esac
 sentinels_ok && check "sentinels unmodified (create)" 1 || check "sentinels unmodified (create)" 0
@@ -161,6 +166,21 @@ conf_untouched && check "coralline.conf byte-identical (symlink)" 1 \
   || check "coralline.conf byte-identical (symlink)" 0
 settings_absent && check "CLAUDE_SETTINGS absent (symlink)" 1 \
   || check "CLAUDE_SETTINGS absent (symlink)" 0
+rm -rf "$SANDBOX"
+
+# --- [ui.status_line.extra] is not the status_line table -----------------------------
+new_sandbox
+printf '[ui.status_line.extra]\nfoo = 1\n' > "$GROK_HOME/config.toml"
+run_register
+grep -q '^\[ui.status_line\]$' "$GROK_HOME/config.toml" \
+  && grep -q '^\[ui.status_line.extra\]$' "$GROK_HOME/config.toml" \
+  && check "nested extra table does not block [ui.status_line]" 1 \
+  || check "nested extra table does not block [ui.status_line]" 0
+check "nested extra path exits 0" "$([ "$RG_RC" -eq 0 ] && echo 1 || echo 0)"
+sentinels_ok && check "sentinels unmodified (nested extra)" 1 \
+  || check "sentinels unmodified (nested extra)" 0
+conf_untouched && check "coralline.conf byte-identical (nested extra)" 1 \
+  || check "coralline.conf byte-identical (nested extra)" 0
 rm -rf "$SANDBOX"
 
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi

@@ -75,7 +75,7 @@ Grok Build 可以透過 `[ui.status_line]` 呼叫同一個 Bash renderer。Claud
 bash ~/.claude/coralline/configure.sh --register-grok
 ```
 
-完成後請重啟 Grok。`--install` / `--install-only` 仍然只合併 Claude 的 `settings.json`。`--register-grok` 只在 `[ui.status_line]` 不存在時附加 Grok 設定，不會改寫既有 table、`coralline.conf` 或 Claude settings。在 Grok payload 上，Claude 專用區段（`limit5h`、`limit7d`、`burn`、`cache`、`lines`、`style`，以及 subagent 列）會隱藏，而不是填造假的零。
+完成後請重啟 Grok。`--install` / `--install-only` 仍然只合併 Claude 的 `settings.json`。`--register-grok` 只在 `[ui.status_line]` 不存在時附加 Grok 設定，不會改寫既有 table 或 Claude settings。Grok 使用自己的 `~/.grok/coralline.conf` 與 `~/.grok/coralline/` store，不會讀 `~/.claude/coralline.conf`，也不會共用 Claude 的 limit／burn 檔。預設 Grok 版面不含 Claude 專用區段（`limit5h`、`limit7d`、`burn`、`cache`、`lines`、`style`，以及 subagent 列）；就算誤用同一份 conf，Grok payload 也不會從 Claude store 把那些區段補回來。
 
 ### Windows 無 Git Bash
 

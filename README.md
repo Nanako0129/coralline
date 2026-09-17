@@ -75,7 +75,7 @@ Grok Build can invoke the same Bash renderer via `[ui.status_line]`. Claude Code
 bash ~/.claude/coralline/configure.sh --register-grok
 ```
 
-Restart Grok afterwards. `--install` / `--install-only` still only merge Claude `settings.json`. `--register-grok` appends Grok's config when `[ui.status_line]` is absent and never rewrites an existing table, `coralline.conf`, or Claude settings. On Grok payloads, Claude-only segments (`limit5h`, `limit7d`, `burn`, `cache`, `lines`, `style`, and subagent rows) hide instead of fabricating zeros.
+Restart Grok afterwards. `--install` / `--install-only` still only merge Claude `settings.json`. `--register-grok` appends Grok's config when `[ui.status_line]` is absent and never rewrites an existing table or Claude settings. Grok gets its own `~/.grok/coralline.conf` and `~/.grok/coralline/` store; it does not source `~/.claude/coralline.conf` or Claude's limit/burn files. Claude-only segments (`limit5h`, `limit7d`, `burn`, `cache`, `lines`, `style`, and subagent rows) stay off that default Grok layout, and a Grok payload will not fill them from a Claude store even if a shared conf still lists them.
 
 ### Windows without Git Bash
 
