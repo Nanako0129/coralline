@@ -123,10 +123,11 @@ After bootstrap, do the AI interview below and write `~/.claude/coralline.conf`.
 
 ## Grok Build
 
-You are Grok. Claude Code remains the default host; this path only registers the
-same Bash renderer with Grok. Do not run `--install` or `--install-only` unless
-the user also uses Claude Code — those flags merge `~/.claude/settings.json`.
-Skip the subagent interview.
+You are Grok. Claude Code remains the default host and keeps `statusline.sh`.
+This path registers `statusline-grok.sh`, which translates Grok's payload and
+then calls the Claude renderer. Do not run `--install` or `--install-only`
+unless the user also uses Claude Code — those flags merge
+`~/.claude/settings.json`. Skip the subagent interview.
 
 From a local checkout:
 
@@ -153,7 +154,7 @@ not open the wizard.
 Verify with a Grok-shaped stdin probe:
 
 ```bash
-printf '%s' '{"cwd":"/tmp","workspace":{"current_dir":"/tmp"},"model":{"display_name":"Grok 4.6"},"context_window":{"used_percentage":25,"context_tokens":12345},"cost":{"total_cost_usd":1.25},"trigger":"state"}' | CORALLINE_NO_SAMPLE=1 bash ~/.claude/coralline/statusline.sh
+printf '%s' '{"cwd":"/tmp","workspace":{"current_dir":"/tmp"},"model":{"display_name":"Grok 4.6"},"context_window":{"used_percentage":25,"context_tokens":12345},"cost":{"total_cost_usd":1.25},"trigger":"state"}' | CORALLINE_NO_SAMPLE=1 bash ~/.claude/coralline/statusline-grok.sh
 ```
 
 Success means exit code `0` and a non-empty statusline on stdout. Tell the user

@@ -1272,6 +1272,7 @@ install_files() {
   local theme_dir rel
   command -v jq >/dev/null 2>&1 || die "jq is required by coralline and by the installer"
   need_file "$SCRIPT_DIR/statusline.sh"
+  need_file "$SCRIPT_DIR/statusline-grok.sh"
   need_file "$SCRIPT_DIR/test/sample-input.json"
   [ -d "$SCRIPT_DIR/themes" ] || die "missing themes directory"
 
@@ -1296,6 +1297,8 @@ install_files() {
   # that never replaced the file.
   cp "$SCRIPT_DIR/statusline.sh" "$TARGET_DIR/statusline.sh" \
     || die "could not write $TARGET_DIR/statusline.sh (check permissions on the existing file)"
+  cp "$SCRIPT_DIR/statusline-grok.sh" "$TARGET_DIR/statusline-grok.sh" \
+    || die "could not write $TARGET_DIR/statusline-grok.sh (check permissions on the existing file)"
   cp "$SCRIPT_DIR/configure.sh" "$TARGET_DIR/configure.sh"
   cp "$SCRIPT_DIR/test/sample-input.json" "$TARGET_DIR/sample-input.json"
   theme_dir="$SCRIPT_DIR/themes"
@@ -1306,7 +1309,8 @@ install_files() {
   done <<THEMES
 $(cd "$theme_dir" && find . -type f -name '*.conf' | sed 's#^\./##')
 THEMES
-  chmod +x "$TARGET_DIR/statusline.sh" "$TARGET_DIR/configure.sh"
+  chmod +x "$TARGET_DIR/statusline.sh" "$TARGET_DIR/statusline-grok.sh" \
+    "$TARGET_DIR/configure.sh"
   installed=1
 }
 
@@ -1359,7 +1363,7 @@ update_settings() {
 
 register_grok() {  # append [ui.status_line] to Grok config.toml if the table is absent
   local cfg dir target cmd last stamp backup n=0 grok_root gconf gdir sl theme
-  [ -f "$TARGET_DIR/statusline.sh" ] || install_files
+  [ -f "$TARGET_DIR/statusline.sh" ] && [ -f "$TARGET_DIR/statusline-grok.sh" ] || install_files
   if [ -n "${GROK_HOME:-}" ]; then
     grok_root="$GROK_HOME"
   else
@@ -1402,7 +1406,7 @@ register_grok() {  # append [ui.status_line] to Grok config.toml if the table is
       printf 'VL_LIMIT_SYNC=0\n'
     } > "$gconf" || die "could not write $gconf"
   fi
-  sl=$(cd "$TARGET_DIR" && pwd)/statusline.sh
+  sl=$(cd "$TARGET_DIR" && pwd)/statusline-grok.sh
   cmd="env CORALLINE_CONFIG=\"$gconf\" CORALLINE_DIR=\"$gdir\" \"$sl\""
   cmd="${cmd//\\/\\\\}"
   cmd="${cmd//\"/\\\"}"

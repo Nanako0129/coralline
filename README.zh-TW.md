@@ -69,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 
 ### Grok Build
 
-Grok Build 可以透過 `[ui.status_line]` 呼叫同一個 Bash renderer。Claude Code 仍是預設 host。runtime 檔案就位後，用下面這行向 Grok 註冊，不會打開 wizard：
+Grok Build 走獨立入口 `statusline-grok.sh`：把 Grok 的 JSON 轉成 Claude 形狀後再呼叫 `statusline.sh`。Claude Code 仍直接跑 `statusline.sh`。runtime 檔案就位後，用下面這行向 Grok 註冊，不會打開 wizard：
 
 ```bash
 bash ~/.claude/coralline/configure.sh --register-grok

@@ -69,8 +69,7 @@ VL_FLOAT_SEP="  ·  "            # separator between float segments (plain text,
 # Base for every cross-session store below. Follows CLAUDE_CONFIG_DIR so two
 # Claude config dirs keep separate burn/limit state instead of overwriting each
 # other; unset (the common case) it is the historical $HOME/.claude/coralline.
-# A host can pin CORALLINE_DIR (Grok's command line does) so it never reuses
-# Claude Code's limit/burn store.
+# Honor a pre-set CORALLINE_DIR so another host entrypoint can isolate stores.
 if [ -z "${CORALLINE_DIR:-}" ]; then
   CORALLINE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/coralline"
 fi
@@ -2111,9 +2110,7 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
     (ctx_value | if (. == null) or (. == false) then "" else tostring end),
     (ctx_empty | if . then "1" else "0" end),
     (member($ctx; "total_input_tokens") as $ti |
-      if $ti != null then $ti
-      else (member($ctx; "context_tokens") as $ct |
-        if $ct != null then $ct else 0 end) end),
+      if $ti != null then $ti else 0 end),
     (member($ctx; "total_output_tokens") as $to |
       if $to != null then $to else "" end),
     (member(member($ctx; "current_usage"); "cache_read_input_tokens") as $cr |
@@ -2143,10 +2140,7 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
     ((member(member(.; "prompt_cache"); "hit_ratio")) as $h |
       if ($h|type) == "number" then ($h * 100 | tostring) else "" end),
     ((member(member(.; "prompt_cache"); "expires_at")) as $x |
-      if ($x|type) == "number" then ($x | tostring) else "" end),
-    ((member(.; "trigger")) as $t |
-      if ($t|type) == "string" then $t else "" end),
-    (member(.; "transcript_path") // "")
+      if ($x|type) == "number" then ($x | tostring) else "" end)
   ] | map(scrub) | join("\u001f")
   end' 2>/dev/null); then
   _JSON_OK=1
@@ -2154,40 +2148,9 @@ fi
 IFS=$'\037' read -r cwd model ctx_pct _CTX_EMPTY tok_in tok_out tok_cr tok_cw \
                  fh_pct fh_rst wd_pct wd_rst cost _COST_KIND \
                  lines_add lines_del out_style dur_ms effort \
-                 cache_pct cache_exp _GROK_TRIGGER _TRANSCRIPT_PATH <<JSON
+                 cache_pct cache_exp <<JSON
 $_JSON_FIELDS
 JSON
-
-# Grok's cost.total_cost_usd is attach-scoped after resume. The session
-# usage.json ledger is the conversation total (same meaning as Claude's field).
-grok_session_cost() {  # $1=transcript_path
-  local usage line ticks d r
-  case "${_GROK_TRIGGER:-}" in state|refresh_interval) ;; *) return 0 ;; esac
-  [ -n "$1" ] || return 0
-  usage="${1%/*}/usage.json"
-  [ "$usage" != "/usage.json" ] && [ "$usage" != "$1" ] || return 0
-  [ -f "$usage" ] && [ -r "$usage" ] || return 0
-  ticks=""
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      *'"costUsdTicks":'*)
-        ticks="${line#*\"costUsdTicks\":}"
-        ticks="${ticks%%,*}"
-        ticks="${ticks%%\}*}"
-        ticks="${ticks#"${ticks%%[![:space:]]*}"}"
-        ticks="${ticks%"${ticks##*[![:space:]]}"}"
-        break
-        ;;
-    esac
-  done < "$usage"
-  case "$ticks" in (''|*[!0-9]*) return 0 ;; esac
-  [ "${#ticks}" -le 18 ] || return 0
-  d=$((10#$ticks / 10000000000))
-  r=$((10#$ticks % 10000000000))
-  printf -v cost '%d.%010d' "$d" "$r"
-  _COST_KIND=scalar
-}
-grok_session_cost "${_TRANSCRIPT_PATH:-}"
 
 _SEG_SCAN=" $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 "
 [ "$VL_FLOAT" = "1" ] && _SEG_SCAN="$_SEG_SCAN$VL_FLOAT_SEGMENTS "
@@ -2207,13 +2170,6 @@ if [ "$VL_LIMIT_SYNC" = 1 ]; then
   case "$_SEG_SCAN" in (*" limit5h "*|*" burn "*) _STATE_RL5_GATE=1 ;; esac
   case "$_SEG_SCAN" in (*" limit7d "*|*" burn "*) _STATE_RL7_GATE=1 ;; esac
 fi
-# Grok's command payload always sends trigger=state|refresh_interval and never
-# rate_limits. Claude's VL_LIMIT_SYNC store is not a Grok reading; using it
-# would paint 5h/7d/burn from another product. Skip the store on that payload
-# even if a shared conf still lists those segments.
-case "${_GROK_TRIGGER:-}" in
-  state|refresh_interval) _STATE_BURN_GATE=0; _STATE_RL5_GATE=0; _STATE_RL7_GATE=0 ;;
-esac
 if [ "$_STATE_BURN_GATE" = 1 ] || [ "$_STATE_RL5_GATE" = 1 ] || [ "$_STATE_RL7_GATE" = 1 ]; then
   state_gate
   if [ "$_STATE_MUTATE" = 1 ]; then

@@ -69,7 +69,7 @@ It recommends the latest tagged release or lets you choose mutable `main`. Skip 
 
 ### Grok Build
 
-Grok Build can invoke the same Bash renderer via `[ui.status_line]`. Claude Code remains the default host. After the runtime files are in place, register Grok without opening the wizard:
+Grok Build uses a separate entrypoint, `statusline-grok.sh`, which maps Grok's JSON into the Claude-shaped payload and then calls `statusline.sh`. Claude Code keeps calling `statusline.sh` directly. After the runtime files are in place, register Grok without opening the wizard:
 
 ```bash
 bash ~/.claude/coralline/configure.sh --register-grok

@@ -37,7 +37,8 @@ new_sandbox() {
   WORK="$SANDBOX/work"
   mkdir -p "$WORK/grok" "$WORK/coralline"
   cp "$REPO/statusline.sh" "$WORK/coralline/statusline.sh"
-  chmod +x "$WORK/coralline/statusline.sh"
+  cp "$REPO/statusline-grok.sh" "$WORK/coralline/statusline-grok.sh"
+  chmod +x "$WORK/coralline/statusline.sh" "$WORK/coralline/statusline-grok.sh"
   printf 'PREEXISTING_CONF\n' > "$WORK/coralline.conf"
   export GROK_HOME="$WORK/grok"
   export CORALLINE_HOME="$WORK/coralline"
@@ -77,7 +78,7 @@ run_register() {
 }
 
 abs_statusline() {
-  printf '%s/statusline.sh\n' "$(cd "$CORALLINE_HOME" && pwd)"
+  printf '%s/statusline-grok.sh\n' "$(cd "$CORALLINE_HOME" && pwd)"
 }
 
 # --- missing config.toml is created with the table --------------------------------
@@ -91,8 +92,8 @@ grep -q '^\[ui.status_line\]$' "$cfg" && check "created table header" 1 || check
 grep -q '^type = "command"$' "$cfg" && check "created type = command" 1 || check "created type = command" 0
 grep -q '^refresh_interval = 1$' "$cfg" && check "created refresh_interval = 1" 1 || check "created refresh_interval = 1" 0
 grep -Fq "$cmd" "$cfg" && grep -Fq "CORALLINE_CONFIG=" "$cfg" && grep -Fq "CORALLINE_DIR=" "$cfg" \
-  && check "created command pins Grok conf/dir and statusline.sh" 1 \
-  || check "created command pins Grok conf/dir and statusline.sh" 0
+  && check "created command pins Grok conf/dir and statusline-grok.sh" 1 \
+  || check "created command pins Grok conf/dir and statusline-grok.sh" 0
 [ -f "$GROK_HOME/coralline.conf" ] && grep -q 'VL_LIMIT_SYNC=0' "$GROK_HOME/coralline.conf" \
   && check "created Grok coralline.conf with VL_LIMIT_SYNC=0" 1 \
   || check "created Grok coralline.conf with VL_LIMIT_SYNC=0" 0

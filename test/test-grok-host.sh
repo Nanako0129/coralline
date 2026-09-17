@@ -10,6 +10,7 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 SCRIPT="$REPO/statusline.sh"
+GROK_SCRIPT="$REPO/statusline-grok.sh"
 CONF_TMPL="$REPO/themes/claude-coral.conf"
 SAMPLE="$HERE/sample-input.json"
 GROK="$HERE/sample-input-grok.json"
@@ -27,8 +28,8 @@ command -v jq >/dev/null 2>&1 || { echo "SKIP  jq not available"; exit 0; }
 
 # Render the REAL statusline.sh. CORALLINE_NO_SAMPLE keeps cross-session stores
 # untouched. Output lands in a file so cmp keeps the trailing newline.
-render_file() { # $1 payload $2 segments $3 dest [extra conf]
-  local payload="$1" segs="$2" dest="$3" extra="${4:-}" conf
+render_file() { # $1 payload $2 segments $3 dest [extra conf] [runner]
+  local payload="$1" segs="$2" dest="$3" extra="${4:-}" runner="${5:-$SCRIPT}" conf
   conf=$(mktemp "${TMPDIR:-/tmp}/coralline-grok-host.XXXXXX") || exit 1
   {
     printf '. %s\n' "$CONF_TMPL"
@@ -37,14 +38,14 @@ render_file() { # $1 payload $2 segments $3 dest [extra conf]
     printf 'VL_CLOCK=off\n'
     printf '%s' "$extra"
   } > "$conf"
-  CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$conf" bash "$SCRIPT" < "$payload" > "$dest"
+  CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$conf" bash "$runner" < "$payload" > "$dest"
   rm -f "$conf"
 }
 
-render() { # $1 payload $2 segments [extra conf] -> $out
+render() { # $1 payload $2 segments [extra conf] [runner] -> $out
   local dest
   dest=$(mktemp "${TMPDIR:-/tmp}/coralline-grok-out.XXXXXX") || exit 1
-  render_file "$1" "$2" "$dest" "${3:-}"
+  render_file "$1" "$2" "$dest" "${3:-}" "${4:-$SCRIPT}"
   out=$(cat "$dest")
   rm -f "$dest"
 }
@@ -63,7 +64,7 @@ check "Claude payload still shows 5h label"      "$(has '5h')"
 check "Claude payload still shows 7d label"      "$(has '7d')"
 
 # (3) Grok fixture: overlapping fields honest, Claude-only segments hidden.
-render "$GROK" "model ctx cache limit5h limit7d lines cost style duration effort"
+render "$GROK" "model ctx cache limit5h limit7d lines cost style duration effort" "" "$GROK_SCRIPT"
 check "Grok payload shows model Grok 4.6"        "$(has 'Grok 4.6')"
 check "Grok payload shows ctx percent 25%"       "$(has '25%')"
 check "Grok payload shows ↑12.3k from context_tokens" "$(has '↑12.3k')"
@@ -81,7 +82,7 @@ check "Grok payload hides lines - pill"          "$(lacks '-')"
 # (4) Grok-like payload missing total_cost_usd does not render $0.00.
 nocost=$(mktemp "${TMPDIR:-/tmp}/coralline-grok-nocost.XXXXXX") || exit 1
 jq 'del(.cost.total_cost_usd)' "$GROK" > "$nocost" || exit 1
-render "$nocost" "model ctx cache limit5h limit7d lines cost style duration effort"
+render "$nocost" "model ctx cache limit5h limit7d lines cost style duration effort" "" "$GROK_SCRIPT"
 rm -f "$nocost"
 check "Grok payload without cost does not show \$0.00" "$(lacks '$0.00')"
 
@@ -101,7 +102,7 @@ printf -v entry '%010d_%03d.%03d' "$rst" 41 200
 mkdir -p "$store/limit-5h.d/$entry" "$store/limit-7d.d" || exit 1
 sync_extra='VL_LIMIT_SYNC=1
 '
-CORALLINE_DIR="$store" render "$GROK" "model ctx limit5h limit7d burn cost" "$sync_extra"
+CORALLINE_DIR="$store" render "$GROK" "model ctx limit5h limit7d burn cost" "$sync_extra" "$GROK_SCRIPT"
 rm -rf "$store"
 check "Grok payload does not sync 5h from a Claude store" "$(lacks '5h')"
 check "Grok payload does not sync 7d from a Claude store" "$(lacks '7d')"
@@ -113,7 +114,7 @@ printf '%s\n' '{"session":{"costUsdTicks":41943147200}}' > "$sess/usage.json"
 : > "$sess/updates.jsonl"
 ledger=$(mktemp "${TMPDIR:-/tmp}/coralline-grok-ledger.XXXXXX") || exit 1
 jq --arg t "$sess/updates.jsonl" '.transcript_path=$t' "$GROK" > "$ledger" || exit 1
-render "$ledger" "model cost"
+render "$ledger" "model cost" "" "$GROK_SCRIPT"
 rm -f "$ledger"
 rm -rf "$sess"
 check "Grok usage.json session total overrides attach-scoped payload cost" "$(has '$4.19')"
