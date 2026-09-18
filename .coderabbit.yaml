@@ -77,10 +77,24 @@ reviews:
 
     - path: "{install.sh,configure.sh,install.ps1}"
       instructions: |
-        README.md promises the installer preserves coralline.conf and never
-        rewrites existing config, that new options are opt-in and default off,
-        and that both renderers make no network requests after installation.
-        Flag a change that breaks any of those.
+        README.md draws a boundary here rather than a blanket rule, and the
+        distinction is the whole point:
+
+        - coralline.conf is never created or edited by an installer. The wizard
+          or AI changes it only after showing the proposed change and receiving
+          approval.
+        - settings.json IS modified, deliberately: Bash backs it up and performs
+          a semantic jq merge, and the native installer precisely merges the
+          top-level statusLine. Unrelated settings are retained; original
+          formatting is not promised.
+        - subagentStatusLine is preserved unless on or off is explicit.
+
+        Do not flag a documented merge as a defect. Flag a change that edits
+        coralline.conf without approval, widens what the installer replaces
+        beyond the managed set, or drops the settings.json backup.
+
+        Also promised: new options are opt-in and default off, and both
+        renderers make no network requests after installation.
 
         Confirm default output stays byte-identical when a new segment is added
         but not enabled.
