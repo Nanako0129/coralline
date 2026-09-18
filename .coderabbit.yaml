@@ -16,28 +16,28 @@ reviews:
     - path: "statusline.sh"
       instructions: |
         This runs on every prompt, and README.md states the budget as a product
-        promise: the Bash main bar parses its payload with ONE `jq` call, uses
-        at most ONE `git status --porcelain=v2 --branch` call per render, and
+        promise: the Bash main bar parses its payload with ONE jq call, uses
+        at most ONE git status --porcelain=v2 --branch call per render, and
         makes NO per-field subprocesses. Flag any change that adds a fork to the
-        steady-state render path. `fork()` is emulated and expensive under Git
+        steady-state render path. fork() is emulated and expensive under Git
         Bash, so a subshell that looks free on macOS is not.
 
         Follow the established pattern in this file: helpers return through a
-        global set with `printf -v`, not through `$(...)` command substitution.
+        global set with printf -v, not through command substitution.
 
         README.md's support matrix commits to stock Bash 3.2 on macOS as well as
         Bash 4+/5. Flag Bash 4+ only constructs: associative arrays
-        (`declare -A`), `${var,,}` / `${var^^}` case conversion, `mapfile` /
-        `readarray`, negative array indices, `&>>`. There is no `bc`; use Bash
+        (declare -A), the comma and caret case-conversion parameter expansions,
+        mapfile / readarray, negative array indices, &>>. There is no bc; use Bash
         arithmetic.
 
-        No new runtime dependencies. README.md names the complete set: `jq` and
-        a Nerd Font, with `git` optional.
+        No new runtime dependencies. README.md names the complete set: jq and
+        a Nerd Font, with git optional.
 
     - path: "statusline.ps1"
       instructions: |
         The native Windows PowerShell 5.1 renderer. README.md promises it needs
-        no Bash, `jq`, WSL, archive extractor or Git, and that `git.exe` is
+        no Bash, jq, WSL, archive extractor or Git, and that git.exe is
         optional. Flag a change that introduces any of those as a requirement.
 
         It is expected to support the same segments, styles, layouts,
@@ -46,8 +46,8 @@ reviews:
         asymmetry left unstated.
 
         Target is Windows PowerShell 5.1, not PowerShell 7+. Flag constructs
-        that need 7+ (`??`, `?.`, ternary `? :`, `Get-Content -AsByteStream`,
-        `ConvertFrom-Json -AsHashtable`).
+        that need 7+ (??, ?., ternary ? :, Get-Content -AsByteStream,
+        ConvertFrom-Json -AsHashtable).
 
     - path: "themes/*.conf"
       instructions: |
@@ -61,10 +61,10 @@ reviews:
 
     - path: "test/*.sh"
       instructions: |
-        These suites extract helper functions live from `statusline.sh` with
-        `sed`, so they cannot drift from the implementation. That extraction
-        depends on every `fn() { ... }` block staying well-formed with its
-        closing `}` at column 0. Flag a change to a helper's brace layout, or a
+        These suites extract helper functions live from statusline.sh with
+        sed, so they cannot drift from the implementation. That extraction
+        depends on every fn() { ... } block staying well-formed with its
+        closing } at column 0. Flag a change to a helper's brace layout, or a
         test that copies a helper's body instead of extracting it.
 
         A change to any sampler or estimator needs a regression test in the
@@ -72,7 +72,7 @@ reviews:
 
     - path: "{install.sh,configure.sh,install.ps1}"
       instructions: |
-        README.md promises the installer preserves `coralline.conf` and never
+        README.md promises the installer preserves coralline.conf and never
         rewrites existing config, that new options are opt-in and default off,
         and that both renderers make no network requests after installation.
         Flag a change that breaks any of those.
