@@ -1,0 +1,108 @@
+# CodeRabbit configuration.
+# Schema: https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+#
+# Every instruction below restates a constraint README.md already states
+# publicly, as a review instruction rather than as a product claim. Nothing here
+# is a new policy.
+#
+# The one setting that is a choice rather than a restatement is
+# auto_pause_after_reviewed_commits, commented at its key.
+
+reviews:
+  auto_review:
+    # 0 disables the pause entirely, which is the schema's documented sentinel
+    # ("Set to 0 to disable"), not a large number chosen by hand. At the default
+    # of 5, automatic review stops silently once a pull request has five
+    # reviewed commits, and a poller waiting on the verdict reads that pause as
+    # a timeout rather than as a stop. Measured: sepia#250 ran four rounds.
+    auto_pause_after_reviewed_commits: 0
+
+  path_instructions:
+    - path: "statusline.sh"
+      instructions: |
+        This runs on every prompt, and README.md states the budget as a product
+        promise: the Bash main bar parses its payload with ONE jq call, uses
+        at most ONE git status --porcelain=v2 --branch call per render, and
+        makes NO per-field subprocesses. Flag any change that adds a fork to the
+        steady-state render path. fork() is emulated and expensive under Git
+        Bash, so a subshell that looks free on macOS is not.
+
+        Follow the established pattern in this file: helpers return through a
+        global set with printf -v, not through command substitution.
+
+        README.md's support matrix commits to stock Bash 3.2 on macOS as well as
+        Bash 4+/5. Flag Bash 4+ only constructs: associative arrays
+        (declare -A), the comma and caret case-conversion parameter expansions,
+        mapfile / readarray, negative array indices, &>>. There is no bc; use Bash
+        arithmetic.
+
+        No new runtime dependencies. README.md names the complete set: jq and
+        a Nerd Font, with git optional.
+
+    - path: "statusline.ps1"
+      instructions: |
+        The native Windows PowerShell 5.1 renderer. README.md promises it needs
+        no Bash, jq, WSL, archive extractor or Git, and that git.exe is
+        optional. Flag a change that introduces any of those as a requirement.
+
+        It is expected to support the same segments, styles, layouts,
+        state-backed features, float output and themed subagent rows as the Bash
+        renderer. Flag a feature added to one renderer without the other, or an
+        asymmetry left unstated.
+
+        Target is Windows PowerShell 5.1, not PowerShell 7+. Flag constructs
+        that need 7+ (??, ?., ternary ? :, Get-Content -AsByteStream,
+        ConvertFrom-Json -AsHashtable).
+
+    - path: "themes/*.conf"
+      instructions: |
+        A new segment that carries its own background colour must define it in
+        every theme here, not only the default. A hardcoded colour index or RGB
+        that fits one theme is a defect. Reuse each theme's canonical swatch,
+        match hue, saturation and brightness, keep it distinct from the ADJACENT
+        segment, and keep it legible under that theme's text colour: dark-text
+        themes want light pills, white-text themes want mid or deep ones.
+        Grayscale themes stay in-family.
+
+    - path: "test/*.sh"
+      instructions: |
+        These suites extract helper functions live from statusline.sh with
+        sed, so they cannot drift from the implementation. That extraction
+        depends on every fn() { ... } block staying well-formed with its
+        closing } at column 0. Flag a change to a helper's brace layout, or a
+        test that copies a helper's body instead of extracting it.
+
+        A change to any sampler or estimator needs a regression test in the
+        matching suite.
+
+    - path: "{install.sh,configure.sh,install.ps1}"
+      instructions: |
+        README.md draws a boundary here rather than a blanket rule, and the
+        distinction is the whole point:
+
+        - coralline.conf is never created or edited by an installer. The wizard
+          or AI changes it only after showing the proposed change and receiving
+          approval.
+        - settings.json IS modified, deliberately: Bash backs it up and performs
+          a semantic jq merge, and the native installer precisely merges the
+          top-level statusLine. Unrelated settings are retained; original
+          formatting is not promised.
+        - subagentStatusLine is preserved unless on or off is explicit.
+
+        Do not flag a documented merge as a defect. Flag a change that edits
+        coralline.conf without approval, widens what the installer replaces
+        beyond the managed set, or drops the settings.json backup.
+
+        Also promised: new options are opt-in and default off, and both
+        renderers make no network requests after installation.
+
+        Confirm default output stays byte-identical when a new segment is added
+        but not enabled.
+
+knowledge_base:
+  code_guidelines:
+    filePatterns:
+      - "README.md"
+      - "README.zh-TW.md"
+      - "INSTALL.md"
+      - "BENCHMARK.md"
