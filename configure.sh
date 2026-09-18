@@ -72,11 +72,13 @@ Options:
                settings and exit — the non-interactive twin of the wizard's
                closing question, for AI installs and upgrades.
   --register-grok
-               Append [ui.status_line] to Grok config.toml if absent, then exit.
-               Pins CORALLINE_CONFIG/CORALLINE_DIR under GROK_HOME so Grok
-               does not share Claude Code's conf or limit store. Never
-               rewrites an existing table, Claude settings, or
-               ~/.claude/coralline.conf. Installs runtime files only when missing.
+               Install the Grok runtime under GROK_HOME and append
+               [ui.status_line] to Grok config.toml, then exit. The entrypoint
+               takes its conf and limit store from GROK_HOME, so Grok shares
+               neither with Claude Code. Skips the append when config.toml
+               mentions status_line in any spelling (a duplicate key would
+               invalidate the whole file) and prints the command instead.
+               Touches nothing under ~/.claude.
   --import-p10k
                Import ~/.p10k.zsh without opening the setup menu.
   --wizard     Open the visual wizard directly.
@@ -1272,7 +1274,6 @@ install_files() {
   local theme_dir rel
   command -v jq >/dev/null 2>&1 || die "jq is required by coralline and by the installer"
   need_file "$SCRIPT_DIR/statusline.sh"
-  need_file "$SCRIPT_DIR/statusline-grok.sh"
   need_file "$SCRIPT_DIR/test/sample-input.json"
   [ -d "$SCRIPT_DIR/themes" ] || die "missing themes directory"
 
@@ -1297,8 +1298,13 @@ install_files() {
   # that never replaced the file.
   cp "$SCRIPT_DIR/statusline.sh" "$TARGET_DIR/statusline.sh" \
     || die "could not write $TARGET_DIR/statusline.sh (check permissions on the existing file)"
-  cp "$SCRIPT_DIR/statusline-grok.sh" "$TARGET_DIR/statusline-grok.sh" \
-    || die "could not write $TARGET_DIR/statusline-grok.sh (check permissions on the existing file)"
+  # Grok's entrypoint is optional here: --register-grok installs its own copy
+  # under GROK_HOME. Claude Code never runs this one, so a failure to place it
+  # (an unwritable target directory on an upgrade, an older source tree without
+  # the file) must not abort a Claude install -- same fail-open treatment as
+  # configure.sh and the sample payload below.
+  [ -f "$SCRIPT_DIR/statusline-grok.sh" ] \
+    && cp "$SCRIPT_DIR/statusline-grok.sh" "$TARGET_DIR/statusline-grok.sh" 2>/dev/null
   cp "$SCRIPT_DIR/configure.sh" "$TARGET_DIR/configure.sh"
   cp "$SCRIPT_DIR/test/sample-input.json" "$TARGET_DIR/sample-input.json"
   theme_dir="$SCRIPT_DIR/themes"
@@ -1309,8 +1315,8 @@ install_files() {
   done <<THEMES
 $(cd "$theme_dir" && find . -type f -name '*.conf' | sed 's#^\./##')
 THEMES
-  chmod +x "$TARGET_DIR/statusline.sh" "$TARGET_DIR/statusline-grok.sh" \
-    "$TARGET_DIR/configure.sh"
+  chmod +x "$TARGET_DIR/statusline.sh" "$TARGET_DIR/configure.sh"
+  [ -f "$TARGET_DIR/statusline-grok.sh" ] && chmod +x "$TARGET_DIR/statusline-grok.sh"
   installed=1
 }
 
@@ -1362,10 +1368,11 @@ update_settings() {
 }
 
 register_grok() {  # append [ui.status_line] to Grok config.toml if the table is absent
-  local cfg dir target cmd last stamp backup n=0 grok_root gconf gdir sl theme
+  local cfg dir target cmd last stamp backup n=0 grok_root gconf gdir sl theme rel
   need_file "$SCRIPT_DIR/statusline.sh"
   need_file "$SCRIPT_DIR/statusline-grok.sh"
-  [ -f "$TARGET_DIR/statusline.sh" ] || install_files
+  # Everything Grok needs is copied from SCRIPT_DIR into GROK_HOME below, so a
+  # Grok-only machine never gets a ~/.claude/coralline/ it has no use for.
   if [ -n "${GROK_HOME:-}" ]; then
     grok_root="$GROK_HOME"
   else
@@ -1387,9 +1394,23 @@ register_grok() {  # append [ui.status_line] to Grok config.toml if the table is
   cp "$SCRIPT_DIR/statusline-grok.sh" "$gdir/statusline-grok.sh" \
     || die "could not write $gdir/statusline-grok.sh"
   chmod +x "$gdir/statusline.sh" "$gdir/statusline-grok.sh"
+  # Themes travel with the Grok runtime. Sourcing them out of $TARGET_DIR would
+  # tie ~/.grok to a Claude install the documented Grok-only user never makes,
+  # and every render would print "No such file or directory" once it went away.
+  if [ -d "$SCRIPT_DIR/themes" ]; then
+    mkdir -p "$gdir/themes" || die "could not create $gdir/themes"
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      cp "$SCRIPT_DIR/themes/$rel" "$gdir/themes/$rel" \
+        || die "could not write $gdir/themes/$rel"
+    done <<GTHEMES
+$(cd "$SCRIPT_DIR/themes" && find . -type f -name '*.conf' | sed 's#^\./##')
+GTHEMES
+  fi
+  sl="$gdir/statusline-grok.sh"
   gconf=$(cd "$grok_root" && pwd)/coralline.conf
   if [ ! -f "$gconf" ]; then
-    theme="$TARGET_DIR/themes/claude-coral.conf"
+    theme="$gdir/themes/claude-coral.conf"
     {
       printf '# coralline config for Grok Build. Independent of ~/.claude/coralline.conf.\n'
       if [ -f "$theme" ]; then
@@ -1399,16 +1420,20 @@ register_grok() {  # append [ui.status_line] to Grok config.toml if the table is
       printf 'VL_LIMIT_SYNC=0\n'
     } > "$gconf" || die "could not write $gconf"
   fi
-  if [ -f "$cfg" ] && grep -qE $'^[ \t]*\\[ui\\.status_line\\][ \t]*(#.*)?\r?$' "$cfg"; then
+  # Appending a second definition of ui.status_line makes the WHOLE file
+  # unparseable, so this has to catch every legal spelling, not the one we
+  # write: `[ui.status_line]`, `[ ui.status_line ]`, `["ui"."status_line"]`,
+  # and `status_line.type = ...` or `status_line = { ... }` under `[ui]`.
+  # Nothing here can parse TOML (bash + jq only), so any mention of the key is
+  # treated as "already configured" and the user is handed the command to set
+  # by hand. A false positive costs one message; a false negative costs their
+  # config file.
+  if [ -f "$cfg" ] && grep -q 'status_line' "$cfg"; then
     printf 'Updated Grok runtime in %s\n' "$gdir"
-    printf 'Left unchanged: %s already has [ui.status_line]\n' "$cfg"
-    return 0
-  fi
-  # [ui.status_line.extra] already defines the ui.status_line parent. Appending
-  # [ui.status_line] after that child redefines the table and is invalid TOML.
-  if [ -f "$cfg" ] && grep -qE $'^[ \t]*\\[ui\\.status_line\\.' "$cfg"; then
-    printf 'Updated Grok runtime in %s\n' "$gdir"
-    printf 'Left unchanged: %s has [ui.status_line.*]; not appending [ui.status_line]\n' "$cfg"
+    printf 'Left unchanged: %s already mentions status_line\n' "$cfg"
+    printf 'To point Grok here, set that table to:\n'
+    printf '  type = "command"\n'
+    printf '  command = "bash %s"\n' "$sl"
     return 0
   fi
   if [ -f "$cfg" ]; then
@@ -1421,11 +1446,10 @@ register_grok() {  # append [ui.status_line] to Grok config.toml if the table is
   fi
   dir=$(dirname "$cfg")
   mkdir -p "$dir" || die "could not create $dir"
-  sl="$gdir/statusline-grok.sh"
   # Grok execs a path directly when it names an executable. `env VAR=... "script"`
   # is not a path and can fail with Permission denied (os error 13). Invoke via
-  # bash, same as Claude Code's statusLine.command. The Grok entrypoint itself
-  # defaults CORALLINE_CONFIG/DIR under GROK_HOME.
+  # bash, same as Claude Code's statusLine.command. The Grok entrypoint resolves
+  # its own conf and store from GROK_HOME, so no variables need passing here.
   printf -v cmd 'bash %q' "$sl"
   cmd="${cmd//\\/\\\\}"
   cmd="${cmd//\"/\\\"}"

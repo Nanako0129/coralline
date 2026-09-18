@@ -142,22 +142,28 @@ on the current directory:
 bash ~/.claude/coralline/configure.sh --register-grok
 ```
 
-`--register-grok` copies runtime files only when
-`~/.claude/coralline/statusline.sh` is missing, appends `[ui.status_line]` to
-`$GROK_HOME/config.toml` (or `~/.grok/config.toml`) when that table is absent,
-and exits. It copies `statusline.sh` and `statusline-grok.sh` into
-`~/.grok/coralline/`, and the command pins `CORALLINE_CONFIG` and
-`CORALLINE_DIR` under GROK_HOME (`~/.grok/coralline.conf` and
-`~/.grok/coralline/`) so Grok does not share Claude Code's conf or
-limit/burn store. The command runs `~/.grok/coralline/statusline-grok.sh`,
-not Claude's `~/.claude/coralline/statusline.sh`. It never rewrites an existing
-`[ui.status_line]`, Claude settings, or `~/.claude/coralline.conf`, and it does
-not open the wizard.
+`--register-grok` copies `statusline.sh`, `statusline-grok.sh` and `themes/`
+into `~/.grok/coralline/`, writes `~/.grok/coralline.conf` when it is missing,
+appends `[ui.status_line]` to `$GROK_HOME/config.toml` (or
+`~/.grok/config.toml`), and exits. The adapter resolves its conf and its
+limit/burn store from `GROK_HOME` alone, so Grok shares neither with Claude
+Code. It never rewrites Claude settings or `~/.claude/coralline.conf`, and it
+does not open the wizard.
 
-Verify with a Grok-shaped stdin probe:
+It refuses to append when `config.toml` mentions `status_line` anywhere, in any
+spelling. A second definition of that key makes the whole file invalid TOML, and
+nothing in this installer can parse TOML to be certain which spelling is in use,
+so it prints the `command` line for the user to set by hand instead.
+
+It touches nothing under `~/.claude`. Everything Grok needs is copied out of the
+checkout (or the installed copy you invoked) into `~/.grok/coralline/`, so a
+Grok-only machine never gets a Claude Code runtime it has no use for.
+
+Verify with a Grok-shaped stdin probe against the copy Grok actually runs.
+`CORALLINE_NO_SAMPLE=1` keeps the probe's values out of the cross-session store:
 
 ```bash
-printf '%s' '{"cwd":"/tmp","workspace":{"current_dir":"/tmp"},"model":{"display_name":"Grok 4.6"},"context_window":{"used_percentage":25,"context_tokens":12345},"cost":{"total_cost_usd":1.25},"trigger":"state"}' | CORALLINE_NO_SAMPLE=1 bash ~/.claude/coralline/statusline-grok.sh
+printf '%s' '{"cwd":"/tmp","workspace":{"current_dir":"/tmp"},"model":{"display_name":"Grok 4.6"},"context_window":{"used_percentage":25,"context_tokens":12345},"cost":{"total_cost_usd":1.25},"trigger":"state"}' | CORALLINE_NO_SAMPLE=1 bash ~/.grok/coralline/statusline-grok.sh
 ```
 
 Success means exit code `0` and a non-empty statusline on stdout. Tell the user

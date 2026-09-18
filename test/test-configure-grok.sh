@@ -64,13 +64,15 @@ settings_absent() {
 run_register() {
   local outf
   outf=$(mktemp "${TMPDIR:-/tmp}/coralline-rg-out.XXXXXX") || exit 1
-  perl -e 'alarm 10; exec @ARGV' \
-    env CORALLINE_NO_SAMPLE=1 \
-        HOME="$HOME" \
-        GROK_HOME="$GROK_HOME" \
-        CORALLINE_HOME="$CORALLINE_HOME" \
-        CORALLINE_CONFIG="$CORALLINE_CONFIG" \
-        CLAUDE_SETTINGS="$CLAUDE_SETTINGS" \
+  # </dev/null is the whole timeout: --register-grok never opens the wizard, and
+  # anything that did read stdin gets EOF immediately. An `alarm` wrapper here
+  # would only add perl to the test dependencies.
+  env CORALLINE_NO_SAMPLE=1 \
+      HOME="$HOME" \
+      GROK_HOME="$GROK_HOME" \
+      CORALLINE_HOME="$CORALLINE_HOME" \
+      CORALLINE_CONFIG="$CORALLINE_CONFIG" \
+      CLAUDE_SETTINGS="$CLAUDE_SETTINGS" \
     bash "$CONF" --register-grok </dev/null >"$outf" 2>&1
   RG_RC=$?
   RG_OUT=$(cat "$outf")
@@ -200,6 +202,78 @@ grep -c '\[ui.status_line\]' "$GROK_HOME/config.toml" | grep -qx 1 \
   && check "CRLF table is not duplicated" 1 \
   || check "CRLF table is not duplicated" 0
 check "CRLF table path exits 0" "$([ "$RG_RC" -eq 0 ] && echo 1 || echo 0)"
+rm -rf "$SANDBOX"
+
+# --- every legal spelling of the key blocks the append ----------------------------
+# Appending a second definition of ui.status_line does not break that one key,
+# it makes the WHOLE file unparseable. A guard that only matches the spelling we
+# write leaves the realistic cases -- a status line already configured under an
+# existing [ui] table -- silently corrupted, with "Updated" printed.
+spelling_case() { # $1 label $2 config.toml body
+  new_sandbox
+  printf '%s' "$2" > "$GROK_HOME/config.toml"
+  before=$(cat "$GROK_HOME/config.toml")
+  run_register
+  after=$(cat "$GROK_HOME/config.toml")
+  [ "$before" = "$after" ] && check "$1: config.toml is left byte-identical" 1 \
+    || check "$1: config.toml is left byte-identical" 0
+  grep -q '^\[ui.status_line\]$' "$GROK_HOME/config.toml" \
+    && check "$1: no [ui.status_line] appended" 0 \
+    || check "$1: no [ui.status_line] appended" 1
+  check "$1: exits 0" "$([ "$RG_RC" -eq 0 ] && echo 1 || echo 0)"
+  case "$RG_OUT" in
+    (*"command = \"bash "*) check "$1: prints the command to set by hand" 1 ;;
+    (*)                     check "$1: prints the command to set by hand" 0 ;;
+  esac
+  sentinels_ok && check "$1: sentinels unmodified" 1 || check "$1: sentinels unmodified" 0
+  rm -rf "$SANDBOX"
+}
+spelling_case "spaced header"  '[ ui.status_line ]
+type = "command"
+'
+spelling_case "quoted keys"    '["ui"."status_line"]
+type = "command"
+'
+spelling_case "inline table"   '[ui]
+status_line = { type = "command", command = "mine" }
+'
+spelling_case "dotted key"     '[ui]
+status_line.type = "command"
+status_line.command = "mine"
+'
+
+# --- Grok-only machine: nothing is created under the Claude tree ------------------
+new_sandbox
+export CORALLINE_HOME="$WORK/no-claude-here/coralline"
+run_register
+check "Grok-only exits 0" "$([ "$RG_RC" -eq 0 ] && echo 1 || echo 0)"
+[ -e "$WORK/no-claude-here" ] \
+  && check "Grok-only does not create a Claude runtime dir" 0 \
+  || check "Grok-only does not create a Claude runtime dir" 1
+[ -x "$GROK_HOME/coralline/statusline-grok.sh" ] \
+  && check "Grok-only still installs the Grok runtime" 1 \
+  || check "Grok-only still installs the Grok runtime" 0
+sentinels_ok && check "sentinels unmodified (Grok-only)" 1 \
+  || check "sentinels unmodified (Grok-only)" 0
+rm -rf "$SANDBOX"
+
+# --- themes travel with the Grok runtime ------------------------------------------
+new_sandbox
+run_register
+[ -f "$GROK_HOME/coralline/themes/claude-coral.conf" ] \
+  && check "themes are installed under GROK_HOME" 1 \
+  || check "themes are installed under GROK_HOME" 0
+# The generated conf must source the Grok copy: a Grok-only user is told not to
+# run --install, so a $TARGET_DIR path would break the moment Claude's tree goes.
+# Only the source line: the header comment mentions ~/.claude/coralline.conf.
+# The path is matched by suffix because gdir comes from `cd … && pwd`, which
+# resolves symlinks (macOS /var -> /private/var).
+srcline=$(grep '^\. ' "$GROK_HOME/coralline.conf")
+case "$srcline" in
+  (*/.claude/*)                            check "generated conf sources the Grok theme copy" 0 ;;
+  (*coralline/themes/claude-coral.conf*)   check "generated conf sources the Grok theme copy" 1 ;;
+  (*)                                      check "generated conf sources the Grok theme copy" 0 ;;
+esac
 rm -rf "$SANDBOX"
 
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi

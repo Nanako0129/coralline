@@ -75,7 +75,7 @@ Grok Build uses a separate entrypoint, `statusline-grok.sh`, which maps Grok's J
 bash ~/.claude/coralline/configure.sh --register-grok
 ```
 
-Restart Grok afterwards. `--install` / `--install-only` still only merge Claude `settings.json`. `--register-grok` copies `statusline.sh` and `statusline-grok.sh` into `~/.grok/coralline/`, appends Grok's config when `[ui.status_line]` is absent, and never rewrites an existing table or Claude settings. Grok gets its own `~/.grok/coralline.conf` and store; it does not source `~/.claude/coralline.conf` or Claude's limit/burn files. Claude-only segments (`limit5h`, `limit7d`, `burn`, `cache`, `lines`, `style`, and subagent rows) stay off that default Grok layout, and a Grok payload will not fill them from a Claude store even if a shared conf still lists them.
+Restart Grok afterwards. `--install` / `--install-only` still only merge Claude `settings.json`. `--register-grok` copies `statusline.sh`, `statusline-grok.sh` and `themes/` into `~/.grok/coralline/`, appends Grok's config when nothing in it mentions `status_line`, and never rewrites an existing table or Claude settings. Grok gets its own `~/.grok/coralline.conf`, its own themes, and its own store; it does not source `~/.claude/coralline.conf` or Claude's limit/burn files. The adapter resolves both paths from `GROK_HOME` rather than from where it happens to be installed, so a second copy sitting in `~/.claude/coralline/` still reads the Grok side. Claude-only segments (`limit5h`, `limit7d`, `burn`, `cache`, `lines`, `style`, and subagent rows) stay off that default Grok layout, and a Grok payload will not fill them from a Claude store even if a shared conf still lists them.
 
 ### Windows without Git Bash
 
