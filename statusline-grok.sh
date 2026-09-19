@@ -106,4 +106,11 @@ fi
 out=$(printf '%s' "$mapped" | bash "$RENDERER")
 [ -n "$out" ] || exit 0
 out="${out// ↓0 cr:0 cw:0/}"
+# ↑ goes too when neither source field was present, since a bare ↑0 fabricates
+# a count exactly as ↓0 cr:0 cw:0 would. A payload that really carries
+# total_input_tokens: 0 keeps its ↑0: that zero is measured, not invented.
+case "$mapped" in
+  *'"total_input_tokens"'*) ;;
+  *) out="${out//↑0 /}" ;;
+esac
 printf '%s\n' "$out"

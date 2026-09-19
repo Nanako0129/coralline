@@ -29,7 +29,7 @@ command -v jq >/dev/null 2>&1 || { echo "SKIP  jq not available"; exit 0; }
 # Render the REAL statusline.sh. CORALLINE_NO_SAMPLE keeps cross-session stores
 # untouched. Output lands in a file so cmp keeps the trailing newline.
 render_file() { # $1 payload $2 segments $3 dest [extra conf] [runner]
-  local payload="$1" segs="$2" dest="$3" extra="${4:-}" runner="${5:-$SCRIPT}" conf ghome own=0 shome
+  local payload="$1" segs="$2" dest="$3" extra="${4:-}" runner="${5:-$SCRIPT}" conf ghome own=0 shome is_grok
   conf=$(mktemp "${TMPDIR:-/tmp}/coralline-grok-host.XXXXXX") || exit 1
   {
     printf '. %s\n' "$CONF_TMPL"
@@ -38,7 +38,15 @@ render_file() { # $1 payload $2 segments $3 dest [extra conf] [runner]
     printf 'VL_CLOCK=off\n'
     printf '%s' "$extra"
   } > "$conf"
-  if [ "$runner" = "$GROK_SCRIPT" ]; then
+  # By basename, not by "= $GROK_SCRIPT": case (6c) deliberately runs a COPY of
+  # the adapter from another directory, and an exact comparison sent it down the
+  # Claude branch with no GROK_HOME and no fixture conf, which is precisely the
+  # vacuous assertion that case exists to rule out.
+  case "$runner" in
+    */statusline-grok.sh) is_grok=1 ;;
+    *)                    is_grok=0 ;;
+  esac
+  if [ "$is_grok" = 1 ]; then
     # The adapter resolves conf and store from GROK_HOME alone and ignores an
     # inherited CORALLINE_CONFIG, so the fixture has to sit under a Grok root.
     # TEST_GROK_HOME lets a case pin that root (and a separate HOME) itself.
@@ -135,6 +143,17 @@ render "$ctxonly" "model ctx" "" "$GROK_SCRIPT"
 rm -f "$ctxonly"
 check "adapter: context_tokens fills ctx when total_input_tokens is absent" "$(has '99.9k')"
 
+# (5c) Neither token field: the gauge stays, the count does not get invented.
+# statusline.sh renders a missing count as 0, so this is the same fabrication
+# the ↓0 cr:0 cw:0 strip exists to prevent.
+notok=$(mktemp "${TMPDIR:-/tmp}/coralline-grok-notok.XXXXXX") || exit 1
+jq '{cwd:"/tmp", model:{display_name:"Grok 4.6"},
+     context_window:{used_percentage:25}}' -n > "$notok" || exit 1
+render "$notok" "model ctx" "" "$GROK_SCRIPT"
+rm -f "$notok"
+check "adapter: ctx gauge still renders without a token field" "$(has '25%')"
+check "adapter: does not fabricate ↑0 when no token field exists" "$(lacks '↑0')"
+
 # (6) Grok must not read Claude Code's VL_LIMIT_SYNC store. statusline.sh builds
 # its store as "$CLAUDE_CONFIG_DIR/coralline" and ignores an inherited
 # CORALLINE_DIR, so the adapter's CLAUDE_CONFIG_DIR export is the whole
@@ -196,6 +215,16 @@ claude_copy="$claude_home/.claude/coralline"
 mkdir -p "$claude_copy" || exit 1
 cp "$REPO/statusline.sh" "$claude_copy/statusline.sh" || exit 1
 cp "$GROK_SCRIPT" "$claude_copy/statusline-grok.sh" || exit 1
+# A Claude conf with limit sync ON sits next to that copy. Without it, an
+# adapter that resolved paths from its own directory would read a conf that
+# does not exist, fall back to defaults with VL_LIMIT_SYNC=0, and hide the
+# Claude store it just leaked into -- the assertions below would pass for the
+# wrong reason. This is the shape that originally put 5h/7d on a Grok row.
+{
+  printf '. %s\n' "$CONF_TMPL"
+  printf 'VL_SEGMENTS="model ctx limit5h limit7d burn cost"\n'
+  printf 'VL_SEGMENTS2=""\nVL_SEGMENTS3=""\nVL_CLOCK=off\nVL_LIMIT_SYNC=1\n'
+} > "$claude_home/.claude/coralline.conf" || exit 1
 HOME="$claude_home" TEST_GROK_HOME="$grok_store" \
   render "$GROK" "model ctx limit5h limit7d burn cost" "$sync_extra" "$claude_copy/statusline-grok.sh"
 check "adapter under ~/.claude/coralline still hides the Claude 5h store" "$(lacks '5h')"
