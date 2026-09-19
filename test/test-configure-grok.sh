@@ -180,6 +180,37 @@ settings_absent && check "CLAUDE_SETTINGS absent (symlink)" 1 \
   || check "CLAUDE_SETTINGS absent (symlink)" 0
 rm -rf "$SANDBOX"
 
+# --- nested symlink: the append reaches the FINAL target -------------------------
+# The write ends in a rename, and a rename replaces the path it is handed. Stop
+# at an intermediate link and that link becomes a regular file while the real
+# config never changes, which is what happened before the chain was followed.
+new_sandbox
+printf 'foo = 1\n' > "$WORK/final.toml"
+ln -s "$WORK/final.toml" "$WORK/mid.toml"
+ln -s "$WORK/mid.toml" "$GROK_HOME/config.toml"
+run_register
+check "nested symlink path exits 0" "$([ "$RG_RC" -eq 0 ] && echo 1 || echo 0)"
+[ -L "$GROK_HOME/config.toml" ] && [ -L "$WORK/mid.toml" ] \
+  && check "every link in the chain stays a link" 1 \
+  || check "every link in the chain stays a link" 0
+grep -q '^foo = 1$' "$WORK/final.toml" && grep -q '^\[ui.status_line\]$' "$WORK/final.toml" \
+  && check "final target received the append" 1 \
+  || check "final target received the append" 0
+rm -rf "$SANDBOX"
+
+# --- symlink cycle terminates instead of spinning --------------------------------
+new_sandbox
+ln -s "$WORK/loop-b.toml" "$WORK/loop-a.toml"
+ln -s "$WORK/loop-a.toml" "$WORK/loop-b.toml"
+ln -s "$WORK/loop-a.toml" "$GROK_HOME/config.toml"
+run_register
+check "symlink cycle fails instead of hanging" "$([ "$RG_RC" -ne 0 ] && echo 1 || echo 0)"
+case "$RG_OUT" in
+  (*"too many levels of symbolic links"*) check "symlink cycle names the reason" 1 ;;
+  (*)                                     check "symlink cycle names the reason" 0 ;;
+esac
+rm -rf "$SANDBOX"
+
 # --- [ui.status_line.extra] already defines the parent; do not append -------------
 new_sandbox
 printf '[ui.status_line.extra]\nfoo = 1\n' > "$GROK_HOME/config.toml"

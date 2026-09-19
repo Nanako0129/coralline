@@ -1368,7 +1368,7 @@ update_settings() {
 }
 
 register_grok() {  # append [ui.status_line] to Grok config.toml if the table is absent
-  local cfg dir target cmd last stamp backup n=0 grok_root gconf gdir sl theme rel tmp
+  local cfg dir target cmd last stamp backup n=0 grok_root gconf gdir sl theme rel tmp depth
   need_file "$SCRIPT_DIR/statusline.sh"
   need_file "$SCRIPT_DIR/statusline-grok.sh"
   # Everything Grok needs is copied from SCRIPT_DIR into GROK_HOME below, so a
@@ -1379,14 +1379,24 @@ register_grok() {  # append [ui.status_line] to Grok config.toml if the table is
     grok_root="$HOME/.grok"
   fi
   cfg="$grok_root/config.toml"
-  if [ -L "$cfg" ]; then
+  # Follow the WHOLE chain, not one link. The write below finishes with a rename
+  # onto $cfg, and a rename replaces the path it is given: stopping at an
+  # intermediate link turns that link into a regular file and leaves the real
+  # config untouched. Appending with >> used to follow the chain for free, so
+  # this became load-bearing only once the write became atomic. The depth cap
+  # matches the kernel's own ELOOP limit and is what stops a symlink cycle from
+  # spinning here.
+  depth=0
+  while [ -L "$cfg" ]; do
+    depth=$((depth + 1))
+    [ "$depth" -le 40 ] || die "too many levels of symbolic links resolving $grok_root/config.toml"
     dir=$(cd "$(dirname "$cfg")" && pwd -P) || die "could not resolve directory for $cfg"
     target=$(readlink "$cfg") || die "could not read symlink $cfg"
     case "$target" in
       /*) cfg="$target" ;;
       *)  cfg="$dir/$target" ;;
     esac
-  fi
+  done
   mkdir -p "$grok_root/coralline" || die "could not create $grok_root/coralline"
   gdir=$(cd "$grok_root/coralline" && pwd)
   cp "$SCRIPT_DIR/statusline.sh" "$gdir/statusline.sh" \
