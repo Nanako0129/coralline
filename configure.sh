@@ -1368,7 +1368,7 @@ update_settings() {
 }
 
 register_grok() {  # append [ui.status_line] to Grok config.toml if the table is absent
-  local cfg dir target cmd last stamp backup n=0 grok_root gconf gdir sl theme rel
+  local cfg dir target cmd last stamp backup n=0 grok_root gconf gdir sl theme rel tmp
   need_file "$SCRIPT_DIR/statusline.sh"
   need_file "$SCRIPT_DIR/statusline-grok.sh"
   # Everything Grok needs is copied from SCRIPT_DIR into GROK_HOME below, so a
@@ -1428,7 +1428,17 @@ GTHEMES
   # treated as "already configured" and the user is handed the command to set
   # by hand. A false positive costs one message; a false negative costs their
   # config file.
-  if [ -f "$cfg" ] && grep -q 'status_line' "$cfg"; then
+  #
+  # A quoted key can also spell the name with escapes: `["ui"."status_line"]`
+  # and `"status_line".type = ...` both parse to ui.status_line (checked
+  # with tomllib) and neither carries the literal text. An escape is therefore
+  # unreadable-key territory and blocks the append too, but only where a key can
+  # sit -- inside a table header, or left of the `=`. An escape in a VALUE
+  # (`greeting = "café"`) is ordinary TOML and appending after it stays
+  # valid, so matching every `\u` in the file would refuse honest configs for
+  # nothing.
+  if [ -f "$cfg" ] \
+    && grep -Eq 'status_line|^[[:space:]]*(\[[^]]*\\[uU]|[^=]*\\[uU][^=]*=)' "$cfg"; then
     printf 'Updated Grok runtime in %s\n' "$gdir"
     printf 'Left unchanged: %s already mentions status_line\n' "$cfg"
     printf 'To point Grok here, set that table to:\n'
@@ -1453,17 +1463,29 @@ GTHEMES
   printf -v cmd 'bash %q' "$sl"
   cmd="${cmd//\\/\\\\}"
   cmd="${cmd//\"/\\\"}"
-  if [ -f "$cfg" ] && [ -s "$cfg" ]; then
-    last=$(tail -c 1 "$cfg"; printf x)
-    last="${last%x}"
-    [ "$last" = $'\n' ] || printf '\n' >> "$cfg" || die "could not write $cfg"
+  # Build the result in a sibling temp file and rename it into place. Appending
+  # straight to the live config leaves a half-written table if a write fails
+  # part way, and a malformed table is the failure this whole function exists to
+  # avoid. The rename is atomic within the directory, and $cfg is already
+  # symlink-resolved above, so a symlinked config.toml keeps pointing at the
+  # file that gets replaced. The backup above is not made redundant by this: it
+  # covers changing your mind, this covers a failed write.
+  tmp=$(mktemp "$dir/.coralline-grok.XXXXXX") || die "could not create a temp file in $dir"
+  if [ -f "$cfg" ]; then
+    cp -p "$cfg" "$tmp" || { rm -f "$tmp"; die "could not stage $cfg; original left unchanged"; }
   fi
   {
+    if [ -s "$tmp" ]; then
+      last=$(tail -c 1 "$tmp"; printf x)
+      last="${last%x}"
+      [ "$last" = $'\n' ] || printf '\n'
+    fi
     printf '[ui.status_line]\n'
     printf 'type = "command"\n'
     printf 'command = "%s"\n' "$cmd"
     printf 'refresh_interval = 1\n'
-  } >> "$cfg" || die "could not write $cfg"
+  } >> "$tmp" || { rm -f "$tmp"; die "could not write $tmp; $cfg left unchanged"; }
+  mv "$tmp" "$cfg" || { rm -f "$tmp"; die "could not replace $cfg"; }
   printf 'Updated %s\n' "$cfg"
 }
 

@@ -102,6 +102,11 @@ esac
   || check "created Grok coralline.conf with VL_LIMIT_SYNC=0" 0
 [ -d "$GROK_HOME/coralline" ] && check "created Grok CORALLINE_DIR" 1 \
   || check "created Grok CORALLINE_DIR" 0
+# The config is assembled in a sibling temp file and renamed into place; a
+# leftover means a failure path skipped its cleanup.
+[ -z "$(find "$GROK_HOME" -maxdepth 1 -name '.coralline-grok.*' 2>/dev/null)" ] \
+  && check "no temp file left beside config.toml" 1 \
+  || check "no temp file left beside config.toml" 0
 [ -x "$GROK_HOME/coralline/statusline-grok.sh" ] && [ -f "$GROK_HOME/coralline/statusline.sh" ] \
   && check "Grok runtime scripts live under GROK_HOME/coralline" 1 \
   || check "Grok runtime scripts live under GROK_HOME/coralline" 0
@@ -241,6 +246,34 @@ spelling_case "dotted key"     '[ui]
 status_line.type = "command"
 status_line.command = "mine"
 '
+# A quoted key may spell the name with escapes and carry none of the literal
+# text. Both of these parse to ui.status_line; appending after either is invalid
+# TOML (checked with tomllib). The backslash is built with printf '\134' rather
+# than written literally so no layer between here and the file can fold the
+# escape back into an "s" -- which is exactly what happened to an earlier
+# version of these two cases, leaving them silent duplicates of "quoted keys".
+bs=$(printf '\134')
+spelling_case "escaped header" "[\"ui\".\"${bs}u0073tatus_line\"]
+type = \"command\"
+"
+spelling_case "escaped key"    "[ui]
+\"${bs}u0073tatus_line\".type = \"command\"
+"
+
+# ...but an escape in a VALUE is ordinary TOML, and appending after it is valid.
+# Refusing on every \u in the file would block honest configs for nothing.
+new_sandbox
+printf '%s' "[ui]
+greeting = \"caf${bs}u00e9\"
+" > "$GROK_HOME/config.toml"
+run_register
+grep -q '^\[ui.status_line\]$' "$GROK_HOME/config.toml" \
+  && check "escape in a value does not block registration" 1 \
+  || check "escape in a value does not block registration" 0
+grep -q 'caf' "$GROK_HOME/config.toml" \
+  && check "escape in a value survives the append" 1 \
+  || check "escape in a value survives the append" 0
+rm -rf "$SANDBOX"
 
 # --- Grok-only machine: nothing is created under the Claude tree ------------------
 new_sandbox
