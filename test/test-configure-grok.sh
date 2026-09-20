@@ -62,19 +62,28 @@ settings_absent() {
 }
 
 run_register() {
-  local outf
+  local outf wpid kpid
   outf=$(mktemp "${TMPDIR:-/tmp}/coralline-rg-out.XXXXXX") || exit 1
-  # </dev/null is the whole timeout: --register-grok never opens the wizard, and
-  # anything that did read stdin gets EOF immediately. An `alarm` wrapper here
-  # would only add perl to the test dependencies.
+  # </dev/null covers the wizard: --register-grok never opens it, and anything
+  # that did read stdin gets EOF at once. It does not cover a hang inside the
+  # command itself, so this adds the repository's pure-bash watchdog (see
+  # test/test-runtime.sh; stock macOS has no `timeout`). A --register-grok that
+  # spins -- a symlink cycle with the depth cap regressed, say -- has to fail
+  # this suite loudly rather than stall it until CI gives up.
   env CORALLINE_NO_SAMPLE=1 \
       HOME="$HOME" \
       GROK_HOME="$GROK_HOME" \
       CORALLINE_HOME="$CORALLINE_HOME" \
       CORALLINE_CONFIG="$CORALLINE_CONFIG" \
       CLAUDE_SETTINGS="$CLAUDE_SETTINGS" \
-    bash "$CONF" --register-grok </dev/null >"$outf" 2>&1
+    bash "$CONF" --register-grok </dev/null >"$outf" 2>&1 & wpid=$!
+  ( sleep 15; kill -9 "$wpid" 2>/dev/null ) & kpid=$!
+  wait "$wpid" 2>/dev/null
   RG_RC=$?
+  kill "$kpid" 2>/dev/null; wait "$kpid" 2>/dev/null
+  # A signal death (128+n) is the watchdog firing, not the command deciding to
+  # fail. Kept separate so "exited non-zero" can never be satisfied by a hang.
+  if [ "$RG_RC" -ge 128 ]; then RG_KILLED=1; else RG_KILLED=0; fi
   RG_OUT=$(cat "$outf")
   rm -f "$outf"
 }
@@ -204,7 +213,8 @@ ln -s "$WORK/loop-b.toml" "$WORK/loop-a.toml"
 ln -s "$WORK/loop-a.toml" "$WORK/loop-b.toml"
 ln -s "$WORK/loop-a.toml" "$GROK_HOME/config.toml"
 run_register
-check "symlink cycle fails instead of hanging" "$([ "$RG_RC" -ne 0 ] && echo 1 || echo 0)"
+check "symlink cycle exits non-zero" "$([ "$RG_RC" -ne 0 ] && echo 1 || echo 0)"
+check "symlink cycle returns on its own, not by watchdog" "$([ "$RG_KILLED" = 0 ] && echo 1 || echo 0)"
 case "$RG_OUT" in
   (*"too many levels of symbolic links"*) check "symlink cycle names the reason" 1 ;;
   (*)                                     check "symlink cycle names the reason" 0 ;;
