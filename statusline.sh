@@ -78,6 +78,7 @@ VL_SUB_SEGMENTS="name model ctx elapsed"  # panel-row segment list (subseg_*)
 VL_BG_SUB_MODEL=""              # panel-row colors; empty → fall back to the
 VL_BG_SUB_CTX=""                #   main-bar counterparts (model/ctx/duration)
 VL_BG_SUB_ELAPSED=""
+VL_BG_SUB_EFFORT=""            #   (effort → VL_BG_EFFORT)
 # subseg_name tints the label by task status out of the main VL_FG_* palette,
 # which is tuned for the gauge segments' dark backgrounds. On a light name pill
 # those colors wash out (down to 1.0:1), so the pill takes that same dark ground
@@ -1904,6 +1905,19 @@ subseg_model() {  # per-task resolved model, short-named; hidden when unresolved
   push "${VL_BG_SUB_MODEL:-$VL_BG_MODEL}" "${BOLD}${_FG} ◆ ${_MS} ${NORM}"
 }
 
+subseg_effort() {  # per-task effort from the agent definition; hidden when absent
+  case "$t_effort" in (low|medium|high|xhigh|max) ;; (*) return 0 ;; esac
+  # Claude Code (measured on 2.1.280) copies the definition's frontmatter effort
+  # into the payload unchecked, while its request path drops effort for
+  # claude-haiku-4-5 (a probe subagent saw no CLAUDE_EFFORT). Showing it there
+  # would claim a level that never reached the API.
+  case "$t_model" in (*haiku-4-5*) return 0 ;; esac
+  local label="$t_effort"
+  [ "$label" = medium ] && label="med"
+  fg "$VL_FG_TEXT"
+  push "${VL_BG_SUB_EFFORT:-$VL_BG_EFFORT}" "${_FG} ψ ${label} "
+}
+
 subseg_ctx() {  # per-task context gauge; bare token count without a window size
   local tokint="${t_tok%%.*}" cws="$t_cws" ci fgc fgd
   case "$tokint" in (''|*[!0-9]*) return 0 ;; esac
@@ -2043,10 +2057,11 @@ if [ "$SUBAGENT_MODE" = "1" ]; then
       (.status // ""),
       (.startTime // ""),
       (.model // ""),
+      (.effort // ""),
       (.contextWindowSize // ""),
       (.tokenCount // "")
     ] | map(scrub) | join("\u001f"))' 2>/dev/null)
-  while IFS=$'\037' read -r sub_kind t_transcript t_id t_name t_label t_desc t_type t_status t_start t_model t_cws t_tok; do
+  while IFS=$'\037' read -r sub_kind t_transcript t_id t_name t_label t_desc t_type t_status t_start t_model t_effort t_cws t_tok; do
     [ "$sub_kind" = "task" ] || continue
     t_tok="${t_tok%$'\r'}"  # native Windows jq writes CRLF; input CR was scrubbed above
     [ -n "$t_id" ] || continue

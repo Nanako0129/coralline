@@ -742,6 +742,15 @@ shell_quote "$CORALLINE_Q_VALUE"
         Check-Exact ('WIN-PS1 style gate parity ' + $styleCase.Name) $psRun $bashRun
     }
 
+    $effortJson = '{"tasks":[{"id":"s","name":"s","model":"claude-sonnet-5","effort":"medium"},{"id":"x","name":"x","model":"claude-opus-5","effort":"xhigh"},{"id":"h","name":"h","model":"claude-haiku-4-5-20251001","effort":"low"},{"id":"b","name":"b","model":"claude-sonnet-5","effort":"turbo"}]}'
+    $effortConfig = New-Config 'sub-effort' @(('. ' + (Quote-FromConfigure $themePath)), ('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'name model effort')))
+    $effortPs = Invoke-Subagent $effortJson $effortConfig @{}
+    $effortBash = Invoke-BashSubagent $effortJson $effortConfig @{}
+    Check-Run 'WIN-PS1 subagent effort' $effortPs
+    Check-Exact 'WIN-PS1 subagent effort parity' $effortPs $effortBash
+    $effortRows = @(Get-SubagentRows $effortPs)
+    Check 'WIN-PS1 effort shows med/xhigh, hides haiku and unknown levels' ($effortRows.Count -eq 4 -and $effortRows[0].content.Contains('med ') -and $effortRows[1].content.Contains('xhigh ') -and -not $effortRows[2].content.Contains([string][char]0x03C8) -and -not $effortRows[3].content.Contains([string][char]0x03C8))
+
     $nameOnlyConfig = New-Config 'sub-name-only' @(('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'name')))
     $oldDoc = '{"tasks":[{"id":"old","name":"old"}]}'
     $newDoc = '{"tasks":[{"id":"new","name":"new"}]}'

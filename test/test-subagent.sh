@@ -350,6 +350,24 @@ TZT=$(printf '{"tasks":[{"id":"x","name":"n","type":"t","startTime":"2026-07-15T
   | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
 case "$TZT" in (*"⧖"*) bad "tz-offset startTime must hide elapsed: [$TZT]" ;; (*) ok "tz-offset startTime hides elapsed" ;; esac
 
+# effort is opt-in, reads the per-task payload field, and hides on Haiku 4.5
+# (Claude Code copies frontmatter effort into the payload even where it drops it)
+case "$c1$c2" in (*"ψ"*) bad "effort must stay off by default: [$c1$c2]" ;; (*) ok "effort off by default" ;; esac
+CONF=$(mktemp "${TMPDIR:-/tmp}/coralline-conf.XXXXXX")
+printf 'VL_SUB_SEGMENTS="name model effort"\n' > "$CONF"
+EFF=$(printf '{"tasks":[{"id":"s","name":"s","model":"claude-sonnet-5","effort":"medium"},{"id":"h","name":"h","model":"claude-haiku-4-5-20251001","effort":"low"},{"id":"n","name":"n","model":"claude-sonnet-5"},{"id":"b","name":"b","model":"claude-sonnet-5","effort":"turbo"}]}' \
+  | CORALLINE_CONFIG="$CONF" bash "$SCRIPT" --subagent)
+rm -f "$CONF"
+e_s=$(printf '%s\n' "$EFF" | jq -r 'select(.id=="s").content')
+e_h=$(printf '%s\n' "$EFF" | jq -r 'select(.id=="h").content')
+e_n=$(printf '%s\n' "$EFF" | jq -r 'select(.id=="n").content')
+e_b=$(printf '%s\n' "$EFF" | jq -r 'select(.id=="b").content')
+case "$e_s" in (*"Sonnet 5"*"ψ med"*) ok "effort renders after model, medium → med" ;; (*) bad "effort sonnet: [$e_s]" ;; esac
+case "$e_s" in (*'[48;5;141m'*) ok "effort falls back to VL_BG_EFFORT" ;; (*) bad "effort bg: [$e_s]" ;; esac
+case "$e_h" in (*"ψ"*) bad "haiku must hide effort: [$e_h]" ;; (*) ok "haiku 4.5 hides effort" ;; esac
+case "$e_n" in (*"ψ"*) bad "absent effort must hide: [$e_n]" ;; (*) ok "absent effort hides" ;; esac
+case "$e_b" in (*"ψ"*) bad "unknown effort level must hide: [$e_b]" ;; (*) ok "unknown effort level hides" ;; esac
+
 # VL_SUB_SEGMENTS is honored
 CONF=$(mktemp "${TMPDIR:-/tmp}/coralline-conf.XXXXXX")
 printf 'VL_SUB_SEGMENTS="model"\n' > "$CONF"

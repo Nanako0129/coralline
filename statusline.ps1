@@ -124,6 +124,7 @@ $Defaults = [ordered]@{
     VL_BG_SUB_MODEL = ''
     VL_BG_SUB_CTX = ''
     VL_BG_SUB_ELAPSED = ''
+    VL_BG_SUB_EFFORT = ''
     VL_FG_SUB_TEXT = ''
     VL_FG_SUB_OK = ''
     VL_FG_SUB_HOT = ''
@@ -1481,7 +1482,7 @@ function Invoke-SubagentMode([string]$InputText) {
         if (-not $idResult.Valid -or [string]::IsNullOrEmpty([string]$idResult.Value)) { continue }
         $id = [string]$idResult.Value
         $fields = @{}
-        foreach ($fieldName in @('name','label','description','type','status','startTime','model','contextWindowSize','tokenCount')) {
+        foreach ($fieldName in @('name','label','description','type','status','startTime','model','effort','contextWindowSize','tokenCount')) {
             $result = Convert-StrictJsonScalar (Get-StrictJsonMember $task $fieldName) 16384
             if ($result.Valid) { $fields[$fieldName] = [string]$result.Value } else { $fields[$fieldName] = '' }
         }
@@ -1531,6 +1532,16 @@ function Invoke-SubagentMode([string]$InputText) {
                     if ([string]::IsNullOrEmpty($fields.model)) { break }
                     $background = if ([string]::IsNullOrEmpty([string]$Cfg.VL_BG_SUB_MODEL)) { $Cfg.VL_BG_MODEL } else { $Cfg.VL_BG_SUB_MODEL }
                     Add-SubagentSegment $backgrounds $texts $background ($Bold + (Get-Fg $Cfg.VL_FG_TEXT) + ' ' + $G.Diamond + ' ' + (Get-SubagentModelShort $fields.model) + ' ' + $Norm)
+                    break
+                }
+                'effort' {
+                    $level = $fields.effort
+                    if (-not ($level -ceq 'low' -or $level -ceq 'medium' -or $level -ceq 'high' -or $level -ceq 'xhigh' -or $level -ceq 'max')) { break }
+                    # Mirrors subseg_effort: Claude Code drops effort for claude-haiku-4-5.
+                    if ($fields.model.Contains('haiku-4-5')) { break }
+                    if ($level -ceq 'medium') { $level = 'med' }
+                    $background = if ([string]::IsNullOrEmpty([string]$Cfg.VL_BG_SUB_EFFORT)) { $Cfg.VL_BG_EFFORT } else { $Cfg.VL_BG_SUB_EFFORT }
+                    Add-SubagentSegment $backgrounds $texts $background ((Get-Fg $Cfg.VL_FG_TEXT) + ' ' + $G.Psi + ' ' + $level + ' ')
                     break
                 }
                 'ctx' {
