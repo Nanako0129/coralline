@@ -1860,12 +1860,17 @@ sub_epoch() {  # → _EP ; strict startTime parser for the per-task loop.
   esac
 }
 
-subagent_role() {  # → _SUB_ROLE ; $1=transcript path $2=task id
-  local transcript="$1" id="$2" path line role
-  _SUB_ROLE=""
+subagent_base() {  # → _SUB_BASE ; $1=transcript path $2=task id; sidecar path minus extension
+  local transcript="$1" id="$2"
+  _SUB_BASE=""
   case "$id" in (''|*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-]*) return 1 ;; esac
-  case "$transcript" in (*.jsonl) path="${transcript%.jsonl}/subagents/agent-${id}.meta.json" ;; (*) return 1 ;; esac
-  path="${path//\\//}"  # native Windows payload paths use backslashes; Git Bash accepts C:/...
+  case "$transcript" in (*.jsonl) _SUB_BASE="${transcript%.jsonl}/subagents/agent-${id}" ;; (*) return 1 ;; esac
+  _SUB_BASE="${_SUB_BASE//\\//}"  # native Windows payload paths use backslashes; Git Bash accepts C:/...
+}
+
+subagent_role() {  # → _SUB_ROLE ; reads $_SUB_BASE.meta.json
+  local path="$_SUB_BASE.meta.json" line role
+  _SUB_ROLE=""
   [ -r "$path" ] || return 1
   IFS= read -r line < "$path" || [ -n "$line" ] || return 1
   case "$line" in
@@ -1874,6 +1879,28 @@ subagent_role() {  # → _SUB_ROLE ; $1=transcript path $2=task id
   esac
   case "$role" in (''|*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-]*) return 1 ;; esac
   _SUB_ROLE="$role"
+}
+
+subagent_effort() {  # → _SUB_EFFORT ; effort the task's first API response recorded
+  # Claude Code writes the effort it actually sent on every assistant line of the
+  # subagent transcript, and omits it where it sent none (Haiku 4.5), so this is
+  # the applied value — unlike the payload's `effort`, which is the definition's
+  # raw frontmatter and absent for agents running at the model default. Only the
+  # first assistant line is read: across 590 local transcripts (CC 2.1.222-2.1.280)
+  # it was on line 2-15, and no transcript recorded more than one level. The
+  # anchor `","perTurnEffort":` cannot occur unescaped inside a JSON string value.
+  local path="$_SUB_BASE.jsonl" line lvl n=0
+  _SUB_EFFORT=""
+  [ -r "$path" ] || return 1
+  while [ "$n" -lt 16 ] && IFS= read -r line; do
+    n=$((n + 1))
+    case "$line" in (*'"type":"assistant"'*) ;; (*) continue ;; esac
+    case "$line" in (*'","perTurnEffort":'*) ;; (*) return 1 ;; esac
+    lvl="${line%%\",\"perTurnEffort\":*}"; lvl="${lvl##*\"effort\":\"}"
+    case "$lvl" in (low|medium|high|xhigh|max) _SUB_EFFORT="$lvl"; return 0 ;; esac
+    return 1
+  done < "$path"
+  return 1
 }
 
 subseg_name() {  # identity + task label; each falls back independently
@@ -1905,13 +1932,8 @@ subseg_model() {  # per-task resolved model, short-named; hidden when unresolved
   push "${VL_BG_SUB_MODEL:-$VL_BG_MODEL}" "${BOLD}${_FG} ◆ ${_MS} ${NORM}"
 }
 
-subseg_effort() {  # per-task effort from the agent definition; hidden when absent
-  case "$t_effort" in (low|medium|high|xhigh|max) ;; (*) return 0 ;; esac
-  # Claude Code (measured on 2.1.280) copies the definition's frontmatter effort
-  # into the payload unchecked, while its request path drops effort for
-  # claude-haiku-4-5 (a probe subagent saw no CLAUDE_EFFORT). Showing it there
-  # would claim a level that never reached the API.
-  case "$t_model" in (*haiku-4-5*) return 0 ;; esac
+subseg_effort() {  # per-task applied reasoning effort; hidden until the first response
+  [ -n "$t_effort" ] || return 0
   local label="$t_effort"
   [ "$label" = medium ] && label="med"
   fg "$VL_FG_TEXT"
@@ -2057,16 +2079,18 @@ if [ "$SUBAGENT_MODE" = "1" ]; then
       (.status // ""),
       (.startTime // ""),
       (.model // ""),
-      (.effort // ""),
       (.contextWindowSize // ""),
       (.tokenCount // "")
     ] | map(scrub) | join("\u001f"))' 2>/dev/null)
-  while IFS=$'\037' read -r sub_kind t_transcript t_id t_name t_label t_desc t_type t_status t_start t_model t_effort t_cws t_tok; do
+  while IFS=$'\037' read -r sub_kind t_transcript t_id t_name t_label t_desc t_type t_status t_start t_model t_cws t_tok; do
     [ "$sub_kind" = "task" ] || continue
     t_tok="${t_tok%$'\r'}"  # native Windows jq writes CRLF; input CR was scrubbed above
     [ -n "$t_id" ] || continue
-    t_role=""
-    [ "$t_type" = "local_agent" ] && subagent_role "$t_transcript" "$t_id" && t_role="$_SUB_ROLE"
+    t_role="" ; t_effort=""
+    if [ "$t_type" = "local_agent" ] && subagent_base "$t_transcript" "$t_id"; then
+      subagent_role && t_role="$_SUB_ROLE"
+      case " $VL_SUB_SEGMENTS " in (*' effort '*) subagent_effort && t_effort="$_SUB_EFFORT" ;; esac
+    fi
     SEG_BGS=() ; SEG_TXT=() ; SEG_LEN=()
     for s in $VL_SUB_SEGMENTS; do
       command -v "subseg_$s" >/dev/null 2>&1 && "subseg_$s"

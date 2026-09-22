@@ -1322,6 +1322,46 @@ function Get-SubagentSidecarPath([string]$Transcript, [string]$Id) {
     return $candidate
 }
 
+function Get-SubagentEffort([string]$Transcript, [string]$Id) {
+    # Mirrors subagent_effort in statusline.sh: the effort Claude Code recorded on
+    # the first assistant line of the task transcript, which sits beside the
+    # validated sidecar. Only newline-terminated lines count, as with Bash `read`.
+    # ponytail: reads a 1 MiB prefix; the first assistant line was within 200 KB
+    # on every measured transcript, raise the cap if that stops holding.
+    $sidecar = Get-SubagentSidecarPath $Transcript $Id
+    if ([string]::IsNullOrEmpty($sidecar)) { return '' }
+    $path = $sidecar.Substring(0, $sidecar.Length - 10) + '.jsonl'
+    if (-not (Test-SafeRegularFile $path)) { return '' }
+    $bytes = [byte[]]::new(1048576)
+    $length = 0
+    try {
+        $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+        $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+        try {
+            while ($length -lt $bytes.Length) {
+                $read = $stream.Read($bytes, $length, $bytes.Length - $length)
+                if ($read -le 0) { break }
+                $length += $read
+            }
+        } finally { $stream.Dispose() }
+    } catch { return '' }
+    $lines = [System.Text.Encoding]::UTF8.GetString($bytes, 0, $length).Split([char]10)
+    $max = [Math]::Min(16, $lines.Count - 1)
+    for ($i = 0; $i -lt $max; $i++) {
+        $line = $lines[$i]
+        if (-not $line.Contains('"type":"assistant"')) { continue }
+        $anchor = $line.IndexOf('","perTurnEffort":', [System.StringComparison]::Ordinal)
+        if ($anchor -lt 0) { return '' }
+        $head = $line.Substring(0, $anchor)
+        $key = $head.LastIndexOf('"effort":"', [System.StringComparison]::Ordinal)
+        if ($key -lt 0) { return '' }
+        $level = $head.Substring($key + 10)
+        if ($level -ceq 'low' -or $level -ceq 'medium' -or $level -ceq 'high' -or $level -ceq 'xhigh' -or $level -ceq 'max') { return $level }
+        return ''
+    }
+    return ''
+}
+
 function Get-SubagentRole([string]$Transcript, [string]$Id) {
     $path = Get-SubagentSidecarPath $Transcript $Id
     if ([string]::IsNullOrEmpty($path)) { return '' }
@@ -1482,7 +1522,7 @@ function Invoke-SubagentMode([string]$InputText) {
         if (-not $idResult.Valid -or [string]::IsNullOrEmpty([string]$idResult.Value)) { continue }
         $id = [string]$idResult.Value
         $fields = @{}
-        foreach ($fieldName in @('name','label','description','type','status','startTime','model','effort','contextWindowSize','tokenCount')) {
+        foreach ($fieldName in @('name','label','description','type','status','startTime','model','contextWindowSize','tokenCount')) {
             $result = Convert-StrictJsonScalar (Get-StrictJsonMember $task $fieldName) 16384
             if ($result.Valid) { $fields[$fieldName] = [string]$result.Value } else { $fields[$fieldName] = '' }
         }
@@ -1535,10 +1575,9 @@ function Invoke-SubagentMode([string]$InputText) {
                     break
                 }
                 'effort' {
-                    $level = $fields.effort
-                    if (-not ($level -ceq 'low' -or $level -ceq 'medium' -or $level -ceq 'high' -or $level -ceq 'xhigh' -or $level -ceq 'max')) { break }
-                    # Mirrors subseg_effort: Claude Code drops effort for claude-haiku-4-5.
-                    if ($fields.model.Contains('haiku-4-5')) { break }
+                    if ($fields.type -cne 'local_agent') { break }
+                    $level = Get-SubagentEffort $transcript $id
+                    if ([string]::IsNullOrEmpty($level)) { break }
                     if ($level -ceq 'medium') { $level = 'med' }
                     $background = if ([string]::IsNullOrEmpty([string]$Cfg.VL_BG_SUB_EFFORT)) { $Cfg.VL_BG_EFFORT } else { $Cfg.VL_BG_SUB_EFFORT }
                     Add-SubagentSegment $backgrounds $texts $background ((Get-Fg $Cfg.VL_FG_TEXT) + ' ' + $G.Psi + ' ' + $level + ' ')

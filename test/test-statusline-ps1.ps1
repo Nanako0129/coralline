@@ -742,14 +742,40 @@ shell_quote "$CORALLINE_Q_VALUE"
         Check-Exact ('WIN-PS1 style gate parity ' + $styleCase.Name) $psRun $bashRun
     }
 
-    $effortJson = '{"tasks":[{"id":"s","name":"s","model":"claude-sonnet-5","effort":"medium"},{"id":"x","name":"x","model":"claude-opus-5","effort":"xhigh"},{"id":"h","name":"h","model":"claude-haiku-4-5-20251001","effort":"low"},{"id":"b","name":"b","model":"claude-sonnet-5","effort":"turbo"}]}'
+    # effort comes from the task transcript's first assistant line (never the payload),
+    # so each fixture pins one reader rule; Bash is the byte-parity oracle.
+    $effortRoot = Join-Path $TempRoot 'subagent-effort'
+    $effortDir = Join-Path $effortRoot 'session\subagents'
+    [void][IO.Directory]::CreateDirectory($effortDir)
+    $effortTranscript = Join-Path $effortRoot 'session.jsonl'
+    Write-Utf8 $effortTranscript ''
+    $as = '{"type":"assistant","message":{"content":[]},'
+    $lf = [string][char]10
+    $deep = ''
+    for ($i = 0; $i -lt 16; $i++) { $deep += '{"type":"attachment"}' + $lf }
+    $effortFixtures = [ordered]@{
+        'e-med'     = '{"type":"user","message":{"content":"say \"effort\":\"max\",\"perTurnEffort\":1"}}' + $lf + $as + '"effort":"medium","perTurnEffort":null}' + $lf
+        'e-xhigh'   = $as + '"effort":"xhigh","perTurnEffort":"xhigh"}' + $lf
+        'e-haiku'   = '{"type":"user"}' + $lf + $as + '"uuid":"u"}' + $lf
+        'e-partial' = $as + '"effort":"high","perTurnEffort":null'
+        'e-deep'    = $deep + $as + '"effort":"low","perTurnEffort":null}' + $lf
+        'e-bad'     = $as + '"effort":"turbo","perTurnEffort":null}' + $lf
+        'e-remote'  = $as + '"effort":"low","perTurnEffort":null}' + $lf
+    }
+    foreach ($key in $effortFixtures.Keys) { Write-Utf8 (Join-Path $effortDir ('agent-' + $key + '.jsonl')) $effortFixtures[$key] }
+    $effortTasks = @()
+    foreach ($key in @('e-med','e-xhigh','e-haiku','e-partial','e-deep','e-bad','e-none')) { $effortTasks += [ordered]@{ id=$key; name=$key; type='local_agent'; model='claude-sonnet-5'; effort='max' } }
+    $effortTasks += [ordered]@{ id='e-remote'; name='e-remote'; type='remote_agent'; effort='low' }
+    $effortJson = Json ([ordered]@{ transcript_path=(Forward-Path $effortTranscript); tasks=$effortTasks })
     $effortConfig = New-Config 'sub-effort' @(('. ' + (Quote-FromConfigure $themePath)), ('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'name model effort')))
     $effortPs = Invoke-Subagent $effortJson $effortConfig @{}
     $effortBash = Invoke-BashSubagent $effortJson $effortConfig @{}
     Check-Run 'WIN-PS1 subagent effort' $effortPs
     Check-Exact 'WIN-PS1 subagent effort parity' $effortPs $effortBash
     $effortRows = @(Get-SubagentRows $effortPs)
-    Check 'WIN-PS1 effort shows med/xhigh, hides haiku and unknown levels' ($effortRows.Count -eq 4 -and $effortRows[0].content.Contains('med ') -and $effortRows[1].content.Contains('xhigh ') -and -not $effortRows[2].content.Contains([string][char]0x03C8) -and -not $effortRows[3].content.Contains([string][char]0x03C8))
+    $psi = [string][char]0x03C8
+    Check 'WIN-PS1 effort renders transcript med and xhigh' ($effortRows.Count -eq 8 -and $effortRows[0].content.Contains($psi + ' med ') -and $effortRows[1].content.Contains($psi + ' xhigh '))
+    Check 'WIN-PS1 effort ignores payload, partial, deep, unknown, remote' (@($effortRows[2..7] | Where-Object { $_.content.Contains($psi) }).Count -eq 0)
 
     $nameOnlyConfig = New-Config 'sub-name-only' @(('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'name')))
     $oldDoc = '{"tasks":[{"id":"old","name":"old"}]}'

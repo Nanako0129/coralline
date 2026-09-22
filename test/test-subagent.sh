@@ -350,23 +350,38 @@ TZT=$(printf '{"tasks":[{"id":"x","name":"n","type":"t","startTime":"2026-07-15T
   | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
 case "$TZT" in (*"⧖"*) bad "tz-offset startTime must hide elapsed: [$TZT]" ;; (*) ok "tz-offset startTime hides elapsed" ;; esac
 
-# effort is opt-in, reads the per-task payload field, and hides on Haiku 4.5
-# (Claude Code copies frontmatter effort into the payload even where it drops it)
+# effort is opt-in and comes from the task transcript's first assistant line,
+# never from the payload's `effort` (the definition's raw frontmatter, absent for
+# agents on the model default, present-but-unsent on Haiku 4.5).
 case "$c1$c2" in (*"ψ"*) bad "effort must stay off by default: [$c1$c2]" ;; (*) ok "effort off by default" ;; esac
+EB="$TMPD/effort-session"; mkdir -p "$EB/subagents"
+AS='{"type":"assistant","message":{"model":"claude-sonnet-5","content":[]},'
+printf '%s\n' '{"type":"user","message":{"content":"say \"effort\":\"max\",\"perTurnEffort\":1"}}' \
+  "${AS}"'"effort":"medium","perTurnEffort":null,"uuid":"u"}' > "$EB/subagents/agent-e-med.jsonl"
+printf '%s\n' '{"type":"user"}' "${AS}"'"uuid":"u"}' > "$EB/subagents/agent-e-haiku.jsonl"   # no effort sent
+printf '%s\n' '{"type":"user"}' > "$EB/subagents/agent-e-early.jsonl"                        # no response yet
+printf '%s' "${AS}"'"effort":"high","perTurnEffort":null' > "$EB/subagents/agent-e-partial.jsonl"  # line still being written
+{ i=0; while [ "$i" -lt 16 ]; do printf '%s\n' '{"type":"attachment"}'; i=$((i + 1)); done
+  printf '%s\n' "${AS}"'"effort":"low","perTurnEffort":null}'; } > "$EB/subagents/agent-e-deep.jsonl"
+printf '%s\n' "${AS}"'"effort":"turbo","perTurnEffort":null}' > "$EB/subagents/agent-e-bad.jsonl"
+printf '%s\n' "${AS}"'"effort":"low","perTurnEffort":null}' > "$EB/subagents/agent-e-remote.jsonl"  # only local_agent reads it
+EB_TP="$EB.jsonl"; if [ -n "${MSYSTEM:-}" ]; then EB_TP=$(cygpath -w "$EB_TP"); fi
 CONF=$(mktemp "${TMPDIR:-/tmp}/coralline-conf.XXXXXX")
 printf 'VL_SUB_SEGMENTS="name model effort"\n' > "$CONF"
-EFF=$(printf '{"tasks":[{"id":"s","name":"s","model":"claude-sonnet-5","effort":"medium"},{"id":"h","name":"h","model":"claude-haiku-4-5-20251001","effort":"low"},{"id":"n","name":"n","model":"claude-sonnet-5"},{"id":"b","name":"b","model":"claude-sonnet-5","effort":"turbo"}]}' \
+EFF=$(jq -nc --arg tp "$EB_TP" '{transcript_path:$tp,tasks:((["e-med","e-haiku","e-early","e-partial","e-deep","e-bad","e-none"]
+  | map({id:., name:., type:"local_agent", model:"claude-sonnet-5", effort:"xhigh"}))
+  + [{id:"e-remote", name:"e-remote", type:"remote_agent", effort:"low"}])}' \
   | CORALLINE_CONFIG="$CONF" bash "$SCRIPT" --subagent)
 rm -f "$CONF"
-e_s=$(printf '%s\n' "$EFF" | jq -r 'select(.id=="s").content')
-e_h=$(printf '%s\n' "$EFF" | jq -r 'select(.id=="h").content')
-e_n=$(printf '%s\n' "$EFF" | jq -r 'select(.id=="n").content')
-e_b=$(printf '%s\n' "$EFF" | jq -r 'select(.id=="b").content')
-case "$e_s" in (*"Sonnet 5"*"ψ med"*) ok "effort renders after model, medium → med" ;; (*) bad "effort sonnet: [$e_s]" ;; esac
-case "$e_s" in (*'[48;5;141m'*) ok "effort falls back to VL_BG_EFFORT" ;; (*) bad "effort bg: [$e_s]" ;; esac
-case "$e_h" in (*"ψ"*) bad "haiku must hide effort: [$e_h]" ;; (*) ok "haiku 4.5 hides effort" ;; esac
-case "$e_n" in (*"ψ"*) bad "absent effort must hide: [$e_n]" ;; (*) ok "absent effort hides" ;; esac
-case "$e_b" in (*"ψ"*) bad "unknown effort level must hide: [$e_b]" ;; (*) ok "unknown effort level hides" ;; esac
+row() { printf '%s\n' "$EFF" | jq -r --arg i "$1" 'select(.id==$i).content'; }
+e_med=$(row e-med)
+case "$e_med" in (*"Sonnet 5"*"ψ med"*) ok "transcript effort renders after model, medium → med" ;; (*) bad "transcript effort: [$e_med]" ;; esac
+case "$e_med" in (*'[48;5;141m'*) ok "effort falls back to VL_BG_EFFORT" ;; (*) bad "effort bg: [$e_med]" ;; esac
+case "$e_med" in (*"ψ max"*|*"ψ xhigh"*) bad "escaped text or payload effort leaked: [$e_med]" ;; (*) ok "escaped string and payload effort ignored" ;; esac
+for id in e-haiku e-early e-partial e-deep e-bad e-none e-remote; do
+  r=$(row "$id")
+  case "$r" in (*"ψ"*) bad "$id must hide effort: [$r]" ;; ("") bad "$id row missing" ;; (*) ok "$id hides effort" ;; esac
+done
 
 # VL_SUB_SEGMENTS is honored
 CONF=$(mktemp "${TMPDIR:-/tmp}/coralline-conf.XXXXXX")
