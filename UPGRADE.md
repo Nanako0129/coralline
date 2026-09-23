@@ -111,6 +111,11 @@ the ones the user asks for, and never overwrite a value they already set:
     VL_BAR_FILL="▪"     VL_BAR_EMPTY="▫"
     VL_CTX_GLYPH="◔"    VL_PROJECT_GLYPH="▣"
 
+A user who prefers to decide interactively can instead rerun
+`bash ~/.claude/coralline/configure.sh --wizard`: its glyph check shows each
+sample between arrows and asks whether the cells overlap, and choosing No writes
+these same values for that row.
+
 Note these are not upgrade items and will never appear in the delta: `VL_BAR_FILL`
 and `VL_BAR_EMPTY` are not new, and the right value for any of the four depends on
 the user's font rather than on which version they came from.

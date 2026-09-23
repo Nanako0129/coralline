@@ -123,6 +123,8 @@ Bash reads `~/.claude/coralline.conf`; the native renderer can read the same fil
 | `VL_RUNTIME_PROBE` | `0` | let `node` and `python` probe `PATH` when no pin exists; adds forks per render |
 | `VL_BG_*` / `VL_FG_*` | theme | 256-color index or `"R,G,B"` |
 
+If the gauge cells overlap or the `ctx` / `project` glyph looks too wide, your font lacks that glyph and the terminal borrowed a wider one: rerun `configure.sh --wizard` and answer its glyph check, or set `VL_BAR_FILL="▪"` `VL_BAR_EMPTY="▫"` and `VL_CTX_GLYPH="◔"` `VL_PROJECT_GLYPH="▣"` by hand ([issue #47](https://github.com/Nanako0129/coralline/issues/47)).
+
 ### Layout and styles
 
 `VL_LAYOUT="auto"` measures display columns and wraps up to `VL_MAX_LINES`; Claude Code v2.1.153+ supplies `$COLUMNS`, with a terminal fallback outside Claude Code. The display-width implementation and portability rationale live in [PR #10](https://github.com/Nanako0129/coralline/pull/10).
@@ -204,6 +206,8 @@ Bash-capable installs include the visual wizard:
 ```bash
 bash ~/.claude/coralline/configure.sh
 ```
+
+It steps through Theme, Style, Segments, Layout and Details, then a glyph check that shows each sample between arrows and asks whether the cells overlap (the gauge with a Nerd Font, the `ctx` / `project` glyphs always, since ASCII mode keeps those); choosing No writes the one-cell fallback for that row.
 
 PowerShell-only installs have no native wizard; back up and edit `coralline.conf` manually or reuse one created on a Bash-capable host.
 

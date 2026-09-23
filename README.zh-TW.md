@@ -123,6 +123,8 @@ Bash 讀取 `~/.claude/coralline.conf`，原生 renderer 也能讀同一個檔�
 | `VL_RUNTIME_PROBE` | `0` | 無 pin 時讓 `node` 與 `python` 偵測 `PATH`；每次 render 會增加 fork |
 | `VL_BG_*` / `VL_FG_*` | 依主題 | 256 色編號或 `"R,G,B"` |
 
+如果量表格子互相重疊，或 `ctx`／`project` 字符看起來太寬，代表字型缺少該字符，終端機改借了較寬的字：重跑 `configure.sh --wizard` 並回答字符檢查，或手動設定 `VL_BAR_FILL="▪"` `VL_BAR_EMPTY="▫"` 與 `VL_CTX_GLYPH="◔"` `VL_PROJECT_GLYPH="▣"`（見 [issue #47](https://github.com/Nanako0129/coralline/issues/47)）。
+
 ### 版面與風格
 
 `VL_LAYOUT="auto"` 會量測顯示欄寬並折成最多 `VL_MAX_LINES` 行；Claude Code v2.1.153+ 會提供 `$COLUMNS`，Claude Code 外則退回終端寬度。顯示寬度的實作與可攜性理由見 [PR #10](https://github.com/Nanako0129/coralline/pull/10)。
@@ -204,6 +206,8 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 ```bash
 bash ~/.claude/coralline/configure.sh
 ```
+
+Wizard 依序走過 Theme、Style、Segments、Layout 與 Details，最後是字符檢查：把每組範例字符緊貼在箭頭之間顯示，並問你格子是否互相重疊（使用 Nerd Font 時會問量表，`ctx`／`project` 則一律會問，因為 ASCII 模式仍保留這兩個字符）；選 No，才會為該列寫入一格寬的替代字符。
 
 PowerShell-only 安裝沒有原生 wizard；請先備份再手動編輯 `coralline.conf`，或沿用有 Bash 的主機所建立的設定。
 
