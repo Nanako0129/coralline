@@ -27,6 +27,7 @@ max_lines=3
 segments="$DEFAULT_SEGMENTS"
 segments2=""
 segments3=""
+layout_rows=""      # 2 or 3 once the Layout screen picks fixed rows, so a recombined list re-splits the same way
 clock_mode="12h"
 clock_seconds=1
 ascii_mode=0
@@ -45,6 +46,7 @@ old_stty=""
 resized=0          # set by the SIGWINCH trap; consumed by read_key
 KEY=""             # read_key writes the decoded key here (avoids a $() subshell)
 last_size=""       # last seen "rows cols"; read_key's 1s poll redraws on a change
+wizard_step_can_back=0  # 1 while a visual_wizard step has a previous step (footer ← hint)
 preview_input_file=""
 preview_cache_dir=""
 
@@ -754,12 +756,15 @@ draw_screen_header() {
 }
 
 draw_screen_footer() {
+  local back=""
+  # The ← hint shows only inside the wizard loop, and only past its first step.
+  [ "${wizard_step_can_back:-0}" = "1" ] && back=" · ${T_BLUE}←${T_RESET} back"
   if [ "${1:-}" = "toggle" ]; then
-    printf '\n%s↑/↓%s move · %sSpace%s toggle · %sEnter%s accept · %sq%s quit%s\n' \
-      "$T_BLUE" "$T_RESET" "$T_BLUE" "$T_RESET" "$T_GREEN" "$T_RESET" "$T_CORAL" "$T_RESET" "$T_RESET"
+    printf '\n%s↑/↓%s move%s · %sSpace%s toggle · %sEnter%s accept · %sq%s quit%s\n' \
+      "$T_BLUE" "$T_RESET" "$back" "$T_BLUE" "$T_RESET" "$T_GREEN" "$T_RESET" "$T_CORAL" "$T_RESET" "$T_RESET"
   else
-    printf '\n%s↑/↓%s move · %sEnter%s accept · %sq%s quit%s\n' \
-      "$T_BLUE" "$T_RESET" "$T_GREEN" "$T_RESET" "$T_CORAL" "$T_RESET" "$T_RESET"
+    printf '\n%s↑/↓%s move%s · %sEnter%s accept · %sq%s quit%s\n' \
+      "$T_BLUE" "$T_RESET" "$back" "$T_GREEN" "$T_RESET" "$T_CORAL" "$T_RESET" "$T_RESET"
   fi
 }
 
@@ -813,7 +818,8 @@ choose_theme_screen() {
     read_key || return 1; key="$KEY"
     case "$key" in
       up|down) selected=$(menu_move "$selected" "$key" "$count") ;;
-      enter) theme=$(theme_by_index "$selected"); return 0 ;;
+      enter|right) theme=$(theme_by_index "$selected"); return 0 ;;
+      left) return 2 ;;
       quit) leave_screen; exit 69 ;;
     esac
   done
@@ -840,7 +846,7 @@ choose_style_screen() {
     read_key || return 1; key="$KEY"
     case "$key" in
       up|down) selected=$(menu_move "$selected" "$key" 3) ;;
-      enter)
+      enter|right)
         style=$(style_from_index "$selected")
         # Only lean carries a user-visible separator; pill and classic clear it.
         if [ "$style" = "lean" ]; then
@@ -851,6 +857,7 @@ choose_style_screen() {
           lean_sep=""
         fi
         return 0 ;;
+      left) return 2 ;;
       quit) leave_screen; exit 69 ;;
     esac
   done
@@ -871,7 +878,7 @@ choose_segments_screen() {
     case "$key" in
       up|down) selected=$(menu_move "$selected" "$key" "$count") ;;
       resize) dirty=1 ;;
-      enter) return 0 ;;
+      enter|right) return 0 ;;
       space)
         if [ "$selected" -lt "$seg_n" ]; then
           local i=0 s
@@ -889,6 +896,7 @@ choose_segments_screen() {
           enter_screen
           dirty=1
         fi ;;
+      left) return 2 ;;
       quit) leave_screen; exit 69 ;;
     esac
   done
@@ -912,6 +920,10 @@ draw_segments_menu() {
 layout_selected_index() {
   if [ "$layout" = "auto" ] && [ "$max_lines" -gt 1 ]; then printf '0\n'; return; fi
   if [ "$layout" = "auto" ] && [ "$max_lines" -eq 1 ]; then printf '1\n'; return; fi
+  # layout_rows survives recombine_segment_rows; the row checks below cover
+  # callers that set the rows directly (p10k import, the plain prompt).
+  if [ "$layout" = "fixed" ] && [ "${layout_rows-}" = "2" ]; then printf '2\n'; return; fi
+  if [ "$layout" = "fixed" ] && [ "${layout_rows-}" = "3" ]; then printf '3\n'; return; fi
   if [ "$layout" = "fixed" ] && [ -n "$segments2" ] && [ -z "$segments3" ]; then printf '2\n'; return; fi
   printf '3\n'
 }
@@ -932,16 +944,21 @@ split_segments() {  # $1=lines (2 or 3), $2=full list — distributes evenly int
   done
 }
 
+recombine_segment_rows() {  # folds rows 2 and 3 back into segments
+  segments=$(normalize_segments "$segments $segments2 $segments3")
+  segments2=""
+  segments3=""
+}
+
 apply_layout_index() {
   # Always recombine first so switching layouts (or navigating past them in the
   # menu) never drops segments that were parked on line 2/3.
-  local all
-  all=$(normalize_segments "$segments $segments2 $segments3")
+  recombine_segment_rows
   case "$1" in
-    0) layout="auto";  max_lines=3; segments="$all"; segments2=""; segments3="" ;;
-    1) layout="auto";  max_lines=1; segments="$all"; segments2=""; segments3="" ;;
-    2) layout="fixed"; max_lines=3; split_segments 2 "$all" ;;
-    3) layout="fixed"; max_lines=3; split_segments 3 "$all" ;;
+    0) layout="auto";  max_lines=3; layout_rows="" ;;
+    1) layout="auto";  max_lines=1; layout_rows="" ;;
+    2) layout="fixed"; max_lines=3; layout_rows=2; split_segments 2 "$segments" ;;
+    3) layout="fixed"; max_lines=3; layout_rows=3; split_segments 3 "$segments" ;;
   esac
 }
 
@@ -965,7 +982,13 @@ choose_layout_screen() {
     read_key || return 1; key="$KEY"
     case "$key" in
       up|down) selected=$(menu_move "$selected" "$key" 4) ;;
-      enter) apply_layout_index "$selected"; return 0 ;;
+      enter|right) apply_layout_index "$selected"; return 0 ;;
+      left)
+        # Segments edits the first row only, so hand it the combined list;
+        # layout_rows keeps the choice and the split is reapplied on the way
+        # forward.
+        recombine_segment_rows
+        return 2 ;;
       quit) leave_screen; exit 69 ;;
     esac
   done
@@ -983,7 +1006,7 @@ choose_details_screen() {
     case "$key" in
       up|down) selected=$(menu_move "$selected" "$key" "$count") ;;
       resize) dirty=1 ;;
-      enter) return 0 ;;
+      enter|right) return 0 ;;
       space)
         case "$selected" in
           0) clock_mode="12h"; dirty=1 ;;
@@ -1001,6 +1024,7 @@ choose_details_screen() {
             dirty=1 ;;
           6) [ "$float_enabled" = "1" ] && float_enabled=0 || float_enabled=1; dirty=1 ;;
         esac ;;
+      left) return 2 ;;
       quit) leave_screen; exit 69 ;;
     esac
   done
@@ -1054,9 +1078,10 @@ choose_glyph_screen() {
     read_key || return 1; key="$KEY"
     case "$key" in
       up|down) selected=$(menu_move "$selected" "$key" 2) ;;
-      enter) return 0 ;;
+      enter|right) return 0 ;;
       yes) glyph_pick "$var" 0; return 0 ;;
       no) glyph_pick "$var" 1; return 0 ;;
+      left) return 2 ;;
       quit) leave_screen; exit 69 ;;
     esac
   done
@@ -1068,6 +1093,7 @@ choose_theme() {
   [ "$count" -gt 0 ] 2>/dev/null || die "no themes found in $(runtime_theme_dir)"
   if [ -t 0 ] && [ -t 1 ]; then
     choose_theme_screen
+    [ $? = 2 ] && return 2
     return 0
   fi
   while :; do
@@ -1105,6 +1131,7 @@ choose_style() {
   local answer
   if [ -t 0 ] && [ -t 1 ]; then
     choose_style_screen
+    [ $? = 2 ] && return 2
     return 0
   fi
   while :; do
@@ -1149,6 +1176,7 @@ choose_segments() {
   local answer i s enabled
   if [ -t 0 ] && [ -t 1 ]; then
     choose_segments_screen
+    [ $? = 2 ] && return 2
     return 0
   fi
   while :; do
@@ -1184,6 +1212,7 @@ choose_layout() {
   local answer rows
   if [ -t 0 ] && [ -t 1 ]; then
     choose_layout_screen
+    [ $? = 2 ] && return 2
     return 0
   fi
   while :; do
@@ -1237,6 +1266,7 @@ choose_details() {
   local answer
   if [ -t 0 ] && [ -t 1 ]; then
     choose_details_screen
+    [ $? = 2 ] && return 2
     return 0
   fi
   while :; do
@@ -1270,6 +1300,7 @@ choose_glyph() {
   local var="$1" answer current
   if [ -t 0 ] && [ -t 1 ]; then
     choose_glyph_screen "$@"
+    [ $? = 2 ] && return 2
     return 0
   fi
   while :; do
@@ -1289,30 +1320,54 @@ choose_glyph() {
 # Glyph check (#47). ASCII mode already draws the gauge as #/-, but it still
 # draws the ctx/project glyphs, so only the gauge question is skipped there.
 choose_glyphs() {
-  if [ "$ascii_mode" != "1" ]; then
-    choose_glyph bar_glyphs "Gauge glyphs" \
-      "Do the gauge cells each sit in their own cell, with no overlap between" \
-      "them or with the arrows" \
-      "Yes. Five separate cells, and the arrows touch the ends without overlap." \
-      "No. Some cells run into each other or into an arrow. Use ▪▪▪▫▫ instead." "▰▰▰▱▱"
-  fi
-  choose_glyph seg_glyphs "Segment glyphs" \
-    "Do the ctx and project glyphs each sit in their own cell, with no overlap" \
-    "between them or with the arrows" \
-    "Yes. Two separate glyphs with a space between." \
-    "No. Some glyphs run into each other or into an arrow. Use ◔ ▣ instead." "⬡ ⬢"
+  local page=0 rc
+  [ "$ascii_mode" = "1" ] && page=1
+  while :; do
+    if [ "$page" = "0" ]; then
+      choose_glyph bar_glyphs "Gauge glyphs" \
+        "Do the gauge cells each sit in their own cell, with no overlap between" \
+        "them or with the arrows" \
+        "Yes. Five separate cells, and the arrows touch the ends without overlap." \
+        "No. Some cells run into each other or into an arrow. Use ▪▪▪▫▫ instead." "▰▰▰▱▱"
+      rc=$?
+      [ "$rc" = 2 ] && return 2
+      page=1
+    else
+      choose_glyph seg_glyphs "Segment glyphs" \
+        "Do the ctx and project glyphs each sit in their own cell, with no overlap" \
+        "between them or with the arrows" \
+        "Yes. Two separate glyphs with a space between." \
+        "No. Some glyphs run into each other or into an arrow. Use ◔ ▣ instead." "⬡ ⬢"
+      rc=$?
+      [ "$rc" = 2 ] || return 0
+      # Back from the segment page: to the gauge page, or out of the step when
+      # ASCII mode skipped it.
+      [ "$ascii_mode" = "1" ] && return 2
+      page=0
+    fi
+  done
 }
 
+# Runs the steps in order. A step returns 2 to go back (the left arrow on a TTY
+# screen), anything else to advance; back on the first step just shows it again.
 visual_wizard() {
+  local steps="theme style segments layout details glyphs" i=0 n=6 rc
   if [ -t 0 ] && [ -t 1 ]; then
     enter_screen
   fi
-  choose_theme
-  choose_style
-  choose_segments
-  choose_layout
-  choose_details
-  choose_glyphs
+  while [ "$i" -lt "$n" ]; do
+    set -- $steps
+    shift "$i"
+    [ "$i" -gt 0 ] && wizard_step_can_back=1 || wizard_step_can_back=0
+    "choose_$1"
+    rc=$?
+    if [ "$rc" = 2 ]; then
+      [ "$i" -gt 0 ] && i=$((i - 1))
+    else
+      i=$((i + 1))
+    fi
+  done
+  wizard_step_can_back=0
   leave_screen
 }
 

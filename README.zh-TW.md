@@ -207,7 +207,7 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 bash ~/.claude/coralline/configure.sh
 ```
 
-Wizard 依序走過 Theme、Style、Segments、Layout 與 Details，最後是字符檢查：把每組範例字符緊貼在箭頭之間顯示，並問你格子是否互相重疊（使用 Nerd Font 時會問量表，`ctx`／`project` 則一律會問，因為 ASCII 模式仍保留這兩個字符）；選 No，才會為該列寫入一格寬的替代字符。
+Wizard 依序走過 Theme、Style、Segments、Layout 與 Details（← 回上一步，→ 確認），最後是字符檢查：把每組範例字符緊貼在箭頭之間顯示，並問你格子是否互相重疊（使用 Nerd Font 時會問量表，`ctx`／`project` 則一律會問，因為 ASCII 模式仍保留這兩個字符）；選 No，才會為該列寫入一格寬的替代字符。
 
 PowerShell-only 安裝沒有原生 wizard；請先備份再手動編輯 `coralline.conf`，或沿用有 Bash 的主機所建立的設定。
 

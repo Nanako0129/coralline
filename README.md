@@ -207,7 +207,7 @@ Bash-capable installs include the visual wizard:
 bash ~/.claude/coralline/configure.sh
 ```
 
-It steps through Theme, Style, Segments, Layout and Details, then a glyph check that shows each sample between arrows and asks whether the cells overlap (the gauge with a Nerd Font, the `ctx` / `project` glyphs always, since ASCII mode keeps those); choosing No writes the one-cell fallback for that row.
+It steps through Theme, Style, Segments, Layout and Details (← steps back, → accepts), then a glyph check that shows each sample between arrows and asks whether the cells overlap (the gauge with a Nerd Font, the `ctx` / `project` glyphs always, since ASCII mode keeps those); choosing No writes the one-cell fallback for that row.
 
 PowerShell-only installs have no native wizard; back up and edit `coralline.conf` manually or reuse one created on a Bash-capable host.
 
