@@ -107,8 +107,9 @@ BURN_TRIM=1500                  # internal: max rows kept in the sample file
 BURN_SLACK=500                  # internal: rows past BURN_TRIM tolerated before a trim rewrite.
                                 # Batches the steady-state trim: at the cap, appends land for
                                 # ~BURN_SLACK seconds before one render rewrites, instead of every
-                                # render rewriting every second. 1500+1000(max)+appends stays far
-                                # below the reader's 4096-physical-row bail-out.
+                                # render rewriting every second. 3000+1000 (both maxima) stays below
+                                # the reader's 4096-row parse window, so a store past that window
+                                # always satisfies the trim condition and is healed from its tail.
 
 # Cross-session limit sync (opt-in). Claude Code only re-renders a session's
 # statusline on activity, and the rate-limit % in each render's JSON is that
@@ -1039,16 +1040,24 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
     }
     {
       physical++; bytes += length($0) + 1
-      if (physical > 4096 || bytes > 1048576 || length($0) > 4096) { incomplete = 1; exit }
-      nf = split($0, f, "\t")
-      if (nf != 3) next
-      s = epoch(f[1]); p = pct_milli(f[2]); r = epoch(f[3])
-      if (s < 0 || p < 0 || r < 0) next
-      if (s > now + 300 || r < s || r > now + maxahead) { heal = 1; next }
-      add_obs(r, s, p)
+      if (bytes > 1048576 || length($0) > 4096) { incomplete = 1; exit }
+      ring[physical % 4096] = $0
     }
     END {
       if (incomplete) { print "incomplete"; exit }
+      # Only the newest 4096 physical rows are parsed. A store holding more (a
+      # render cancelled after its append but before its trim leaves one row
+      # behind, and at a 1 s refresh that repeats every tick) used to be refused
+      # outright and so was never trimmed again; physical now exceeds every
+      # trim + slack, so the rewrite below heals it from the tail.
+      for (k = (physical > 4096 ? physical - 4095 : 1); k <= physical; k++) {
+        nf = split(ring[k % 4096], f, "\t")
+        if (nf != 3) continue
+        s = epoch(f[1]); p = pct_milli(f[2]); r = epoch(f[3])
+        if (s < 0 || p < 0 || r < 0) continue
+        if (s > now + 300 || r < s || r > now + maxahead) { heal = 1; continue }
+        add_obs(r, s, p)
+      }
       if (mutate && (physical > trim + slack || heal)) {
         lo = n - trim + 1; if (lo < 1) lo = 1
         printf "%s", "" > tmp
