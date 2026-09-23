@@ -2153,7 +2153,7 @@ fi
     Write-Utf8 $overPath $overLines.ToString()
     $overPs = Invoke-Statusline (Json $statePayload) $overConfig $stateEnvWrite '' 30000
     Check-Run 'WIN-02 PowerShell burn cap+1 watchdog' $overPs
-    Check 'WIN-02 PowerShell burn cap+1 leaves the oversized TSV untrimmed' (([IO.File]::ReadAllLines($overPath, $StrictUtf8)).Count -eq 4098)
+    Check 'WIN-02 PowerShell burn cap+1 heals the oversized TSV to BURN_TRIM' (([IO.File]::ReadAllLines($overPath, $StrictUtf8)).Count -eq 1500)
     Check 'WIN-02 PowerShell burn cap+1 creates no ignored marker store' (-not [IO.Directory]::Exists((Join-Path $overRoot 'burn.d')))
     $overLimit = Join-Path $overRoot 'limit5.d'
     if ([IO.Directory]::Exists($overLimit)) { [IO.Directory]::Delete($overLimit, $true) }
@@ -2163,7 +2163,8 @@ fi
     Check-Run 'WIN-02 PowerShell limit cap+1 watchdog' $overPs2
     Check 'WIN-02 PowerShell limit cap+1 frozen' ((Get-ImmediateNames $overLimit).Count -eq 513)
 
-    # TSV trim and complete-read caps are distinct boundaries.
+    # Every store past BURN_TRIM + BURN_SLACK trims, including one past the 4096-row
+    # parse window, which used to be refused and never trimmed again.
     foreach ($rawCount in @(3967,3968,4096)) {
         $boundaryRoot = Join-Path $stateRoot ("burn-boundary-$rawCount")
         $boundaryConfig = New-StateConfig ("win02-burn-boundary-$rawCount") $boundaryRoot 'burn' $false
@@ -2173,10 +2174,84 @@ fi
         Write-Utf8 $boundaryStore $boundaryLines.ToString()
         $boundaryRun = Invoke-Statusline (Json $statePayload) $boundaryConfig $stateEnvWrite '' 30000
         Check-Run "WIN-02 PowerShell burn raw boundary $rawCount" $boundaryRun
-        $expectedRows = 1500
-        if ($rawCount -eq 4096) { $expectedRows = 4097 }
-        Check "WIN-02 burn raw boundary $rawCount" (([IO.File]::ReadAllLines($boundaryStore, $StrictUtf8)).Count -eq $expectedRows)
+        Check "WIN-02 burn raw boundary $rawCount" (([IO.File]::ReadAllLines($boundaryStore, $StrictUtf8)).Count -eq 1500)
     }
+
+    # A store past the parse window heals identically in both runtimes. Found on a
+    # Windows box whose store never trimmed once and reached 8678 rows. Rows beyond
+    # the window sit at 5% so parsing them would add an out-of-window crossing.
+    $stuckBuilder = New-Object Text.StringBuilder
+    for ($i = 0; $i -lt 4200; $i++) {
+        $stuckPct = '10'
+        if ($i -lt 104) { $stuckPct = '5' }
+        [void]$stuckBuilder.Append((($fixedNow - 4200L + $i).ToString($Invariant) + "`t" + $stuckPct + "`t1015900`n"))
+    }
+    $stuckText = $stuckBuilder.ToString()
+    $stuckStores = @{}
+    foreach ($runtime in @('ps','bash')) {
+        $stuckRoot = Join-Path $stateRoot ("stuck-$runtime")
+        $stuckConfig = New-StateConfig ("win02-stuck-$runtime") $stuckRoot 'burn' $false
+        $stuckPath = Join-Path $stuckRoot 'burn.tsv'
+        Write-Utf8 $stuckPath $stuckText
+        $stuckDump = Join-Path $stuckRoot 'state.txt'
+        $stuckReadEnv = @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW=[string]$fixedNow; CORALLINE_TEST_STATE_DUMP=(Forward-Path $stuckDump) }
+        if ($runtime -eq 'ps') {
+            $stuckRead = Invoke-Statusline (Json $statePayload) $stuckConfig $stuckReadEnv '' 30000
+            $stuckReadPs = $stuckRead
+            $stuckPsState = [IO.File]::ReadAllText($stuckDump, $StrictUtf8) | ConvertFrom-Json
+            Check 'WIN-02 PowerShell stuck store reads its tail as complete' ([bool]$stuckPsState.BurnSnapshotComplete)
+        } else {
+            $stuckRead = Invoke-BashStatusline (Json $statePayload) $stuckConfig $stuckReadEnv
+            Check-Exact 'WIN-02 stuck store read-only output matches Bash' $stuckReadPs $stuckRead
+        }
+        Check-Run "WIN-02 $runtime stuck store read-only" $stuckRead
+        Check "WIN-02 $runtime stuck store read-only leaves the TSV byte exact" ([IO.File]::ReadAllText($stuckPath, $Utf8NoBom) -ceq $stuckText)
+        if ($runtime -eq 'ps') { $stuckWrite = Invoke-Statusline (Json $statePayload) $stuckConfig $stateEnvWrite '' 30000 }
+        else { $stuckWrite = Invoke-BashStatusline (Json $statePayload) $stuckConfig $stateEnvWrite }
+        Check-Run "WIN-02 $runtime stuck store heal" $stuckWrite
+        $stuckRows = [IO.File]::ReadAllLines($stuckPath, $StrictUtf8)
+        Check "WIN-02 $runtime stuck store heals to the newest BURN_TRIM rows" ($stuckRows.Count -eq 1500 -and $stuckRows[0] -ceq "998501`t10.000`t1015900" -and $stuckRows[1499] -ceq "1000000`t41.200`t1015900")
+        $stuckStores[$runtime] = [IO.File]::ReadAllText($stuckPath, $Utf8NoBom)
+    }
+    Check 'WIN-02 stuck store heal is byte-identical across runtimes' ($stuckStores['ps'] -ceq $stuckStores['bash'])
+
+    # Row accept/reject and pct canonicalisation are pinned against the Bash reader:
+    # the implausible sentinel forces a rewrite, and the rewrite holds exactly the
+    # accepted rows in canonical form, so byte equality covers every row below.
+    # A CR-terminated row is deliberately absent: Git Bash's awk reads in text mode
+    # and strips the CR (measured: it keeps such a row), while this reader and awk
+    # on Linux or macOS reject it. Both writers emit LF only.
+    $edgeRows = @(
+        "999001`t10`t1015900", "999002`t010.000`t1015900", "999003`t100.000`t1015900",
+        "999004`t100.5`t1015900", "999005`t100.500`t1015900", "999006`t100.000000`t1015900",
+        "999007`t5.0005`t1015900", "999008`t5.0015`t1015900", "999009`t5.0025001`t1015900",
+        "999010`t099.999`t1015900", "999011`t099.9995`t1015900", "999012`t1e2`t1015900",
+        "999013`t-1`t1015900", "999014`t 5`t1015900", "999015`t5 `t1015900", "0999016`t5`t1015900",
+        "999018`t5`t1015900`t", "999019`t5", "", "999020`t.5`t1015900",
+        "999021`t5.`t1015900", "999022`t0`t1015900", "999023`t00`t1015900", "999024`t000.000`t1015900",
+        "999025`t100.001`t1015900", ("999026`t5`t1015900" + [char]0xE9), "999999999999`t5`t1015900",
+        "999027`t5`t253402300800", "999001`t12`t1015900", "999028`t7.9999995`t1015900",
+        "999029`t42.4445`t1015900", "999030`t5`t99999999", "`t`t", "999031`t5`t1015900"
+    )
+    $edgeText = ($edgeRows -join "`n") + "`n"
+    $edgeStores = @{}
+    foreach ($runtime in @('ps','bash')) {
+        $edgeRoot = Join-Path $stateRoot ("rowedge-$runtime")
+        $edgeConfig = New-StateConfig ("win02-rowedge-$runtime") $edgeRoot 'burn' $false
+        $edgePath = Join-Path $edgeRoot 'burn.tsv'
+        Write-Utf8 $edgePath $edgeText
+        if ($runtime -eq 'ps') { $edgeRun = Invoke-Statusline (Json $statePayload) $edgeConfig $stateEnvWrite '' 30000 }
+        else { $edgeRun = Invoke-BashStatusline (Json $statePayload) $edgeConfig $stateEnvWrite }
+        Check-Run "WIN-02 $runtime row edge rewrite" $edgeRun
+        $edgeStores[$runtime] = [IO.File]::ReadAllText($edgePath, $Utf8NoBom)
+    }
+    if ($edgeStores['ps'] -cne $edgeStores['bash']) {
+        [Console]::Out.WriteLine('DIAG  ps=' + $edgeStores['ps'].Replace("`n", '|'))
+        [Console]::Out.WriteLine('DIAG  bash=' + $edgeStores['bash'].Replace("`n", '|'))
+    }
+    Check 'WIN-02 row edge rewrite is byte-identical across runtimes' ($edgeStores['ps'] -ceq $edgeStores['bash'])
+    Check 'WIN-02 row edge rewrite dropped the sentinel' (-not $edgeStores['ps'].Contains('99999999'))
+
     foreach ($rawCount in @(383,384,512)) {
         $boundaryRoot = Join-Path $stateRoot ("limit-boundary-$rawCount")
         $boundaryConfig = New-StateConfig ("win02-limit-boundary-$rawCount") $boundaryRoot 'limit5h' $true
@@ -2203,7 +2278,9 @@ fi
     $steadyPs = Invoke-Statusline (Json $statePayload) $steadyConfig $stateEnvWrite '' 5000
     Check-Run 'WIN-02 PowerShell 1500-entry steady render' $steadyPs
     Check 'WIN-02 PowerShell 1500-entry steady render under 3s' ($steadyPs.ElapsedMs -lt 3000)
-    Check 'WIN-02 PowerShell 1500-entry steady render trims to 1500 rows' (([IO.File]::ReadAllLines($steadyStore, $StrictUtf8)).Count -eq 1500)
+    # BURN_SLACK (default 500) batches the steady-state trim as in Bash: the append
+    # lands and no rewrite happens until the store passes BURN_TRIM + BURN_SLACK.
+    Check 'WIN-02 PowerShell 1500-entry steady render defers the trim within BURN_SLACK' (([IO.File]::ReadAllLines($steadyStore, $StrictUtf8)).Count -eq 1501)
     $steadyBash = Invoke-BashStatusline (Json $statePayload) $steadyConfig $stateEnvRead
     Check-Run 'WIN-02 Bash 1500-entry steady render' $steadyBash
     Check 'WIN-02 Bash 1500-entry steady render under 3s' ($steadyBash.ElapsedMs -lt 3000)

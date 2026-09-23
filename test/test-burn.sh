@@ -189,6 +189,41 @@ if cmp -s "$BURN_FILE" "$CASE/before"; then ok 'pre-existing temp never replaces
 eq 'pre-existing temp remains untouched' "$(LC_ALL=C tr -d '\n' < "$BURN_FILE.$$.tmp")" stale-canary
 BURN_TRIM=1500
 
+# A store past the 4096-row parse window heals instead of staying refused. Found
+# on a Windows box whose store never trimmed once and reached 8678 rows. Rows
+# 1..104 sit outside the window at 5% so a crossing into the 10% tail would read
+# idle; warming proves only the newest 4096 rows were parsed.
+stuck_store() {  # $1=path $2=rows
+  LC_ALL=C awk -v n="$2" 'BEGIN { for (i = 0; i < n; i++) printf "%d\t%s\t1015900\n", 1000000 + i, (i < n - 4096 ? "5" : "10") }' > "$1"
+}
+CASE="$TMPD/stuck"; mkdir -p "$CASE"
+unit_gate "$CASE" 1004200 '' '' '' '' 1
+stuck_store "$BURN_FILE" 4200; cp "$BURN_FILE" "$CASE/before"
+_CUR_BURN_VALID=0; burn_eta_5h 0
+eq 'stuck store read-only parses the newest 4096 rows' "$_B5_RAW" 'warming 0 0 10000 11700'
+if cmp -s "$BURN_FILE" "$CASE/before"; then ok 'stuck store read-only leaves the file untouched'; else bad 'stuck store read-only leaves the file untouched' changed; fi
+_CUR_BURN_VALID=0; burn_eta_5h 1
+eq 'stuck store mutable read keeps its estimate' "$_B5_RAW" 'warming 0 0 10000 11700'
+eq 'stuck store heals to BURN_TRIM rows' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 1500
+IFS=$'\t' read -r _FIRST _ _ < "$BURN_FILE"; eq 'stuck store keeps the newest rows' "$_FIRST" 1002700
+eq 'stuck store heal keeps the last row' "$(tail -n 1 "$BURN_FILE")" $'1004199\t10.000\t1015900'
+_CUR_BURN_VALID=0; burn_eta_5h 1
+eq 'healed store reads back to the same estimate' "$_B5_RAW" 'warming 0 0 10000 11700'
+# The largest allowed trim + slack still heals one row past the window.
+BURN_TRIM=3000; BURN_SLACK=1000
+stuck_store "$BURN_FILE" 4097; _CUR_BURN_VALID=0; burn_eta_5h 1
+eq 'stuck store heals at max trim and slack' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 3000
+BURN_TRIM=1500; BURN_SLACK=0
+# The byte and record caps still refuse the whole file and never rewrite it.
+stuck_store "$BURN_FILE" 4200; printf '%05000d\t10\t1015900\n' 1 >> "$BURN_FILE"; cp "$BURN_FILE" "$CASE/before"
+_CUR_BURN_VALID=0; burn_eta_5h 1
+eq 'overlong record past the window still refuses the read' "$_B5_RAW" ''
+if cmp -s "$BURN_FILE" "$CASE/before"; then ok 'overlong record past the window is never rewritten'; else bad 'overlong record past the window is never rewritten' changed; fi
+stuck_store "$BURN_FILE" 60000; cp "$BURN_FILE" "$CASE/before"
+_CUR_BURN_VALID=0; burn_eta_5h 1
+eq 'store over 1 MiB still refuses the read' "$_B5_RAW" ''
+if cmp -s "$BURN_FILE" "$CASE/before"; then ok 'store over 1 MiB is never rewritten'; else bad 'store over 1 MiB is never rewritten' changed; fi
+
 # Stateless 7d estimator keeps exact rational semantics.
 NOW=1000000
 burn_eta_7d 30000 1345600
