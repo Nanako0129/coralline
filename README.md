@@ -77,6 +77,8 @@ The following bootstrap follows mutable `main`, resolves it to a commit before d
 
 For an audited release or commit, copy the line and replace only `$ref='main'` with the selected tag or 40-character SHA. A branch or tag can move; the bootstrap resolves it before downloading. The native installer manages `statusline.ps1` and the ten shipped themes, precisely merges the top-level `statusLine`, preserves `subagentStatusLine` unless `on` or `off` is explicit, never creates or edits `coralline.conf`, and leaves custom themes, state, and float output outside its replacement set. See the current [`INSTALL.md`](./INSTALL.md) contract and the historical [native installer PR #55](https://github.com/Nanako0129/coralline/pull/55).
 
+`install.ps1` writes `statusLine.refreshInterval: 2`, not `1`: Claude Code aborts an in-flight statusline render the moment the next refresh tick fires, and the native PowerShell renderer takes close to a second, so a 1-second tick can abort every render before it finishes. Re-running `install.ps1` rewrites an existing `statusLine` value (whether it holds `1`, `5`, or anything else) back to `2`, since the installer replaces that whole value on every run.
+
 ### Trust and security
 
 The default `main/INSTALL.md`, `main/UPGRADE.md`, and `main/install.sh` URLs are mutable remote inputs. Read the selected [`INSTALL.md`](./INSTALL.md), [`install.sh`](./install.sh), and [`install.ps1`](./install.ps1) before running them.
