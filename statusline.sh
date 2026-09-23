@@ -179,7 +179,9 @@ VL_FG_HOT=167
 knob_bounded() {  # $1=raw $2=maxlen $3=min $4=max $5=fallback $6=out-var
   local raw="$1" len="$2" min="$3" max="$4" fb="$5" var="$6" n
   case "$raw" in
-    (''|*[!0-9]*) printf -v "$var" '%s' "$fb"; return ;;
+    # Listed, not a 0-9 range: a range follows the locale's collation, and a
+    # non-ASCII digit reaching 10# below aborts the whole render.
+    (''|*[!0123456789]*) printf -v "$var" '%s' "$fb"; return ;;
   esac
   if [ "${#raw}" -gt "$len" ]; then printf -v "$var" '%s' "$fb"; return; fi
   n=$((10#$raw))

@@ -3049,6 +3049,16 @@ fi
     # the one out of order); a kept, non-inverted pair (including equal) is
     # left alone. ctx% =62.4 (New-Payload) sits between the two thresholds
     # picked below, so the reset flips which color band it falls into.
+    # A CR decoded from $'...' quoting must be refused, not stripped to a valid
+    # digit first: PowerShell used to remove control characters before
+    # validating integer knobs, so $'9\r' became 9 while Bash fell back to 5.
+    $win92CrValueConfig = New-Config 'win92-cr-value' @('VL_SEGMENTS=ctx', 'VL_CLOCK=off', "VL_BAR_WIDTH=`$'9\r'", "BURN_TRIM=`$'9\r'")
+    $win92CrValuePs = Invoke-Statusline (Json $win92Payload) $win92CrValueConfig @{} '' 8000
+    $win92CrValueBash = Invoke-BashStatusline (Json $win92Payload) $win92CrValueConfig @{}
+    Check-Run 'WIN-92 CR-decoded knob value PowerShell' $win92CrValuePs
+    Check-Run 'WIN-92 CR-decoded knob value Bash' $win92CrValueBash
+    Check-Exact 'WIN-92 CR-decoded knob value parity' $win92CrValuePs $win92CrValueBash
+
     $win92HotWarnCases = @(
         [pscustomobject]@{ Name='inverted-resets'; Warn=60; Hot=40 },
         [pscustomobject]@{ Name='equal-kept'; Warn=60; Hot=60 },

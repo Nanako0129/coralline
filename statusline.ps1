@@ -669,9 +669,6 @@ if ($null -ne $visited) {
     foreach ($visitedPath in $visited) { $ConfigVisitedPaths += [string]$visitedPath }
 }
 
-# Config never supplies terminal controls. The renderer is the sole ANSI source.
-foreach ($key in @($Cfg.Keys)) { $Cfg[$key] = Remove-ControlChars ([string]$Cfg[$key]) }
-
 $Invariant = [System.Globalization.CultureInfo]::InvariantCulture
 $IntegerStyle = [System.Globalization.NumberStyles]::Integer
 $FloatStyle = [System.Globalization.NumberStyles]::Float
@@ -721,10 +718,19 @@ $Cfg.VL_WARN_PCT = [string](Get-BoundedInt $Cfg.VL_WARN_PCT ([int]$Defaults.VL_W
 $Cfg.VL_HOT_PCT = [string](Get-BoundedInt $Cfg.VL_HOT_PCT ([int]$Defaults.VL_HOT_PCT) 0 100 3)
 $Cfg.VL_MAX_LINES = [string](Get-BoundedInt $Cfg.VL_MAX_LINES ([int]$Defaults.VL_MAX_LINES) 1 64 2)
 $Cfg.VL_WRAP_MARGIN = [string](Get-BoundedInt $Cfg.VL_WRAP_MARGIN ([int]$Defaults.VL_WRAP_MARGIN) 0 32767 5)
+$Cfg.CORALLINE_BURN_WINDOW = [string](Get-BoundedInt $Cfg.CORALLINE_BURN_WINDOW 600 60 86400 5)
+$Cfg.BURN_TRIM = [string](Get-BoundedInt $Cfg.BURN_TRIM 1500 1 3000 4)
+$Cfg.BURN_SLACK = [string](Get-BoundedInt $Cfg.BURN_SLACK 500 0 1000 4)
 if ([int]$Cfg.VL_HOT_PCT -lt [int]$Cfg.VL_WARN_PCT) {
     $Cfg.VL_WARN_PCT = $Defaults.VL_WARN_PCT
     $Cfg.VL_HOT_PCT = $Defaults.VL_HOT_PCT
 }
+
+# Config never supplies terminal controls. The renderer is the sole ANSI source.
+# This runs after the integer knobs above are validated, so a value such as
+# $'9\r' is refused as Bash's knob_bounded refuses it, instead of being
+# stripped to 9 first.
+foreach ($key in @($Cfg.Keys)) { $Cfg[$key] = Remove-ControlChars ([string]$Cfg[$key]) }
 foreach ($key in @($Cfg.Keys | Where-Object { $_ -like 'VL_BG_*' -or $_ -like 'VL_FG_*' })) {
     if (-not (Test-Color $Cfg[$key])) { $Cfg[$key] = $Defaults[$key] }
 }

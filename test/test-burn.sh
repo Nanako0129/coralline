@@ -1122,7 +1122,9 @@ knob_case() {  # $1=knob $2=raw $3=L $4=min $5=max $6=fallback $7=expect
 knob_row() {  # $1=knob $2=L $3=min $4=max $5=fallback
   local name="$1" L="$2" min="$3" max="$4" fb="$5" bad long minus1 plus1
   # Rejected spellings: fallback regardless of range (sign, whitespace, exponent, non-digit).
-  for bad in '' '+5' '-0' ' 5' '5 ' '1e1' 'x'; do
+  # $'9\r' (a CR decoded from ANSI-C quoting) and non-ASCII digits (fullwidth
+  # five, Arabic-Indic five) must fall back too; one reaching 10# aborts a render.
+  for bad in '' '+5' '-0' ' 5' '5 ' '1e1' 'x' $'9\r' '５' '٥'; do
     knob_case "$name" "$bad" "$L" "$min" "$max" "$fb" "$fb"
   done
   # L+1 digits: too long, fallback.
