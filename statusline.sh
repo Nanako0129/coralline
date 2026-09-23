@@ -171,6 +171,49 @@ VL_FG_OK=114
 VL_FG_WARN=179
 VL_FG_HOT=167
 
+# Canonical integer-knob parse (mirrors PS1's Get-BoundedInt): the raw value
+# must match ^[0-9]{1,L}$ (no sign, no whitespace, no exponent), is read as
+# decimal (10# forces base 10 so a leading zero never reads as octal), and
+# must lie in [min, max]; anything else takes the fallback. printf -v writes
+# through a caller-named global — no $(...) subshell, no fork.
+knob_bounded() {  # $1=raw $2=maxlen $3=min $4=max $5=fallback $6=out-var
+  local raw="$1" len="$2" min="$3" max="$4" fb="$5" var="$6" n
+  case "$raw" in
+    (''|*[!0-9]*) printf -v "$var" '%s' "$fb"; return ;;
+  esac
+  if [ "${#raw}" -gt "$len" ]; then printf -v "$var" '%s' "$fb"; return; fi
+  n=$((10#$raw))
+  if [ "$n" -lt "$min" ] || [ "$n" -gt "$max" ]; then printf -v "$var" '%s' "$fb"
+  else printf -v "$var" '%s' "$n"; fi
+}
+
+# Applies knob_bounded to every integer knob, then the HOT<WARN reset — called
+# once, right after the config (and any theme it sources) has run and before
+# any consumer reads these knobs. Replaces the three ad-hoc checks that used
+# to live inside state_gate (BURN_WINDOW, BURN_TRIM, BURN_SLACK), which only
+# ran when a burn/limit segment was active. A single function (rather than
+# bare top-level statements) so tests can extract and drive it directly.
+knob_validate_all() {
+  knob_bounded "$VL_BAR_WIDTH"          2 0   64    5 VL_BAR_WIDTH
+  knob_bounded "$VL_PATH_DEPTH"         3 1   256   4 VL_PATH_DEPTH
+  knob_bounded "$VL_NAME_MAX"           4 0   4096  0 VL_NAME_MAX
+  knob_bounded "$VL_COST_DECIMALS"      1 0   9     2 VL_COST_DECIMALS
+  knob_bounded "$VL_WARN_PCT"           3 0   100   50 VL_WARN_PCT
+  knob_bounded "$VL_HOT_PCT"            3 0   100   75 VL_HOT_PCT
+  knob_bounded "$VL_MAX_LINES"          2 1   64    3 VL_MAX_LINES
+  knob_bounded "$VL_WRAP_MARGIN"        5 0   32767 4 VL_WRAP_MARGIN
+  knob_bounded "$CORALLINE_BURN_WINDOW" 5 60  86400 600  CORALLINE_BURN_WINDOW
+  knob_bounded "$BURN_TRIM"             4 1   3000  1500 BURN_TRIM
+  knob_bounded "$BURN_SLACK"            4 0   1000  500  BURN_SLACK
+  # Same cross-knob rule as PS1 (statusline.ps1, right after its own
+  # Get-BoundedInt calls): an inverted pair resets both to their defaults,
+  # not just one.
+  if [ "$VL_HOT_PCT" -lt "$VL_WARN_PCT" ]; then
+    VL_WARN_PCT=50
+    VL_HOT_PCT=75
+  fi
+}
+
 # ── Load user config ─────────────────────────────────────────────────────────
 VL_CONF="${CORALLINE_CONFIG:-$HOME/.claude/coralline.conf}"
 # Fingerprint of the palette subseg_name draws with, so a config that retinted any
@@ -179,6 +222,7 @@ VL_CONF="${CORALLINE_CONFIG:-$HOME/.claude/coralline.conf}"
 _VL_STOCK="$VL_BG_DIR|$VL_FG_TEXT|$VL_FG_OK|$VL_FG_HOT|$VL_FG_DIM"
 _VL_STOCK_BAR="$VL_BG_BAR|$VL_LEAN_BG"
 [ -f "$VL_CONF" ] && . "$VL_CONF"
+knob_validate_all
 
 # Subagent name pill. Its colors have to be resolved here, after the whole config
 # has run, because they are only safe while the palette they were solved against
@@ -611,15 +655,8 @@ state_paths_revalidate() {  # every mutation rechecks the cached canonical ident
 
 state_gate() {  # canonicalize one render's values and state namespaces
   _STATE_MUTATE=1; [ "${CORALLINE_NO_SAMPLE:-0}" = 1 ] && _STATE_MUTATE=0
-  case "$CORALLINE_BURN_WINDOW" in (''|*[!0-9]*) CORALLINE_BURN_WINDOW=600 ;; esac
-  [ "${#CORALLINE_BURN_WINDOW}" -le 5 ] && [ "$CORALLINE_BURN_WINDOW" -ge 60 ] 2>/dev/null \
-    && [ "$CORALLINE_BURN_WINDOW" -le 86400 ] 2>/dev/null || CORALLINE_BURN_WINDOW=600
-  case "$BURN_TRIM" in (''|*[!0-9]*) BURN_TRIM=1500 ;; esac
-  [ "${#BURN_TRIM}" -le 4 ] && [ "$BURN_TRIM" -ge 1 ] 2>/dev/null \
-    && [ "$BURN_TRIM" -le 3000 ] 2>/dev/null || BURN_TRIM=1500
-  case "$BURN_SLACK" in (''|*[!0-9]*) BURN_SLACK=500 ;; esac
-  [ "${#BURN_SLACK}" -le 4 ] && [ "$BURN_SLACK" -ge 0 ] 2>/dev/null \
-    && [ "$BURN_SLACK" -le 1000 ] 2>/dev/null || BURN_SLACK=500
+  # CORALLINE_BURN_WINDOW / BURN_TRIM / BURN_SLACK are validated once, right
+  # after the config loads (see knob_bounded above), not here.
 
   _CUR5_VALID=0; _CUR7_VALID=0; _CUR_BURN_VALID=0
   _CUR5_PCT=0; _CUR5_CANON=""; _CUR5_TSV=""; _CUR5_RST=0
@@ -993,7 +1030,7 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
     if state_paths_revalidate && state_no_symlink_path "$tmp" && [ "$_SNP" = "$tmp" ] \
        && [ ! -e "$tmp" ] && [ ! -L "$tmp" ]; then write_tmp=1; fi
   fi
-  out=$(LC_ALL=C awk -F '\t' -v now="$NOW" -v win="$CORALLINE_BURN_WINDOW" \
+  out=$(LC_ALL=C awk -F '\t' -v BINMODE=3 -v now="$NOW" -v win="$CORALLINE_BURN_WINDOW" \
     -v trim="$BURN_TRIM" -v slack="$BURN_SLACK" \
     -v maxahead="$RL_MAX_5H" -v mutate="$write_tmp" -v tmp="$tmp" \
     -v curvalid="${_CUR_BURN_VALID:-0}" -v csamp="${_CUR_BURN_SAMP:-0}" \

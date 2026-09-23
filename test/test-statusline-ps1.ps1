@@ -2942,6 +2942,127 @@ fi
     Check 'WIN-03 state collision derivation is outside state gates' ($source.IndexOf('$AllStatePaths') -lt $source.IndexOf('$BurnStateGate'))
     Assert-NoUnexpectedResidue $win03Root 'WIN-03 float matrix'
 
+    # WIN-92: integer-knob parity (#92-A). For every knob in the plan's table,
+    # every spelling in the canonical rule's rejection/acceptance surface must
+    # render byte-identically in Bash and PowerShell — same spelling in, same
+    # bytes out on both runtimes is exactly what "the same range and the same
+    # fallback" means operationally. `Segments` picks a segment whose render
+    # is sensitive to that knob's normalized value.
+    $win92Payload = Clone-Object $basePayload
+    # The base payload leaves five_hour.resets_at empty, so burn would read only
+    # the 7d window and never touch the 5h rows the burn fixtures below write.
+    # Point the 5h window at the fixtures' reset so their rows actually drive
+    # the render; otherwise every burn case compares two renders that ignore it.
+    $win92BurnPayload = Clone-Object $basePayload
+    $win92BurnPayload.rate_limits.five_hour.used_percentage = '8'
+    $win92BurnPayload.rate_limits.five_hour.resets_at = '1015900'
+    $win92Cases = @(
+        [pscustomobject]@{ Key='VL_BAR_WIDTH';          Segments='ctx';  L=2; Min=0;  Max=64;    Fallback=5 },
+        [pscustomobject]@{ Key='VL_PATH_DEPTH';         Segments='dir';  L=3; Min=1;  Max=256;   Fallback=4 },
+        [pscustomobject]@{ Key='VL_NAME_MAX';           Segments='dir\ git'; L=4; Min=0; Max=4096; Fallback=0 },
+        [pscustomobject]@{ Key='VL_COST_DECIMALS';      Segments='cost'; L=1; Min=0;  Max=9;     Fallback=2 },
+        [pscustomobject]@{ Key='VL_WARN_PCT';           Segments='ctx';  L=3; Min=0;  Max=100;   Fallback=50 },
+        [pscustomobject]@{ Key='VL_HOT_PCT';            Segments='ctx';  L=3; Min=0;  Max=100;   Fallback=75 },
+        [pscustomobject]@{ Key='VL_MAX_LINES';          Segments='model\ ctx\ cost\ lines'; L=2; Min=1; Max=64;    Fallback=3; Extra=@('VL_LAYOUT=auto','VL_WRAP_MARGIN=0'); Env=@{COLUMNS='30'} },
+        [pscustomobject]@{ Key='VL_WRAP_MARGIN';        Segments='model\ ctx\ cost\ lines'; L=5; Min=0; Max=32767; Fallback=4; Extra=@('VL_LAYOUT=auto','VL_MAX_LINES=3'); Env=@{COLUMNS='30'} },
+        [pscustomobject]@{ Key='CORALLINE_BURN_WINDOW'; Segments='burn'; L=5; Min=60; Max=86400; Fallback=600; IsBurn=$true },
+        [pscustomobject]@{ Key='BURN_TRIM';             Segments='burn'; L=4; Min=1;  Max=3000;  Fallback=1500; IsBurn=$true },
+        [pscustomobject]@{ Key='BURN_SLACK';            Segments='burn'; L=4; Min=0;  Max=1000;  Fallback=500;  IsBurn=$true }
+    )
+    $win92Bad = @('', '+5', '-0', ' 5', '5 ', '1e1', 'x')
+    $win92Idx = 0
+    foreach ($case in $win92Cases) {
+        $spellings = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($b in $win92Bad) { [void]$spellings.Add($b) }
+        [void]$spellings.Add(('9' * ($case.L + 1)))     # L+1 digits: too long
+        [void]$spellings.Add([string]$case.Min)          # boundary: accepted
+        [void]$spellings.Add([string]$case.Max)          # boundary: accepted
+        if ($case.Min -gt 0) { [void]$spellings.Add([string]($case.Min - 1)) }  # just under min
+        $plus1 = [string]($case.Max + 1)
+        if ($plus1.Length -le $case.L) { [void]$spellings.Add($plus1) }          # just over max
+        if ($case.Min -le 5 -and $case.Max -ge 5) {
+            [void]$spellings.Add('5')
+            if ($case.L -ge 2) { [void]$spellings.Add('05') }
+            if ($case.L -ge 3) { [void]$spellings.Add('005') }
+        }
+        $win92Root = Join-Path $TempRoot ('win92-' + $case.Key)
+        [void][IO.Directory]::CreateDirectory($win92Root)
+        $env = @{}
+        if ($case.Env) { $env = $case.Env }
+        if ($case.IsBurn) {
+            # Seed two rows straddling a crossing inside a 90s window so an
+            # accepted CORALLINE_BURN_WINDOW of 90 reads differently from the
+            # fallback (600), and BURN_TRIM/BURN_SLACK differ visibly too
+            # small a trim (well below 2 rows) forces a rewrite on a mutable
+            # read, which a byte-parity comparison on a read-only render does
+            # not need — CORALLINE_NO_SAMPLE=1 keeps both runtimes read-only.
+            $burnFixture = Join-Path $win92Root 'burn.tsv'
+            Write-Utf8 $burnFixture "999940`t6`t1015900`n1000000`t8`t1015900`n"
+            $env = $env + @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW='1000000' }
+        }
+        foreach ($spelling in $spellings) {
+            $win92Idx++
+            # Parenthesised: PowerShell's comma binds tighter than +, so without them the
+            # three settings would join into one line that only Bash accepts.
+            $lines = @(('VL_SEGMENTS=' + $case.Segments), 'VL_CLOCK=off', ($case.Key + "='" + $spelling + "'"))
+            if ($case.Extra) { $lines += $case.Extra }
+            if ($case.IsBurn) { $lines += ("BURN_FILE='" + (Forward-Path (Join-Path $win92Root 'burn.tsv')) + "'") }
+            $cfg = New-Config ('win92-' + $win92Idx) $lines
+            $label = 'WIN-92 ' + $case.Key + " '" + $spelling + "'"
+            $casePayload = $win92Payload
+            if ($case.IsBurn) { $casePayload = $win92BurnPayload }
+            $psRun = Invoke-Statusline (Json $casePayload) $cfg $env '' 8000
+            $bashRun = Invoke-BashStatusline (Json $casePayload) $cfg $env
+            Check-Run ($label + ' PowerShell') $psRun
+            Check-Run ($label + ' Bash') $bashRun
+            Check-Exact ($label + ' parity') $psRun $bashRun
+        }
+    }
+
+    # 92-B: a CRLF-terminated burn row is rejected by both runtimes. Same
+    # fixture as Bash's "5h active state" unit test (test/test-burn.sh),
+    # which is known to render an active ETA over \n rows; \r\n rows must
+    # render as though the file held no valid rows at all, on both runtimes,
+    # and that must differ from the \n rendering (proof the rows were
+    # excluded, not just parsed into some other, coincidentally-equal value).
+    $win92CrRoot = Join-Path $TempRoot 'win92-cr'
+    [void][IO.Directory]::CreateDirectory($win92CrRoot)
+    $win92CrFile = Join-Path $win92CrRoot 'burn.tsv'
+    $win92CrConfig = New-Config 'win92-cr' @('VL_SEGMENTS=burn', 'VL_CLOCK=off', ("BURN_FILE='" + (Forward-Path $win92CrFile) + "'"))
+    $win92CrEnv = @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW='1000360' }
+    [IO.File]::WriteAllText($win92CrFile, "1000000`t6`t1015900`r`n1000060`t7`t1015900`r`n1000300`t8`t1015900`r`n1000360`t8`t1015900`r`n", $Utf8NoBom)
+    $win92CrPs = Invoke-Statusline (Json $win92BurnPayload) $win92CrConfig $win92CrEnv '' 8000
+    $win92CrBash = Invoke-BashStatusline (Json $win92BurnPayload) $win92CrConfig $win92CrEnv
+    Check-Run 'WIN-92 CRLF burn row PowerShell' $win92CrPs
+    Check-Run 'WIN-92 CRLF burn row Bash' $win92CrBash
+    Check-Exact 'WIN-92 CRLF burn row parity' $win92CrPs $win92CrBash
+
+    [IO.File]::WriteAllText($win92CrFile, "1000000`t6`t1015900`n1000060`t7`t1015900`n1000300`t8`t1015900`n1000360`t8`t1015900`n", $Utf8NoBom)
+    $win92LfPs = Invoke-Statusline (Json $win92BurnPayload) $win92CrConfig $win92CrEnv '' 8000
+    $win92LfBash = Invoke-BashStatusline (Json $win92BurnPayload) $win92CrConfig $win92CrEnv
+    Check-Run 'WIN-92 LF burn row PowerShell' $win92LfPs
+    Check-Run 'WIN-92 LF burn row Bash' $win92LfBash
+    Check-Exact 'WIN-92 LF burn row parity' $win92LfPs $win92LfBash
+    Check 'WIN-92 CRLF rows are excluded (differ from the LF-row render)' ($win92CrPs.Stdout -ne $win92LfPs.Stdout)
+
+    # 92-A: HOT<WARN resets BOTH to their defaults in both runtimes (not just
+    # the one out of order); a kept, non-inverted pair (including equal) is
+    # left alone. ctx% =62.4 (New-Payload) sits between the two thresholds
+    # picked below, so the reset flips which color band it falls into.
+    $win92HotWarnCases = @(
+        [pscustomobject]@{ Name='inverted-resets'; Warn=60; Hot=40 },
+        [pscustomobject]@{ Name='equal-kept'; Warn=60; Hot=60 },
+        [pscustomobject]@{ Name='ordinary-kept'; Warn=30; Hot=80 }
+    )
+    foreach ($hw in $win92HotWarnCases) {
+        $cfg = New-Config ('win92-hotwarn-' + $hw.Name) @('VL_SEGMENTS=ctx', 'VL_CLOCK=off', ('VL_WARN_PCT=' + $hw.Warn), ('VL_HOT_PCT=' + $hw.Hot))
+        $psRun = Invoke-Statusline (Json $win92Payload) $cfg @{} '' 8000
+        $bashRun = Invoke-BashStatusline (Json $win92Payload) $cfg @{}
+        Check-Run ('WIN-92 HOT/WARN ' + $hw.Name + ' PowerShell') $psRun
+        Check-Run ('WIN-92 HOT/WARN ' + $hw.Name + ' Bash') $bashRun
+        Check-Exact ('WIN-92 HOT/WARN ' + $hw.Name + ' parity') $psRun $bashRun
+    }
+
 } finally {
     try { Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction Stop } catch { }
     $cleanupOk = -not (Test-Path -LiteralPath $TempRoot)

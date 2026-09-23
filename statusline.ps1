@@ -676,9 +676,14 @@ $Invariant = [System.Globalization.CultureInfo]::InvariantCulture
 $IntegerStyle = [System.Globalization.NumberStyles]::Integer
 $FloatStyle = [System.Globalization.NumberStyles]::Float
 
-function Get-BoundedInt([string]$Raw, [int]$Fallback, [int]$Min, [int]$Max) {
-    $value = 0
-    if (-not [int]::TryParse($Raw, $IntegerStyle, $Invariant, [ref]$value)) { return $Fallback }
+# Canonical integer-knob parse (mirrors Bash's knob_bounded): the raw value
+# must match ^[0-9]{1,MaxLen}$ (no sign, no whitespace, no exponent — a
+# digits-only check, not TryParse, which accepts all of those under
+# NumberStyles.Integer) and must lie in [Min, Max]; anything else takes the
+# fallback. Leading zeros are read as decimal, never octal.
+function Get-BoundedInt([string]$Raw, [int]$Fallback, [int]$Min, [int]$Max, [int]$MaxLen) {
+    if ($null -eq $Raw -or $Raw -notmatch "^[0-9]{1,$MaxLen}$") { return $Fallback }
+    $value = [int]::Parse($Raw, $IntegerStyle, $Invariant)
     if ($value -lt $Min -or $value -gt $Max) { return $Fallback }
     return $value
 }
@@ -708,14 +713,14 @@ function Test-Color([string]$Spec) {
     return $false
 }
 
-$Cfg.VL_BAR_WIDTH = [string](Get-BoundedInt $Cfg.VL_BAR_WIDTH ([int]$Defaults.VL_BAR_WIDTH) 0 64)
-$Cfg.VL_PATH_DEPTH = [string](Get-BoundedInt $Cfg.VL_PATH_DEPTH ([int]$Defaults.VL_PATH_DEPTH) 1 256)
-$Cfg.VL_NAME_MAX = [string](Get-BoundedInt $Cfg.VL_NAME_MAX ([int]$Defaults.VL_NAME_MAX) 0 4096)
-$Cfg.VL_COST_DECIMALS = [string](Get-BoundedInt $Cfg.VL_COST_DECIMALS ([int]$Defaults.VL_COST_DECIMALS) 0 9)
-$Cfg.VL_WARN_PCT = [string](Get-BoundedInt $Cfg.VL_WARN_PCT ([int]$Defaults.VL_WARN_PCT) 0 100)
-$Cfg.VL_HOT_PCT = [string](Get-BoundedInt $Cfg.VL_HOT_PCT ([int]$Defaults.VL_HOT_PCT) 0 100)
-$Cfg.VL_MAX_LINES = [string](Get-BoundedInt $Cfg.VL_MAX_LINES ([int]$Defaults.VL_MAX_LINES) 1 64)
-$Cfg.VL_WRAP_MARGIN = [string](Get-BoundedInt $Cfg.VL_WRAP_MARGIN ([int]$Defaults.VL_WRAP_MARGIN) 0 32767)
+$Cfg.VL_BAR_WIDTH = [string](Get-BoundedInt $Cfg.VL_BAR_WIDTH ([int]$Defaults.VL_BAR_WIDTH) 0 64 2)
+$Cfg.VL_PATH_DEPTH = [string](Get-BoundedInt $Cfg.VL_PATH_DEPTH ([int]$Defaults.VL_PATH_DEPTH) 1 256 3)
+$Cfg.VL_NAME_MAX = [string](Get-BoundedInt $Cfg.VL_NAME_MAX ([int]$Defaults.VL_NAME_MAX) 0 4096 4)
+$Cfg.VL_COST_DECIMALS = [string](Get-BoundedInt $Cfg.VL_COST_DECIMALS ([int]$Defaults.VL_COST_DECIMALS) 0 9 1)
+$Cfg.VL_WARN_PCT = [string](Get-BoundedInt $Cfg.VL_WARN_PCT ([int]$Defaults.VL_WARN_PCT) 0 100 3)
+$Cfg.VL_HOT_PCT = [string](Get-BoundedInt $Cfg.VL_HOT_PCT ([int]$Defaults.VL_HOT_PCT) 0 100 3)
+$Cfg.VL_MAX_LINES = [string](Get-BoundedInt $Cfg.VL_MAX_LINES ([int]$Defaults.VL_MAX_LINES) 1 64 2)
+$Cfg.VL_WRAP_MARGIN = [string](Get-BoundedInt $Cfg.VL_WRAP_MARGIN ([int]$Defaults.VL_WRAP_MARGIN) 0 32767 5)
 if ([int]$Cfg.VL_HOT_PCT -lt [int]$Cfg.VL_WARN_PCT) {
     $Cfg.VL_WARN_PCT = $Defaults.VL_WARN_PCT
     $Cfg.VL_HOT_PCT = $Defaults.VL_HOT_PCT
@@ -2273,9 +2278,9 @@ function Get-BurnBinding($Five, $Seven) {
 
 function Get-CorallineState([bool]$BurnGate, [bool]$Limit5Gate, [bool]$Limit7Gate) {
     $mutate = [string]$env:CORALLINE_NO_SAMPLE -ne '1'
-    $window = Get-BoundedInt $Cfg.CORALLINE_BURN_WINDOW 600 60 86400
-    $trim = Get-BoundedInt $Cfg.BURN_TRIM 1500 1 3000
-    $slack = Get-BoundedInt $Cfg.BURN_SLACK 500 0 1000
+    $window = Get-BoundedInt $Cfg.CORALLINE_BURN_WINDOW 600 60 86400 5
+    $trim = Get-BoundedInt $Cfg.BURN_TRIM 1500 1 3000 4
+    $slack = Get-BoundedInt $Cfg.BURN_SLACK 500 0 1000 4
     $current5 = Get-CurrentLimit $fhPct $fhRst $Now 21600L
     $current7 = Get-CurrentLimit $wdPct $wdRst $Now 691200L
     $currentBurn = [pscustomobject]@{ Valid=$false; Reset=0L; Sample=$Now; Pct=0 }
@@ -2764,7 +2769,7 @@ function Get-StashCount([string]$Cwd) {
         $LASTEXITCODE = 0
         $result = @(& $git -C $Cwd rev-list --walk-reflogs --count refs/stash 2>$null)
         if ($LASTEXITCODE -ne 0 -or $result.Count -eq 0) { return 0 }
-        return Get-BoundedInt ([string]$result[0]) 0 0 1000000
+        return Get-BoundedInt ([string]$result[0]) 0 0 1000000 7
     } catch { return 0 }
 }
 
