@@ -218,7 +218,7 @@ function Get-DesiredCommand([string]$Install) {
 function Get-DesiredValue([string]$Install) {
     return '{"type":"command","command":' +
         (ConvertTo-TestJsonString (Get-DesiredCommand $Install)) +
-        ',"refreshInterval":1}'
+        ',"refreshInterval":2}'
 }
 
 function Get-DesiredSubagentCommand([string]$Install) {
@@ -419,7 +419,7 @@ try {
     Check 'settings type command' ($managedObject.type -ceq 'command')
     Check 'settings command exact absolute trusted executable' ($managedObject.command -ceq $desiredCommand)
     Check 'settings command contains Bypass' ($managedObject.command.Contains('-ExecutionPolicy Bypass'))
-    Check 'settings refreshInterval 1' ($managedObject.refreshInterval -eq 1)
+    Check 'settings refreshInterval 2' ($managedObject.refreshInterval -eq 2)
     Check 'ordinary install preserves missing subagent target' (
         -not $settingsText.Contains('"subagentStatusLine"')
     )
@@ -545,6 +545,32 @@ try {
     Check 'missing-settings default creates only main statusLine' (
         $StrictUtf8.GetString([IO.File]::ReadAllBytes($noConfig.Settings)) -ceq
         ('{"statusLine":' + (Get-DesiredValue $noConfig.Install) + '}')
+    )
+
+    $refresh1 = New-Paths 'refresh-rewrite-from-1'
+    [void][IO.Directory]::CreateDirectory($refresh1.Claude)
+    $refresh1Old = '{"type":"command","command":' +
+        (ConvertTo-TestJsonString (Get-DesiredCommand $refresh1.Install)) +
+        ',"refreshInterval":1}'
+    Write-Utf8 $refresh1.Settings ('{"statusLine":' + $refresh1Old + '}')
+    $refresh1Run = Invoke-Installer $Repo $refresh1.Install $refresh1.Settings
+    Check 'refreshInterval 1 rewrite exit 0' ($refresh1Run.ExitCode -eq 0)
+    Check 'existing refreshInterval 1 rewritten to 2' (
+        $StrictUtf8.GetString([IO.File]::ReadAllBytes($refresh1.Settings)) -ceq
+        ('{"statusLine":' + (Get-DesiredValue $refresh1.Install) + '}')
+    )
+
+    $refresh5 = New-Paths 'refresh-rewrite-from-5'
+    [void][IO.Directory]::CreateDirectory($refresh5.Claude)
+    $refresh5Old = '{"type":"command","command":' +
+        (ConvertTo-TestJsonString (Get-DesiredCommand $refresh5.Install)) +
+        ',"refreshInterval":5}'
+    Write-Utf8 $refresh5.Settings ('{"statusLine":' + $refresh5Old + '}')
+    $refresh5Run = Invoke-Installer $Repo $refresh5.Install $refresh5.Settings
+    Check 'refreshInterval 5 rewrite exit 0' ($refresh5Run.ExitCode -eq 0)
+    Check 'existing refreshInterval 5 rewritten to 2' (
+        $StrictUtf8.GetString([IO.File]::ReadAllBytes($refresh5.Settings)) -ceq
+        ('{"statusLine":' + (Get-DesiredValue $refresh5.Install) + '}')
     )
 
     $preserve = New-Paths 'subagent-preserve'

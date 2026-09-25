@@ -1406,7 +1406,7 @@ function Invoke-CorallineInstall {
     ) 'installed runtime path'
     Assert-CommandPath $runtimePath 'installed runtime path'
     $command = '"' + $powershell + '" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $runtimePath + '"'
-    $desiredStatusLine = '{"type":"command","command":' + (ConvertTo-JsonString $command) + ',"refreshInterval":1}'
+    $desiredStatusLine = '{"type":"command","command":' + (ConvertTo-JsonString $command) + ',"refreshInterval":2}'
     $desiredSubagentStatusLine = '{"type":"command","command":' +
         (ConvertTo-JsonString ($command + ' --subagent')) + '}'
 

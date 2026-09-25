@@ -77,6 +77,8 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 
 要安裝已稽核的 release 或 commit，請複製同一行，只把 `$ref='main'` 換成選定的 tag 或 40 字元 SHA。branch 或 tag 都可能移動；bootstrap 會先解析再下載。原生 installer 管理 `statusline.ps1` 與十個 shipped themes、精確合併最上層 `statusLine`、除非明確指定 `on` 或 `off` 否則保留 `subagentStatusLine`、永不建立或修改 `coralline.conf`，且不會把 custom themes、state 與 float 輸出納入替換。現行契約見 [`INSTALL.md`](./INSTALL.md)，歷史設計見[原生 installer PR #55](https://github.com/Nanako0129/coralline/pull/55)。
 
+`install.ps1` 寫入的是 `statusLine.refreshInterval: 2`，不是 `1`：只要下一個 refresh tick 觸發，Claude Code 就會 `abort()` 正在進行中的 statusline render，而原生 PowerShell renderer 一次 render 接近一秒，所以 1 秒的 tick 幾乎每次都會在 render 完成前把它中斷。重新執行 `install.ps1` 會把既有的 `statusLine` 值（不論是 `1`、`5`、或其他任何值）改寫回 `2`，因為 installer 每次都會整個替換那個值。
+
 ### 信任與安全
 
 預設的 `main/INSTALL.md`、`main/UPGRADE.md` 與 `main/install.sh` URL 都是可變的遠端輸入。執行前請讀取選定的 [`INSTALL.md`](./INSTALL.md)、[`install.sh`](./install.sh) 與 [`install.ps1`](./install.ps1)。
