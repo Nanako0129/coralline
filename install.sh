@@ -237,6 +237,7 @@ need_jq
 
 if [ -f "$SCRIPT_DIR/configure.sh" ] \
   && [ -f "$SCRIPT_DIR/statusline.sh" ] \
+  && [ -f "$SCRIPT_DIR/statusline-grok.sh" ] \
   && [ -f "$SCRIPT_DIR/test/sample-input.json" ] \
   && [ -d "$SCRIPT_DIR/themes" ]; then
   WORK_DIR="$SCRIPT_DIR"
@@ -251,6 +252,7 @@ else
   printf '%s\n' "${DIM}Downloading runtime files ($REF) from $BASE_URL${RESET}"
   download "$BASE_URL/configure.sh" "$WORK_DIR/configure.sh"
   download "$BASE_URL/statusline.sh" "$WORK_DIR/statusline.sh"
+  download "$BASE_URL/statusline-grok.sh" "$WORK_DIR/statusline-grok.sh"
   download "$BASE_URL/test/sample-input.json" "$WORK_DIR/test/sample-input.json"
   download_themes
 fi

@@ -21,7 +21,7 @@ This is the runtime default rendered from the bundled sample in a clean `main` w
 | `git` | yes | branch, staged `+`, modified `!`, untracked `?`, ahead `⇡`, behind `⇣` |
 | `node` | no | active Node version from a pin file, or `PATH` with `VL_RUNTIME_PROBE=1`; hidden when undetected |
 | `python` | no | active virtualenv, conda, or pinned Python version, or `PATH` with `VL_RUNTIME_PROBE=1`; hidden when undetected |
-| `model` | yes | active Claude model |
+| `model` | yes | active model |
 | `effort` | no | reasoning effort: `low`, `med`, `high`, `xhigh`, or `max` |
 | `ctx` | yes | context gauge and input, output, and cache token counts |
 | `cache` | no | prompt-cache hit ratio, and the countdown to the cache expiring or `cold` once it has |
@@ -29,13 +29,15 @@ This is the runtime default rendered from the bundled sample in a clean `main` w
 | `limit7d` | yes | seven-day rate-limit gauge and reset countdown |
 | `burn` | no | projected time until the binding 5h or 7d limit reaches 100% |
 | `lines` | no | lines added and removed in this session |
-| `cost` | yes | session cost in USD |
+| `cost` | yes | session cost in USD. On Grok this is the conversation ledger (`usage.json`), not the attach-scoped payload field after a resume |
 | `style` | no | active output style |
 | `duration` | no | session wall-clock duration |
 | `stash` | no | git stash count |
 | `clock` | yes | 12- or 24-hour clock |
 
 Gauges change from green to yellow at 50% and red at 75%; both thresholds are configurable. `cache` reads the same thresholds inverted, because a high hit ratio is the good outcome: it turns yellow at 50% and red at 25%.
+
+`cache`, `limit5h`, `limit7d`, `burn`, `lines`, and `style` need Claude-only payload fields and hide when a host omits them. `ctx` still shows the gauge; extra token counts (`↓`, `cr:`, `cw:`) appear only when those fields are present.
 
 `cache` needs Claude Code v2.1.263 or newer, which is where `prompt_cache` appears in the statusline payload. It hides itself before the session's first request. Below an hour the countdown carries seconds (`10m12s`, `42s`), above it does not (`1h06m`); once the cache has gone cold, or if it never went warm, the countdown is replaced by `cold`. The percentage is the session's cumulative hit ratio, so it stays accurate either way and is never zeroed: what the marker tells you is whether there is still a cache behind it. The countdown is the value at the last render, not a live clock: Claude Code refreshes the statusline on payload events (and once at the expiry itself), not every second, unless you set `statusLine.refreshInterval` in your settings.
 
@@ -64,6 +66,16 @@ curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.s
 ```
 
 It recommends the latest tagged release or lets you choose mutable `main`. Skip the prompt with `--ref v0.18.0` or another ref. If the one-line path cannot run, use the [manual fallback in `INSTALL.md`](./INSTALL.md#manual-fallback).
+
+### Grok Build
+
+Grok Build uses a separate entrypoint, `statusline-grok.sh`, which maps Grok's JSON into the Claude-shaped payload and then calls `statusline.sh`. Claude Code keeps calling `statusline.sh` directly. After the runtime files are in place, register Grok without opening the wizard:
+
+```bash
+bash ~/.claude/coralline/configure.sh --register-grok
+```
+
+Restart Grok afterwards. `--install` / `--install-only` still only merge Claude `settings.json`. `--register-grok` copies `statusline.sh`, `statusline-grok.sh` and `themes/` into `~/.grok/coralline/`, appends Grok's config when nothing in it mentions `status_line`, and never rewrites an existing table or Claude settings. Grok gets its own `~/.grok/coralline.conf`, its own themes, and its own store; it does not source `~/.claude/coralline.conf` or Claude's limit/burn files. The adapter resolves both paths from `GROK_HOME` rather than from where it happens to be installed, so a second copy sitting in `~/.claude/coralline/` still reads the Grok side. Claude-only segments (`limit5h`, `limit7d`, `burn`, `cache`, `lines`, `style`, and subagent rows) stay off that default Grok layout, and a Grok payload will not fill them from a Claude store even if a shared conf still lists them.
 
 ### Windows without Git Bash
 
