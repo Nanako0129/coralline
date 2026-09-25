@@ -3058,6 +3058,13 @@ fi
     Check-Run 'WIN-92 CR-decoded knob value PowerShell' $win92CrValuePs
     Check-Run 'WIN-92 CR-decoded knob value Bash' $win92CrValueBash
     Check-Exact 'WIN-92 CR-decoded knob value parity' $win92CrValuePs $win92CrValueBash
+    # A trailing LF must be refused too: .NET's $ matches before a final newline.
+    $win92LfValueConfig = New-Config 'win92-lf-value' @('VL_SEGMENTS=ctx', 'VL_CLOCK=off', "VL_BAR_WIDTH=`$'9\n'")
+    $win92LfValuePs = Invoke-Statusline (Json $win92Payload) $win92LfValueConfig @{} '' 8000
+    $win92LfValueBash = Invoke-BashStatusline (Json $win92Payload) $win92LfValueConfig @{}
+    Check-Run 'WIN-92 LF-decoded knob value PowerShell' $win92LfValuePs
+    Check-Run 'WIN-92 LF-decoded knob value Bash' $win92LfValueBash
+    Check-Exact 'WIN-92 LF-decoded knob value parity' $win92LfValuePs $win92LfValueBash
 
     $win92HotWarnCases = @(
         [pscustomobject]@{ Name='inverted-resets'; Warn=60; Hot=40 },

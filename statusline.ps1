@@ -674,12 +674,14 @@ $IntegerStyle = [System.Globalization.NumberStyles]::Integer
 $FloatStyle = [System.Globalization.NumberStyles]::Float
 
 # Canonical integer-knob parse (mirrors Bash's knob_bounded): the raw value
-# must match ^[0-9]{1,MaxLen}$ (no sign, no whitespace, no exponent — a
+# must match \A[0-9]{1,MaxLen}\z (no sign, no whitespace, no exponent — a
 # digits-only check, not TryParse, which accepts all of those under
 # NumberStyles.Integer) and must lie in [Min, Max]; anything else takes the
 # fallback. Leading zeros are read as decimal, never octal.
 function Get-BoundedInt([string]$Raw, [int]$Fallback, [int]$Min, [int]$Max, [int]$MaxLen) {
-    if ($null -eq $Raw -or $Raw -notmatch "^[0-9]{1,$MaxLen}$") { return $Fallback }
+    # \A and \z, not ^ and $: .NET's $ also matches before a final newline, so
+    # $'9\n' would pass and parse as 9 while Bash falls back.
+    if ($null -eq $Raw -or $Raw -notmatch "\A[0-9]{1,$MaxLen}\z") { return $Fallback }
     $value = [int]::Parse($Raw, $IntegerStyle, $Invariant)
     if ($value -lt $Min -or $value -gt $Max) { return $Fallback }
     return $value
