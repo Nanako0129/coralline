@@ -32,8 +32,8 @@ with `refreshInterval: 2` for the native renderer. Claude Code aborts an in-flig
 the moment the next refresh tick fires, and the native renderer takes close
 to a second, so `refreshInterval: 1` would abort nearly every render before
 it finishes; `2` gives the render room to complete. Rerunning `install.ps1`
-rewrites an existing `statusLine` value, at any `refreshInterval`, back to
-`2`, since the whole value is replaced on every run.
+replaces the whole `statusLine` value, so an existing `refreshInterval`
+becomes `2` for the native renderer and `1` for the Bash renderer.
 `install.ps1 -Runtime auto|native|bash` (the bootstrap's `$runtime`) picks the
 renderer. The default `auto` selects the Bash renderer (`statusline.sh` through
 Git Bash, `refreshInterval: 1`) when Git for Windows is installed for all users

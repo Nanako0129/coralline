@@ -1616,8 +1616,18 @@ try {
     )
 
     $gitBash = Get-ExpectedGitBash
+    $gitBashBlockedReason = 'Git for Windows is not installed machine-wide on this host'
+    if ($null -ne $gitBash) {
+        # The bash and default installs below also need jq; without it -Runtime bash
+        # exits non-zero and auto falls back to native, so the host cannot run them.
+        $jqProbe = Invoke-CapturedProcess $gitBash '--noprofile --norc -c "command -v jq"' '' @{} $TempRoot 15000
+        if ($jqProbe.ExitCode -ne 0) {
+            $gitBashBlockedReason = 'Git Bash cannot find jq on this host'
+            $gitBash = $null
+        }
+    }
     if ($null -eq $gitBash) {
-        Blocked 'Git Bash runtime' 'Git for Windows is not installed machine-wide on this host'
+        Blocked 'Git Bash runtime' $gitBashBlockedReason
     } else {
         function Get-BashCommand([string]$Install) {
             return '"' + $gitBash + '" "' + [IO.Path]::GetFullPath($Install).Replace('\', '/') + '/statusline.sh"'
