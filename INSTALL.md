@@ -25,14 +25,33 @@ Check the actual shell and tools before choosing a path:
   `install.sh`, do not install `jq`, and do not expect a wizard.
 
 For the native path, explain that `install.ps1` writes only `statusline.ps1` and
-the ten shipped themes under `$HOME\.claude\coralline`, then losslessly merges
+the ten shipped themes under `$HOME\.claude\coralline` (plus `statusline.sh` when
+it selects the Bash runtime, see below), then losslessly merges
 the exact-case top-level `statusLine` value in `$HOME\.claude\settings.json`,
-with `refreshInterval: 2`. Claude Code aborts an in-flight statusline render
+with `refreshInterval: 2` for the native renderer. Claude Code aborts an in-flight statusline render
 the moment the next refresh tick fires, and the native renderer takes close
 to a second, so `refreshInterval: 1` would abort nearly every render before
 it finishes; `2` gives the render room to complete. Rerunning `install.ps1`
 rewrites an existing `statusLine` value, at any `refreshInterval`, back to
 `2`, since the whole value is replaced on every run.
+`install.ps1 -Runtime auto|native|bash` (the bootstrap's `$runtime`) picks the
+renderer. The default `auto` selects the Bash renderer (`statusline.sh` through
+Git Bash, `refreshInterval: 1`) when Git for Windows is installed for all users
+in its standard location (`HKLM\SOFTWARE\GitForWindows` `InstallPath`, else
+`%ProgramFiles%\Git`) and that `bash.exe` finds `jq`, and otherwise falls back
+to native; it prints the runtime it selected and, after a fallback, why.
+`-Runtime native` never probes for Git Bash; `-Runtime bash` fails before
+changing anything when Git Bash or `jq` is missing. Per-user and junctioned
+(Scoop) Git installs are not detected. Tell the user before running that the
+Bash renderer sources `coralline.conf` as shell code (it executes it) while the
+native renderer only parses it, so a native install rerun under `auto` on a
+machine with Git Bash and `jq` switches to the Bash renderer (the installer
+prints this note whenever it selects Bash, under `auto` or `-Runtime bash`); pass
+`-Runtime native` (or set `$runtime="native"` in the bootstrap) if they want to
+stay native. Switching back to native never deletes `statusline.sh`, and a
+`subagentStatusLine` that holds the other runtime's coralline command for this install,
+or a Bash command for this install naming a different `bash.exe`, moves
+to the selected runtime even under `preserve`.
 It never creates or edits `$HOME\.claude\coralline.conf`. Ask whether the user
 wants native themed subagent rows: pass `-SubagentRows on` only after yes,
 `-SubagentRows off` only for an explicit disable request, and otherwise keep the

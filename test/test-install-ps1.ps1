@@ -148,14 +148,19 @@ function Invoke-Installer(
     [string]$Source,
     [string]$Install,
     [string]$Settings,
-    [string]$SubagentRows = ''
+    [string]$SubagentRows = '',
+    # native keeps every case deterministic whether or not this host has Git
+    # Bash; 'default' omits the flag to exercise the installer default (auto).
+    [string]$Runtime = 'native',
+    [string]$InstallerPath = $Installer,
+    [hashtable]$ExtraEnvironment = @{}
 ) {
     $argumentParts = @(
         '-NoLogo',
         '-NoProfile',
         '-NonInteractive',
         '-ExecutionPolicy Bypass',
-        '-File ' + (Quote-ProcessArgument $Installer),
+        '-File ' + (Quote-ProcessArgument $InstallerPath),
         '-SourceDirectory ' + (Quote-ProcessArgument $Source),
         '-InstallRoot ' + (Quote-ProcessArgument $Install),
         '-SettingsPath ' + (Quote-ProcessArgument $Settings)
@@ -163,13 +168,90 @@ function Invoke-Installer(
     if (-not [string]::IsNullOrEmpty($SubagentRows)) {
         $argumentParts += '-SubagentRows ' + (Quote-ProcessArgument $SubagentRows)
     }
+    if ($Runtime -cne 'default') {
+        $argumentParts += '-Runtime ' + (Quote-ProcessArgument $Runtime)
+    }
     $arguments = $argumentParts -join ' '
     $environment = @{
         CORALLINE_REPO = 'must-not-be-read'
         CORALLINE_REF = 'must-not-be-read'
         CORALLINE_BASE_URL = 'https://127.0.0.1:1/must-not-be-read'
     }
+    foreach ($key in $ExtraEnvironment.Keys) { $environment[$key] = $ExtraEnvironment[$key] }
     return Invoke-CapturedProcess $PowerShellExe $arguments '' $environment $Repo 30000
+}
+
+# Installer errors can carry a non-ASCII path in the console code page, which
+# is not strict UTF-8; ASCII decoding keeps every ASCII needle intact.
+function Get-ErrorText($Run) {
+    return [Text.Encoding]::ASCII.GetString($Run.StderrBytes)
+}
+
+function Get-OutputText($Run) {
+    return [Text.Encoding]::ASCII.GetString($Run.StdoutBytes)
+}
+
+# Test oracle for install.ps1's Git Bash resolution: the 64-bit HKLM
+# GitForWindows InstallPath, else Program Files\Git. $null when absent.
+function Get-ExpectedGitBash {
+    $candidate = $null
+    $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+        [Microsoft.Win32.RegistryHive]::LocalMachine,
+        [Microsoft.Win32.RegistryView]::Registry64
+    )
+    try {
+        $key = $hive.OpenSubKey('SOFTWARE\GitForWindows')
+        if ($null -ne $key) {
+            try { $value = $key.GetValue('InstallPath') } finally { $key.Dispose() }
+            if ($value -is [string] -and $value.Length -gt 0) {
+                $candidate = Join-Path $value 'bin\bash.exe'
+            }
+        }
+    } finally {
+        $hive.Dispose()
+    }
+    if ($null -eq $candidate) {
+        $candidate = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Git\bin\bash.exe'
+    }
+    $candidate = [IO.Path]::GetFullPath($candidate)
+    if ([IO.File]::Exists($candidate)) { return $candidate }
+    return $null
+}
+
+# Windows argv quoting (CommandLineToArgvW / MSYS rules) for one argument.
+function ConvertTo-ProcessArgument([string]$Value) {
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $slashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') { $slashes++; continue }
+        if ($character -eq '"') {
+            [void]$builder.Append([char]'\', 2 * $slashes + 1)
+        } elseif ($slashes -gt 0) {
+            [void]$builder.Append([char]'\', $slashes)
+        }
+        $slashes = 0
+        [void]$builder.Append($character)
+    }
+    if ($slashes -gt 0) { [void]$builder.Append([char]'\', 2 * $slashes) }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+# A copy of install.ps1 whose Git Bash lookup is replaced, to simulate a
+# machine without Git for Windows or jq. The shipped installer is unchanged.
+function New-StubInstaller([string]$Name, [string]$StubFunction) {
+    $tokens = $null
+    $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($Installer, [ref]$tokens, [ref]$errors)
+    if ($errors.Count -ne 0) { throw 'cannot parse installer for stub copy' }
+    $entry = $ast.EndBlock.Statements[$ast.EndBlock.Statements.Count - 1]
+    $text = $ast.Extent.Text
+    $stubbed = $text.Substring(0, $entry.Extent.StartOffset) + $StubFunction + "`r`n" +
+        $text.Substring($entry.Extent.StartOffset)
+    $path = Join-Path $TempRoot ($Name + '.ps1')
+    Write-Utf8Bom $path $stubbed
+    return $path
 }
 
 function New-Paths([string]$Name) {
@@ -298,8 +380,10 @@ function Test-InvalidSettings(
     Check "$Name no settings backup" ((Get-BackupCount $paths.Claude 'settings.json.bak.*') -eq 0)
 }
 
-function Copy-ManagedSource([string]$Destination) {
-    foreach ($relative in $ExpectedManaged) {
+function Copy-ManagedSource([string]$Destination, [bool]$WithShellRuntime = $false) {
+    $relatives = $ExpectedManaged
+    if ($WithShellRuntime) { $relatives = @($ExpectedManaged) + 'statusline.sh' }
+    foreach ($relative in $relatives) {
         $source = Join-Path $Repo $relative
         $target = Join-Path $Destination $relative
         $parent = [IO.Path]::GetDirectoryName($target)
@@ -327,7 +411,8 @@ function Get-InstallerTransactionFunctions {
         'Test-DirectoryEmpty',
         'Remove-EmptyCreatedRuntime',
         'Restore-ManagedRuntime',
-        'Assert-ManagedPayloadBytes'
+        'Assert-ManagedPayloadBytes',
+        'Get-ManagedFileLimit'
     )
     $tokens = $null
     $errors = $null
@@ -1504,6 +1589,410 @@ try {
     Check 'fake workspace executable untouched' (
         (Get-FileSha256 (Join-Path $fakeWorkspace 'powershell.exe')) -ceq $fakeExeHash
     )
+
+    $explicitNative = New-Paths 'explicit-native-runtime'
+    $explicitNativeRun = Invoke-Installer $Repo $explicitNative.Install $explicitNative.Settings '' 'native'
+    Check '-Runtime native writes the c2fa1bc bytes and installs no statusline.sh' (
+        $explicitNativeRun.ExitCode -eq 0 -and
+        $StrictUtf8.GetString([IO.File]::ReadAllBytes($explicitNative.Settings)) -ceq
+        ('{"statusLine":' + (Get-DesiredValue $explicitNative.Install) + '}') -and
+        -not [IO.File]::Exists((Join-Path $explicitNative.Install 'statusline.sh'))
+    )
+    $upperRuntime = New-Paths 'runtime-uppercase'
+    $upperRuntimeRun = Invoke-Installer $Repo $upperRuntime.Install $upperRuntime.Settings '' 'Bash'
+    Check 'Runtime values are exact lowercase' (
+        $upperRuntimeRun.ExitCode -ne 0 -and
+        (Get-ErrorText $upperRuntimeRun).Contains('Runtime') -and
+        -not [IO.Directory]::Exists($upperRuntime.Install) -and
+        -not [IO.File]::Exists($upperRuntime.Settings)
+    )
+    $dollarNative = New-Paths 'native dollar $x'
+    $dollarNativeRun = Invoke-Installer $Repo $dollarNative.Install $dollarNative.Settings
+    Check 'native install root with $ refused at the command boundary' (
+        $dollarNativeRun.ExitCode -ne 0 -and
+        (Get-ErrorText $dollarNativeRun).Contains('Git Bash boundary') -and
+        -not [IO.Directory]::Exists($dollarNative.Install) -and
+        -not [IO.File]::Exists($dollarNative.Settings)
+    )
+
+    $gitBash = Get-ExpectedGitBash
+    if ($null -eq $gitBash) {
+        Blocked 'Git Bash runtime' 'Git for Windows is not installed machine-wide on this host'
+    } else {
+        function Get-BashCommand([string]$Install) {
+            return '"' + $gitBash + '" "' + [IO.Path]::GetFullPath($Install).Replace('\', '/') + '/statusline.sh"'
+        }
+        function Get-BashValue([string]$Install) {
+            return '{"type":"command","command":' +
+                (ConvertTo-TestJsonString (Get-BashCommand $Install)) + ',"refreshInterval":1}'
+        }
+        function Get-BashSubagentValue([string]$Install) {
+            return '{"type":"command","command":' +
+                (ConvertTo-TestJsonString ((Get-BashCommand $Install) + ' --subagent')) + '}'
+        }
+        function Read-SettingsText([string]$Path) {
+            return $StrictUtf8.GetString([IO.File]::ReadAllBytes($Path))
+        }
+        function Invoke-RegisteredCommand([string]$Shell, [string]$Command, [string]$HomeDir) {
+            $environment = @{
+                HOME = $HomeDir
+                USERPROFILE = $HomeDir
+                PATH = $fakeWorkspace + ';' + $env:PATH
+                CORALLINE_NO_SAMPLE = '1'
+                CLAUDE_CONFIG_DIR = $null
+                CORALLINE_CONFIG = $null
+            }
+            if ($Shell -ceq 'cmd') {
+                return Invoke-CapturedProcess (
+                    $env:ComSpec
+                ) ('/d /s /c "' + $Command + '"') $sample $environment $fakeWorkspace 30000
+            }
+            return Invoke-CapturedProcess (
+                $gitBash
+            ) ('--noprofile --norc -c ' + (ConvertTo-ProcessArgument $Command)) $sample $environment $fakeWorkspace 30000
+        }
+
+        # Decoys first on PATH: none may run when a registered command executes.
+        [IO.File]::WriteAllBytes((Join-Path $fakeWorkspace 'bash.exe'), [byte[]](0x4d, 0x5a, 0, 0))
+        Write-Utf8 (Join-Path $fakeWorkspace 'bash.cmd') ('@echo fake>"' + $marker + '"')
+        Write-Utf8 (Join-Path $fakeWorkspace 'jq.cmd') ('@echo fake>"' + $marker + '"')
+        $fakeBashHash = Get-FileSha256 (Join-Path $fakeWorkspace 'bash.exe')
+
+        $bashPaths = New-Paths 'bash-runtime'
+        $bashRun = Invoke-Installer $Repo $bashPaths.Install $bashPaths.Settings 'on' 'bash'
+        Check 'bash runtime install exit 0' ($bashRun.ExitCode -eq 0)
+        Check 'bash runtime install no stderr' ($bashRun.StderrBytes.Length -eq 0)
+        if ($bashRun.ExitCode -ne 0) {
+            [Console]::Out.WriteLine('DIAG  bash runtime stderr=' + $bashRun.Stderr)
+        }
+        $bashCommand = Get-BashCommand $bashPaths.Install
+        Check 'bash runtime command is the quoted absolute bash.exe and forward-slash script' (
+            $bashCommand -ceq (
+                '"' + $gitBash + '" "' + $bashPaths.Install.Replace('\', '/') + '/statusline.sh"'
+            ) -and $gitBash.EndsWith('\bin\bash.exe', [StringComparison]::OrdinalIgnoreCase)
+        )
+        Check 'bash runtime writes exact statusLine and subagentStatusLine bytes' (
+            (Read-SettingsText $bashPaths.Settings) -ceq (
+                '{"statusLine":' + (Get-BashValue $bashPaths.Install) +
+                ',"subagentStatusLine":' + (Get-BashSubagentValue $bashPaths.Install) + '}'
+            )
+        )
+        $bashInstalled = @(
+            Get-ChildItem -LiteralPath $bashPaths.Install -File -Recurse |
+                ForEach-Object { $_.FullName.Substring($bashPaths.Install.Length + 1) } |
+                Sort-Object
+        )
+        Check 'bash runtime installs statusline.sh beside statusline.ps1 and the themes' (
+            ((@($ExpectedManaged) + 'statusline.sh' | Sort-Object) -join "`n") -ceq ($bashInstalled -join "`n") -and
+            (Get-FileSha256 (Join-Path $bashPaths.Install 'statusline.sh')) -ceq
+            (Get-FileSha256 (Join-Path $Repo 'statusline.sh'))
+        )
+        Check 'bash runtime never creates config' (-not [IO.File]::Exists($bashPaths.Config))
+        $bashNote = 'note: the Bash runtime sources coralline.conf as shell code (it executes it), ' +
+            "unlike the native parser; rerun with -Runtime native to keep the native runtime`r`n"
+        Check 'explicit -Runtime bash prints the config-execution note' (
+            (Get-OutputText $bashRun).StartsWith($bashNote, [StringComparison]::Ordinal) -and
+            -not (Get-OutputText $bashRun).Contains('runtime: ')
+        )
+        $bashRerun = Invoke-Installer $Repo $bashPaths.Install $bashPaths.Settings 'on' 'bash'
+        Check 'bash runtime identical rerun reports no-op' (
+            $bashRerun.ExitCode -eq 0 -and
+            $bashRerun.Stdout -ceq ($bashNote + "coralline is already up to date.`r`n")
+        )
+
+        foreach ($shell in @('cmd', 'bash')) {
+            $shellRender = Invoke-RegisteredCommand $shell $bashCommand $bashPaths.Home
+            Check "bash runtime $shell E2E exit 0" ($shellRender.ExitCode -eq 0)
+            Check "bash runtime $shell E2E renders the sample model" (
+                $null -ne $shellRender.Stdout -and $shellRender.Stdout.Contains('Fable')
+            )
+            Check "bash runtime $shell E2E no stderr" ($shellRender.StderrBytes.Length -eq 0)
+            if ($shellRender.ExitCode -ne 0 -or $shellRender.StderrBytes.Length -ne 0) {
+                [Console]::Out.WriteLine("DIAG  $shell exit=$($shellRender.ExitCode) stderr=$($shellRender.Stderr)")
+            }
+            $shellSubagent = Invoke-RegisteredCommand $shell ($bashCommand + ' --subagent') $bashPaths.Home
+            Check "bash runtime $shell subagent E2E exit 0 without stderr" (
+                $shellSubagent.ExitCode -eq 0 -and $shellSubagent.StderrBytes.Length -eq 0
+            )
+        }
+        Check 'bash runtime decoy bash.exe, bash.cmd and jq.cmd never ran' (
+            -not [IO.File]::Exists($marker) -and
+            (Get-FileSha256 (Join-Path $fakeWorkspace 'bash.exe')) -ceq $fakeBashHash
+        )
+
+        $special = New-Paths "sp it's; (x)"
+        $specialRun = Invoke-Installer $Repo $special.Install $special.Settings '' 'bash'
+        Check "bash runtime install root with space ' ; ( installs" ($specialRun.ExitCode -eq 0)
+        foreach ($shell in @('cmd', 'bash')) {
+            $specialRender = Invoke-RegisteredCommand $shell (Get-BashCommand $special.Install) $special.Home
+            Check "bash runtime install root with space ' ; ( renders under $shell" (
+                $specialRender.ExitCode -eq 0 -and
+                $null -ne $specialRender.Stdout -and $specialRender.Stdout.Contains('Fable') -and
+                $specialRender.StderrBytes.Length -eq 0
+            )
+        }
+        Check 'special install root decoys never ran' (-not [IO.File]::Exists($marker))
+
+        foreach ($refusedName in @('bash dollar $x', 'bash tick `x')) {
+            $refused = New-Paths $refusedName
+            $refusedRun = Invoke-Installer $Repo $refused.Install $refused.Settings '' 'bash'
+            Check "bash runtime refuses install root: $refusedName" (
+                $refusedRun.ExitCode -ne 0 -and
+                (Get-ErrorText $refusedRun).Contains('Git Bash boundary') -and
+                -not [IO.Directory]::Exists($refused.Install) -and
+                -not [IO.File]::Exists($refused.Settings)
+            )
+        }
+
+        $switch = New-Paths 'runtime-switch'
+        $switchShell = Join-Path $switch.Install 'statusline.sh'
+        $switchNativeText = '{"statusLine":' + (Get-DesiredValue $switch.Install) +
+            ',"subagentStatusLine":' + (Get-DesiredSubagentValue $switch.Install) + '}'
+        $switchBashText = '{"statusLine":' + (Get-BashValue $switch.Install) +
+            ',"subagentStatusLine":' + (Get-BashSubagentValue $switch.Install) + '}'
+        $switchSteps = @(
+            [pscustomobject]@{ Rows = 'on'; Runtime = 'native'; Text = $switchNativeText },
+            [pscustomobject]@{ Rows = ''; Runtime = 'default'; Text = $switchBashText },
+            [pscustomobject]@{ Rows = ''; Runtime = 'native'; Text = $switchNativeText },
+            [pscustomobject]@{ Rows = ''; Runtime = 'bash'; Text = $switchBashText },
+            [pscustomobject]@{ Rows = ''; Runtime = 'native'; Text = $switchNativeText },
+            [pscustomobject]@{ Rows = 'on'; Runtime = 'bash'; Text = $switchBashText },
+            [pscustomobject]@{ Rows = ''; Runtime = 'native'; Text = $switchNativeText }
+        )
+        $switchShellHash = $null
+        foreach ($step in $switchSteps) {
+            $stepRun = Invoke-Installer $Repo $switch.Install $switch.Settings $step.Rows $step.Runtime
+            Check "runtime switch to $($step.Runtime) leaves both rows on the selected runtime" (
+                $stepRun.ExitCode -eq 0 -and (Read-SettingsText $switch.Settings) -ceq $step.Text
+            )
+            if ($null -ne $switchShellHash) {
+                Check "runtime switch to $($step.Runtime) keeps statusline.sh" (
+                    [IO.File]::Exists($switchShell) -and (Get-FileSha256 $switchShell) -ceq $switchShellHash
+                )
+            } elseif ([IO.File]::Exists($switchShell)) {
+                $switchShellHash = Get-FileSha256 $switchShell
+            }
+        }
+
+        # Native never probes for Git Bash, yet still moves this installer's
+        # Bash row for this install root even when that bash.exe is gone.
+        $noProbeInstaller = New-StubInstaller 'stub-native-no-probe' (
+            'function Get-GitBashCandidate { throw ''native must not probe for Git Bash'' }'
+        )
+        $gone = New-Paths 'native-moves-stale-bash-row'
+        [void][IO.Directory]::CreateDirectory($gone.Claude)
+        $goneCommand = '"D:\gone\Git\bin\bash.exe" "' +
+            [IO.Path]::GetFullPath($gone.Install).Replace('\', '/') + '/statusline.sh" --subagent'
+        Write-Utf8 $gone.Settings (
+            '{"subagentStatusLine":{"type":"command","command":' + (ConvertTo-TestJsonString $goneCommand) + '}}'
+        )
+        $goneRun = Invoke-Installer $Repo $gone.Install $gone.Settings '' 'native' $noProbeInstaller
+        Check 'native never probes and moves a stale Bash-runtime subagent row' (
+            $goneRun.ExitCode -eq 0 -and
+            (Read-SettingsText $gone.Settings) -ceq (
+                '{"subagentStatusLine":' + (Get-DesiredSubagentValue $gone.Install) +
+                ',"statusLine":' + (Get-DesiredValue $gone.Install) + '}'
+            )
+        )
+
+        $autoBash = New-Paths 'auto-selects-bash'
+        $autoBashRun = Invoke-Installer $Repo $autoBash.Install $autoBash.Settings 'on' 'default'
+        Check 'default runtime auto selects bash when bash.exe and jq resolve' (
+            $autoBashRun.ExitCode -eq 0 -and
+            (Read-SettingsText $autoBash.Settings) -ceq (
+                '{"statusLine":' + (Get-BashValue $autoBash.Install) +
+                ',"subagentStatusLine":' + (Get-BashSubagentValue $autoBash.Install) + '}'
+            )
+        )
+        Check 'auto prints the bash selection and the config-execution note' (
+            (Get-OutputText $autoBashRun).Contains('runtime: bash (auto: ') -and
+            (Get-OutputText $autoBashRun).Contains('sources coralline.conf as shell code (it executes it)') -and
+            (Get-OutputText $autoBashRun).Contains('-Runtime native')
+        )
+
+        # Claude Code may rewrite settings.json pretty-printed; the other
+        # runtime's row is still recognised after JSON decoding.
+        $reformatted = New-Paths 'runtime-switch-reformatted'
+        [void][IO.Directory]::CreateDirectory($reformatted.Claude)
+        $reformattedNativeSubagent = (
+            "{`r`n    `"command`": " +
+            (ConvertTo-TestJsonString (Get-DesiredSubagentCommand $reformatted.Install)).Replace(
+                '--subagent', '--subagent'
+            ) +
+            ",`r`n    `"type`": `"command`"`r`n  }"
+        )
+        Write-Utf8 $reformatted.Settings (
+            "{`r`n  `"subagentStatusLine`": " + $reformattedNativeSubagent + "`r`n}`r`n"
+        )
+        $reformattedRun = Invoke-Installer $Repo $reformatted.Install $reformatted.Settings '' 'bash'
+        Check 'reformatted native subagent row is recognised and moved to bash' (
+            $reformattedRun.ExitCode -eq 0 -and
+            (Read-SettingsText $reformatted.Settings) -ceq (
+                "{`r`n  `"subagentStatusLine`": " + (Get-BashSubagentValue $reformatted.Install) +
+                "`r`n" + ',"statusLine":' + (Get-BashValue $reformatted.Install) + "}`r`n"
+            )
+        )
+
+        # A Bash row for this root naming an older Git location follows the
+        # resolved bash.exe; a custom row is still preserved.
+        $oldGit = New-Paths 'bash-moves-old-git-row'
+        [void][IO.Directory]::CreateDirectory($oldGit.Claude)
+        $oldGitCommand = '"D:\old\Git\bin\bash.exe" "' +
+            [IO.Path]::GetFullPath($oldGit.Install).Replace('\', '/') + '/statusline.sh" --subagent'
+        $oldGitCustom = '{"type":"command","command":"my-own-subagent-row"}'
+        $oldGitCurrent = '{ "command": ' +
+            (ConvertTo-TestJsonString ((Get-BashCommand $oldGit.Install) + ' --subagent')) + ', "type": "command" }'
+        foreach ($oldGitCase in @(
+            [pscustomobject]@{
+                Name = 'old Git location'
+                Before = '{"type":"command","command":' + (ConvertTo-TestJsonString $oldGitCommand) + '}'
+                After = (Get-BashSubagentValue $oldGit.Install)
+            },
+            [pscustomobject]@{ Name = 'custom'; Before = $oldGitCustom; After = $oldGitCustom },
+            [pscustomobject]@{
+                Name = 'reformatted current bash'
+                Before = $oldGitCurrent
+                After = $oldGitCurrent
+            }
+        )) {
+            Write-Utf8 $oldGit.Settings ('{"subagentStatusLine":' + $oldGitCase.Before + '}')
+            $oldGitRun = Invoke-Installer $Repo $oldGit.Install $oldGit.Settings '' 'bash'
+            Check "bash preserve with a $($oldGitCase.Name) subagent row ends as expected" (
+                $oldGitRun.ExitCode -eq 0 -and
+                (Read-SettingsText $oldGit.Settings) -ceq (
+                    '{"subagentStatusLine":' + $oldGitCase.After +
+                    ',"statusLine":' + (Get-BashValue $oldGit.Install) + '}'
+                )
+            )
+        }
+
+        $custom = New-Paths 'runtime-switch-custom'
+        [void][IO.Directory]::CreateDirectory($custom.Claude)
+        $customExtra = '{"type":"command","command":' +
+            (ConvertTo-TestJsonString (Get-DesiredSubagentCommand $custom.Install)) + ',"padding":1}'
+        $customUpper = '{"type":"command","command":' +
+            (ConvertTo-TestJsonString (Get-DesiredSubagentCommand $custom.Install).ToUpperInvariant()) + '}'
+        foreach ($customValue in @($customExtra, $customUpper)) {
+            Write-Utf8 $custom.Settings ('{"subagentStatusLine":' + $customValue + '}')
+            $customRun = Invoke-Installer $Repo $custom.Install $custom.Settings '' 'bash'
+            Check 'bash preserve keeps a subagent row that is not exactly the native command' (
+                $customRun.ExitCode -eq 0 -and
+                (Read-SettingsText $custom.Settings) -ceq (
+                    '{"subagentStatusLine":' + $customValue +
+                    ',"statusLine":' + (Get-BashValue $custom.Install) + '}'
+                )
+            )
+        }
+
+        $noGit = New-Paths 'bash-missing'
+        [void][IO.Directory]::CreateDirectory($noGit.Claude)
+        Write-Utf8 $noGit.Settings '{"keep":true}'
+        $noGitBytes = [IO.File]::ReadAllBytes($noGit.Settings)
+        $absentBash = Join-Path $TempRoot 'no-git\bin\bash.exe'
+        $stubs = @(
+            ('function Get-GitBashCandidate { return ''' + $absentBash + ''' }'),
+            'function Get-GitBashCandidate { return $null }'
+        )
+        for ($i = 0; $i -lt $stubs.Count; $i++) {
+            $stubInstaller = New-StubInstaller ('stub-no-git-' + $i) $stubs[$i]
+            $noGitRun = Invoke-Installer (
+                $Repo
+            ) $noGit.Install $noGit.Settings 'on' 'bash' $stubInstaller
+            Check "bash missing ($i) fails closed pointing to -Runtime native" (
+                $noGitRun.ExitCode -ne 0 -and
+                (Get-ErrorText $noGitRun).Contains('bash.exe was not found') -and
+                (Get-ErrorText $noGitRun).Contains('-Runtime native')
+            )
+            Check "bash missing ($i) leaves settings and install root untouched" (
+                [Convert]::ToBase64String([IO.File]::ReadAllBytes($noGit.Settings)) -ceq
+                [Convert]::ToBase64String($noGitBytes) -and
+                -not [IO.Directory]::Exists($noGit.Install) -and
+                (Get-BackupCount $noGit.Claude '*.bak.*') -eq 0
+            )
+            $autoNoGit = New-Paths ('auto-bash-missing-' + $i)
+            [void][IO.Directory]::CreateDirectory($autoNoGit.Claude)
+            Write-Utf8 $autoNoGit.Settings '{"keep":true}'
+            $autoNoGitRun = Invoke-Installer (
+                $Repo
+            ) $autoNoGit.Install $autoNoGit.Settings '' 'auto' $stubInstaller
+            Check "auto with bash missing ($i) falls back to the native bytes" (
+                $autoNoGitRun.ExitCode -eq 0 -and
+                (Read-SettingsText $autoNoGit.Settings) -ceq
+                ('{"keep":true,"statusLine":' + (Get-DesiredValue $autoNoGit.Install) + '}') -and
+                -not [IO.File]::Exists((Join-Path $autoNoGit.Install 'statusline.sh'))
+            )
+            Check "auto with bash missing ($i) prints why it chose native" (
+                (Get-OutputText $autoNoGitRun).Contains(
+                    'runtime: native (auto: Git for Windows bash.exe was not found at the standard locations'
+                )
+            )
+        }
+
+        # Git's own usr\bin\bash.exe does not prepend /usr/bin, so with a
+        # system-only PATH it genuinely cannot find jq.
+        $bareBash = Join-Path (Split-Path (Split-Path $gitBash -Parent) -Parent) 'usr\bin\bash.exe'
+        if ([IO.File]::Exists($bareBash)) {
+            $noJq = New-Paths 'jq-missing'
+            [void][IO.Directory]::CreateDirectory($noJq.Claude)
+            Write-Utf8 $noJq.Settings '{"keep":true}'
+            $noJqBytes = [IO.File]::ReadAllBytes($noJq.Settings)
+            $noJqInstaller = New-StubInstaller 'stub-no-jq' (
+                'function Get-GitBashCandidate { return ''' + $bareBash + ''' }'
+            )
+            $noJqRun = Invoke-Installer (
+                $Repo
+            ) $noJq.Install $noJq.Settings '' 'bash' $noJqInstaller @{
+                PATH = "$env:SystemRoot\system32;$env:SystemRoot"
+            }
+            Check 'jq missing fails closed pointing to -Runtime native' (
+                $noJqRun.ExitCode -ne 0 -and
+                (Get-ErrorText $noJqRun).Contains('jq was not found') -and
+                (Get-ErrorText $noJqRun).Contains('-Runtime native')
+            )
+            Check 'jq missing leaves settings and install root untouched' (
+                [Convert]::ToBase64String([IO.File]::ReadAllBytes($noJq.Settings)) -ceq
+                [Convert]::ToBase64String($noJqBytes) -and
+                -not [IO.Directory]::Exists($noJq.Install) -and
+                (Get-BackupCount $noJq.Claude '*.bak.*') -eq 0
+            )
+            $autoNoJq = New-Paths 'auto-jq-missing'
+            [void][IO.Directory]::CreateDirectory($autoNoJq.Claude)
+            Write-Utf8 $autoNoJq.Settings '{"keep":true}'
+            $autoNoJqRun = Invoke-Installer (
+                $Repo
+            ) $autoNoJq.Install $autoNoJq.Settings '' 'auto' $noJqInstaller @{
+                PATH = "$env:SystemRoot\system32;$env:SystemRoot"
+            }
+            Check 'auto with jq missing falls back to the native bytes' (
+                $autoNoJqRun.ExitCode -eq 0 -and
+                (Read-SettingsText $autoNoJq.Settings) -ceq
+                ('{"keep":true,"statusLine":' + (Get-DesiredValue $autoNoJq.Install) + '}') -and
+                -not [IO.File]::Exists((Join-Path $autoNoJq.Install 'statusline.sh'))
+            )
+            Check 'auto with jq missing prints why it chose native' (
+                (Get-OutputText $autoNoJqRun).Contains('runtime: native (auto: jq was not found')
+            )
+        } else {
+            Blocked 'jq missing' "Git's usr\bin\bash.exe is absent on this host"
+        }
+
+        $crlfSource = Join-Path $TempRoot 'crlf-source'
+        Copy-ManagedSource $crlfSource $true
+        $crlfShell = Join-Path $crlfSource 'statusline.sh'
+        [IO.File]::WriteAllText(
+            $crlfShell,
+            ([IO.File]::ReadAllText($crlfShell, $StrictUtf8).Replace("`n", "`r`n")),
+            $Utf8NoBom
+        )
+        $crlf = New-Paths 'crlf-shell-runtime'
+        $crlfRun = Invoke-Installer $crlfSource $crlf.Install $crlf.Settings '' 'bash'
+        Check 'CRLF statusline.sh refused in local mode' (
+            $crlfRun.ExitCode -ne 0 -and
+            (Get-ErrorText $crlfRun).Contains('carriage return') -and
+            -not [IO.Directory]::Exists($crlf.Install) -and
+            -not [IO.File]::Exists($crlf.Settings)
+        )
+    }
 
     $rollback = New-Paths 'rollback'
     $rollbackFresh = Invoke-Installer $Repo $rollback.Install $rollback.Settings

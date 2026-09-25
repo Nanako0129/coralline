@@ -30,7 +30,10 @@ param(
     [string]$SettingsPath,
 
     [ValidateSet('preserve', 'on', 'off', IgnoreCase = $false)]
-    [string]$SubagentRows = 'preserve'
+    [string]$SubagentRows = 'preserve',
+
+    [ValidateSet('auto', 'native', 'bash', IgnoreCase = $false)]
+    [string]$Runtime = 'auto'
 )
 
 Set-StrictMode -Version 2.0
@@ -193,10 +196,89 @@ function Assert-DisjointPaths([object[]]$Entries) {
 
 function Assert-CommandPath([string]$Path, [string]$Label) {
     if (Test-HasControlCharacter $Path) { throw "$Label contains a control character" }
-    if ($Path.IndexOf('"') -ge 0 -or $Path.IndexOf('%') -ge 0 -or $Path.IndexOf('!') -ge 0) {
-        throw "$Label contains a character that cannot survive the Claude Code cmd.exe boundary"
+    # '"', '%' and '!' break the cmd.exe boundary; '$' and '`' still expand
+    # inside double quotes when Claude Code runs the command through Git Bash.
+    if ($Path.IndexOfAny([char[]]@('"', '%', '!', '$', '`')) -ge 0) {
+        throw "$Label contains a character that cannot survive the Claude Code cmd.exe or Git Bash boundary"
     }
     Assert-NoReparsePath $Path $Label
+}
+
+function Get-GitBashCandidate {
+    # Machine-wide Git for Windows only: the 64-bit HKLM registration, else the
+    # default Program Files location. Never PATH, never HKCU, never a bare name.
+    $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+        [Microsoft.Win32.RegistryHive]::LocalMachine,
+        [Microsoft.Win32.RegistryView]::Registry64
+    )
+    try {
+        $key = $hive.OpenSubKey('SOFTWARE\GitForWindows')
+        if ($null -ne $key) {
+            try {
+                $value = $key.GetValue(
+                    'InstallPath',
+                    $null,
+                    [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+                )
+            } finally {
+                $key.Dispose()
+            }
+            if ($value -is [string] -and -not [string]::IsNullOrEmpty($value)) {
+                return [System.IO.Path]::Combine($value, 'bin\bash.exe')
+            }
+        }
+    } finally {
+        $hive.Dispose()
+    }
+    $programFiles = [System.Environment]::GetFolderPath('ProgramFiles')
+    if ([string]::IsNullOrEmpty($programFiles)) { return $null }
+    return [System.IO.Path]::Combine($programFiles, 'Git\bin\bash.exe')
+}
+
+function Resolve-GitBashPath {
+    $candidate = Get-GitBashCandidate
+    if ([string]::IsNullOrEmpty($candidate)) {
+        throw 'Git for Windows bash.exe was not found at the standard locations'
+    }
+    $bash = Resolve-CanonicalLocalPath $candidate 'Git Bash executable'
+    if (-not [System.IO.File]::Exists($bash)) {
+        throw "Git for Windows bash.exe was not found at the standard locations ($bash)"
+    }
+    Assert-CommandPath $bash 'Git Bash executable'
+    return $bash
+}
+
+function Assert-GitBashHasJq([string]$Bash) {
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $Bash
+    $start.Arguments = '--noprofile --norc -c "command -v jq"'
+    $start.UseShellExecute = $false
+    $start.RedirectStandardInput = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.CreateNoWindow = $true
+    $process = [System.Diagnostics.Process]::Start($start)
+    try {
+        $process.StandardInput.Close()
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(15000)) {
+            try { $process.Kill() } catch { }
+            throw "Git Bash did not answer the jq check within 15 seconds"
+        }
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($stdout.Result)) {
+            throw "jq was not found by $Bash (command -v jq failed)"
+        }
+        [void]$stderr.Result
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Get-ManagedFileLimit([string]$Relative) {
+    if ($Relative -ceq 'statusline.ps1' -or $Relative -ceq 'statusline.sh') { return $script:MaxRuntimeBytes }
+    return $script:MaxThemeBytes
 }
 
 function Get-SafeTreeInventory([string]$Root, [string]$Label) {
@@ -457,8 +539,7 @@ function Stage-RemotePayload([string]$Repository, [string]$Revision, [string]$St
             $commit = Resolve-GitHubCommit $Repository $Revision
         }
         foreach ($relative in $script:ManagedFiles) {
-            $maximum = $script:MaxThemeBytes
-            if ($relative -ceq 'statusline.ps1') { $maximum = $script:MaxRuntimeBytes }
+            $maximum = Get-ManagedFileLimit $relative
             $uri = Get-RawFileUri $Repository $commit $relative
             $bytes = Read-BoundedHttpsBytes $uri $maximum "coralline $relative"
             $destination = [System.IO.Path]::Combine($StageRoot, $relative)
@@ -473,8 +554,7 @@ function Stage-RemotePayload([string]$Repository, [string]$Revision, [string]$St
 
 function Stage-LocalPayload([string]$SourceRoot, [string]$StageRoot) {
     foreach ($relative in $script:ManagedFiles) {
-        $maximum = $script:MaxThemeBytes
-        if ($relative -ceq 'statusline.ps1') { $maximum = $script:MaxRuntimeBytes }
+        $maximum = Get-ManagedFileLimit $relative
         $source = [System.IO.Path]::Combine($SourceRoot, $relative)
         $destination = [System.IO.Path]::Combine($StageRoot, $relative)
         Ensure-SafeDirectory ([System.IO.Path]::GetDirectoryName($destination)) 'staging directory'
@@ -516,6 +596,18 @@ function Assert-ValidManagedPayload([string]$Root, [string]$Label) {
         if ($relative -ceq 'statusline.ps1') {
             if ($length -eq 0 -or $length -gt $script:MaxRuntimeBytes) {
                 throw "$Label statusline.ps1 has an invalid size"
+            }
+            continue
+        }
+        if ($relative -ceq 'statusline.sh') {
+            if ($length -eq 0 -or $length -gt $script:MaxRuntimeBytes) {
+                throw "$Label statusline.sh has an invalid size"
+            }
+            try { $shellText = $script:StrictUtf8.GetString([System.IO.File]::ReadAllBytes($path)) }
+            catch { throw "$Label statusline.sh is not strict UTF-8" }
+            if ($shellText.IndexOf([char]0) -ge 0) { throw "$Label statusline.sh contains a NUL byte" }
+            if ($shellText.IndexOf([char]13) -ge 0) {
+                throw "$Label statusline.sh contains a carriage return; use a checkout with LF line endings"
             }
             continue
         }
@@ -567,8 +659,7 @@ function Assert-ManagedPayloadBytes([string]$Root, $Expected, [string]$Label) {
         if (-not [System.IO.File]::Exists($path)) {
             throw "$Label is missing $relative"
         }
-        $maximum = $script:MaxThemeBytes
-        if ($relative -ceq 'statusline.ps1') { $maximum = $script:MaxRuntimeBytes }
+        $maximum = Get-ManagedFileLimit $relative
         $actual = Read-BoundedSharedFileBytes $path $maximum "$Label $relative"
         if (-not (Test-ByteArraysEqual $actual $Expected[$relative])) {
             throw "$Label changed concurrently: $relative"
@@ -773,11 +864,49 @@ function ConvertTo-JsonString([string]$Value) {
     return $builder.ToString()
 }
 
+function Test-CorallineCommandValue([string]$Json, [string]$CommandPattern) {
+    # True only for an object whose members are exactly "type":"command" and a
+    # "command" whose JSON-decoded text matches CommandPattern (exact case, any
+    # member order or whitespace). Any other shape belongs to the user.
+    if ([string]::IsNullOrEmpty($CommandPattern)) { return $false }
+    try {
+        $index = 0
+        $count = 0
+        $type = $null
+        $value = $null
+        Skip-JsonWhitespace $Json ([ref]$index)
+        if ($index -ge $Json.Length -or $Json[$index] -ne '{') { return $false }
+        $index++
+        while ($true) {
+            Skip-JsonWhitespace $Json ([ref]$index)
+            $name = Read-JsonString $Json ([ref]$index)
+            Skip-JsonWhitespace $Json ([ref]$index)
+            if ($index -ge $Json.Length -or $Json[$index] -ne ':') { return $false }
+            $index++
+            Skip-JsonWhitespace $Json ([ref]$index)
+            $member = Read-JsonString $Json ([ref]$index)
+            $count++
+            if ($name -ceq 'type') { $type = $member }
+            elseif ($name -ceq 'command') { $value = $member }
+            else { return $false }
+            Skip-JsonWhitespace $Json ([ref]$index)
+            if ($index -ge $Json.Length) { return $false }
+            if ($Json[$index] -eq '}') { break }
+            if ($Json[$index] -ne ',') { return $false }
+            $index++
+        }
+        return ($count -eq 2 -and $type -ceq 'command' -and $null -ne $value -and $value -cmatch $CommandPattern)
+    } catch {
+        return $false
+    }
+}
+
 function Get-SettingsPlan(
     [string]$Path,
     [string]$DesiredValue,
     [string]$SubagentMode,
-    [string]$DesiredSubagentValue
+    [string]$DesiredSubagentValue,
+    [string]$OtherSubagentPattern
 ) {
     $existed = [System.IO.File]::Exists($Path)
     $original = [byte[]]@()
@@ -905,6 +1034,17 @@ function Get-SettingsPlan(
             }
         } else {
             $insertions += '"subagentStatusLine":' + $DesiredSubagentValue
+        }
+    } elseif ($SubagentMode -ceq 'preserve' -and $subagentValueStart -ge 0 -and
+        (Test-CorallineCommandValue (
+            $text.Substring($subagentValueStart, $subagentValueEnd - $subagentValueStart)
+        ) $OtherSubagentPattern)) {
+        # The row is the other runtime's coralline command: move it to the
+        # selected runtime so settings never keep running the unselected one.
+        $edits += [pscustomobject]@{
+            Start = $subagentValueStart
+            End = $subagentValueEnd
+            Value = $DesiredSubagentValue
         }
     } elseif ($SubagentMode -ceq 'off' -and $subagentValueStart -ge 0) {
         $removeStart = $subagentMemberStart
@@ -1187,8 +1327,7 @@ function Restore-ManagedRuntime(
             continue
         }
         Assert-SafeExistingFile $target "runtime rollback target $relative"
-        $maximum = $script:MaxThemeBytes
-        if ($relative -ceq 'statusline.ps1') { $maximum = $script:MaxRuntimeBytes }
+        $maximum = Get-ManagedFileLimit $relative
         $current = Read-BoundedSharedFileBytes (
             $target
         ) $maximum "runtime rollback target $relative"
@@ -1214,8 +1353,7 @@ function Restore-ManagedRuntime(
             if (-not [System.IO.File]::Exists($backup)) {
                 throw "runtime rollback backup disappeared: $backup"
             }
-            $maximum = $script:MaxThemeBytes
-            if ($relative -ceq 'statusline.ps1') { $maximum = $script:MaxRuntimeBytes }
+            $maximum = Get-ManagedFileLimit $relative
             $original = Read-BoundedSharedFileBytes (
                 $backup
             ) $maximum "runtime rollback backup $relative"
@@ -1246,8 +1384,7 @@ function Restore-ManagedRuntime(
             Ensure-SafeDirectory ([System.IO.Path]::GetDirectoryName($recovery)) 'runtime rollback recovery parent'
             [System.IO.File]::Move($target, $recovery)
             Assert-NoReparsePath $recovery "new runtime rollback recovery $relative"
-            $maximum = $script:MaxThemeBytes
-            if ($relative -ceq 'statusline.ps1') { $maximum = $script:MaxRuntimeBytes }
+            $maximum = Get-ManagedFileLimit $relative
             $displaced = Read-BoundedSharedFileBytes (
                 $recovery
             ) $maximum "new runtime rollback recovery $relative"
@@ -1356,6 +1493,47 @@ function Invoke-CorallineInstall {
     $powershell = Resolve-CanonicalLocalPath ([System.IO.Path]::Combine($PSHOME, 'powershell.exe')) 'PowerShell executable'
     if (-not [System.IO.File]::Exists($powershell)) { throw "trusted PowerShell executable is missing: $powershell" }
     Assert-CommandPath $powershell 'PowerShell executable'
+    # Select the runtime before anything is created or written. bash needs an
+    # absolute machine-wide bash.exe that finds jq; auto takes bash only when
+    # both hold and otherwise falls back to native; native never probes.
+    $gitBash = $null
+    $autoReason = $null
+    if ($Runtime -cne 'native') {
+        try {
+            $gitBash = Resolve-GitBashPath
+            Assert-GitBashHasJq $gitBash
+        } catch {
+            if ($Runtime -ceq 'bash') {
+                throw "$($_.Exception.Message); install Git for Windows for all users in its standard location with jq available to its bash, or use -Runtime native"
+            }
+            $gitBash = $null
+            $autoReason = $_.Exception.Message
+        }
+    }
+    $selectedRuntime = 'native'
+    if ($null -ne $gitBash) {
+        $selectedRuntime = 'bash'
+        $shellRuntimePath = Resolve-CanonicalLocalPath (
+            [System.IO.Path]::Combine($install, 'statusline.sh')
+        ) 'installed Bash runtime path'
+        Assert-CommandPath $shellRuntimePath 'installed Bash runtime path'
+        # Both runtimes stay managed. Selecting native later never deletes
+        # statusline.sh: it may belong to install.sh or configure.sh.
+        $script:ManagedFiles += 'statusline.sh'
+    }
+    if ($Runtime -ceq 'auto') {
+        if ($selectedRuntime -ceq 'bash') {
+            [Console]::Out.WriteLine("runtime: bash (auto: $gitBash found jq)")
+        } else {
+            [Console]::Out.WriteLine("runtime: native (auto: $autoReason)")
+        }
+    }
+    if ($selectedRuntime -ceq 'bash') {
+        [Console]::Out.WriteLine(
+            'note: the Bash runtime sources coralline.conf as shell code (it executes it), ' +
+            'unlike the native parser; rerun with -Runtime native to keep the native runtime'
+        )
+    }
     Assert-SafeExistingDirectory $install 'install root'
     Assert-SafeExistingFile $settings 'settings path'
     Assert-SafeExistingFile $config 'config path'
@@ -1405,8 +1583,33 @@ function Invoke-CorallineInstall {
         [System.IO.Path]::Combine($install, 'statusline.ps1')
     ) 'installed runtime path'
     Assert-CommandPath $runtimePath 'installed runtime path'
-    $command = '"' + $powershell + '" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $runtimePath + '"'
-    $desiredStatusLine = '{"type":"command","command":' + (ConvertTo-JsonString $command) + ',"refreshInterval":2}'
+    $nativeCommand = '"' + $powershell + '" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $runtimePath + '"'
+    # The script tail of the Bash command. Both tokens are double-quoted and
+    # the script path uses forward slashes, so the same bytes run under
+    # cmd.exe /s /c and under Git Bash.
+    $shellScriptArgument = ' "' + $install.Replace('\', '/') + '/statusline.sh"'
+    # This installer's Bash subagent command for this install root, whatever
+    # bash.exe it named (an older Git location, or one since removed).
+    $anyBashSubagent = '"[A-Za-z]:\\[^"]*\\bin\\bash\.exe"' +
+        [regex]::Escape($shellScriptArgument + ' --subagent') + '\z'
+    if ($selectedRuntime -ceq 'bash') {
+        $command = '"' + $gitBash + '"' + $shellScriptArgument
+        $refreshInterval = '1'
+        # A subagent row that is exactly the native command, or a Bash command
+        # for this root naming a different bash.exe, moves to the resolved
+        # bash. A row already on the resolved bash is left byte-for-byte.
+        $otherSubagentPattern = '^(?:' + [regex]::Escape($nativeCommand + ' --subagent') + '\z|' +
+            '(?!' + [regex]::Escape($command + ' --subagent') + '\z)' + $anyBashSubagent + ')'
+    } else {
+        $command = $nativeCommand
+        $refreshInterval = '2'
+        # A Bash subagent row for this root moves to native: native never
+        # probes, and a Git Bash that has since gone away is exactly when it
+        # must move.
+        $otherSubagentPattern = '^' + $anyBashSubagent
+    }
+    $desiredStatusLine = '{"type":"command","command":' + (ConvertTo-JsonString $command) +
+        ',"refreshInterval":' + $refreshInterval + '}'
     $desiredSubagentStatusLine = '{"type":"command","command":' +
         (ConvertTo-JsonString ($command + ' --subagent')) + '}'
 
@@ -1450,7 +1653,7 @@ function Invoke-CorallineInstall {
         $runtimeChanged = -not (Test-ManagedPayloadEqual $stage $install)
         $settingsPlan = Get-SettingsPlan (
             $settings
-        ) $desiredStatusLine $SubagentRows $desiredSubagentStatusLine
+        ) $desiredStatusLine $SubagentRows $desiredSubagentStatusLine $otherSubagentPattern
         $settingsChanged = [bool]$settingsPlan.Changed
 
         if (-not $runtimeChanged -and -not $settingsChanged) {
