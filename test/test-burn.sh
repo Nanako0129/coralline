@@ -44,6 +44,8 @@ eval "$(sed -n '/^seg_limit() {/,/^}/p' "$SCRIPT")"
 eval "$(sed -n '/^seg_limit_elapsed() {/,/^}/p' "$SCRIPT")"
 eval "$(sed -n '/^seg_limit5h() {/,/^}/p' "$SCRIPT")"
 eval "$(sed -n '/^seg_limit7d() {/,/^}/p' "$SCRIPT")"
+eval "$(sed -n '/^knob_bounded() {/,/^}/p' "$SCRIPT")"
+eval "$(sed -n '/^knob_validate_all() {/,/^}/p' "$SCRIPT")"
 
 RL_MAX_5H=21600
 RL_MAX_7D=691200
@@ -147,6 +149,17 @@ eq '5h active ttr' "$_B5_TTR" 15540
 
 run5h '1000000\t6.125\t1015900\n1000060\t7.125\t1015900\n1000300\t8.125\t1015900\n1000360\t8.125\t1015900\n' 1000360 0
 eq '5h fractional pct exact eta' "$_B5_ETA" 22050
+
+# 92-B: a CRLF-terminated row is rejected on every platform. Same fixture as
+# the "5h active state" case above but with \r\n instead of \n; the trailing
+# \r rides into the reset field's value, epoch()'s digits-only regex rejects
+# it, and with every row gone the estimator never leaves "warming". Git
+# Bash's gawk stripped the \r under text-mode line translation before this
+# fix (BINMODE=3 on the same awk invocation, no extra fork — BINMODE=1 read
+# alone left the trim/heal rewrite's own tmp-file write in text mode, which
+# would have reintroduced CRLF into the store on its next write).
+run5h '1000000\t6\t1015900\r\n1000060\t7\t1015900\r\n1000300\t8\t1015900\r\n1000360\t8\t1015900\r\n' 1000360 0
+eq '5h CRLF rows rejected (state)' "$_B5_STATE" warming
 
 run5h '1000000\t6\t1015900\n1000060\t6.500\t1015900\n1000060\t7\t1015900\n1000300\t8\t1015900\n1000360\t8\t1015900\n' 1000360 0
 eq 'same-second maximum keeps slope' "$_B5_ETA" 22080
@@ -1097,6 +1110,79 @@ eq 'redirected render stderr empty' "$(file_bytes "$CASE/redirected/err")" 0
 default_store_case "$CASE/plain" ""
 true_case 'unset CLAUDE_CONFIG_DIR keeps the historical HOME store' test -e "$CASE/plain/home/.claude/coralline/limit-5h.d"
 eq 'plain render stderr empty' "$(file_bytes "$CASE/plain/err")" 0
+
+# 92-A: every integer knob accepts the same spellings and applies the same
+# range as PS1's Get-BoundedInt. `name L min max fallback` per row of the
+# plan's table; run against knob_bounded directly (fork-free, no $(...)).
+knob_case() {  # $1=knob $2=raw $3=L $4=min $5=max $6=fallback $7=expect
+  local out
+  knob_bounded "$2" "$3" "$4" "$5" "$6" out
+  eq "knob $1 '$2'" "$out" "$7"
+}
+knob_row() {  # $1=knob $2=L $3=min $4=max $5=fallback
+  local name="$1" L="$2" min="$3" max="$4" fb="$5" bad long minus1 plus1
+  # Rejected spellings: fallback regardless of range (sign, whitespace, exponent, non-digit).
+  # $'9\r' (a CR decoded from ANSI-C quoting) and non-ASCII digits (fullwidth
+  # five, Arabic-Indic five) must fall back too; one reaching 10# aborts a render.
+  for bad in '' '+5' '-0' ' 5' '5 ' '1e1' 'x' $'9\r' $'9\n' '５' '٥'; do
+    knob_case "$name" "$bad" "$L" "$min" "$max" "$fb" "$fb"
+  done
+  # L+1 digits: too long, fallback.
+  printf -v long '%0*d' $((L + 1)) 9
+  knob_case "$name" "$long" "$L" "$min" "$max" "$fb" "$fb"
+  # Leading zeros normalize to plain decimal when in range, fallback when not
+  # (each spelling only makes sense once it fits within this knob's own L).
+  if [ "$min" -le 5 ] && [ "$max" -ge 5 ]; then
+    knob_case "$name" '5' "$L" "$min" "$max" "$fb" 5
+    [ "$L" -ge 2 ] && knob_case "$name" '05'  "$L" "$min" "$max" "$fb" 5
+    [ "$L" -ge 3 ] && knob_case "$name" '005' "$L" "$min" "$max" "$fb" 5
+  else
+    knob_case "$name" '5' "$L" "$min" "$max" "$fb" "$fb"
+  fi
+  if [ "$min" -le 7 ] && [ "$max" -ge 7 ] && [ "$L" -ge 3 ]; then
+    knob_case "$name" '007' "$L" "$min" "$max" "$fb" 7
+  fi
+  # min-1 / max+1 (still within L digits): out of range, fallback.
+  if [ "$min" -gt 0 ]; then
+    minus1=$((min - 1))
+    knob_case "$name" "$minus1" "$L" "$min" "$max" "$fb" "$fb"
+  fi
+  plus1=$((max + 1))
+  if [ "${#plus1}" -le "$L" ]; then
+    knob_case "$name" "$plus1" "$L" "$min" "$max" "$fb" "$fb"
+  fi
+  # min / max themselves: accepted at the boundary.
+  knob_case "$name" "$min" "$L" "$min" "$max" "$fb" "$min"
+  knob_case "$name" "$max" "$L" "$min" "$max" "$fb" "$max"
+}
+knob_row VL_BAR_WIDTH          2 0  64    5
+knob_row VL_PATH_DEPTH         3 1  256   4
+knob_row VL_NAME_MAX           4 0  4096  0
+knob_row VL_COST_DECIMALS      1 0  9     2
+knob_row VL_WARN_PCT           3 0  100   50
+knob_row VL_HOT_PCT            3 0  100   75
+knob_row VL_MAX_LINES          2 1  64    3
+knob_row VL_WRAP_MARGIN        5 0  32767 4
+knob_row CORALLINE_BURN_WINDOW 5 60 86400 600
+knob_row BURN_TRIM             4 1  3000  1500
+knob_row BURN_SLACK            4 0  1000  500
+
+# HOT<WARN reset: knob_validate_all resets BOTH to their defaults, mirroring
+# PS1 (statusline.ps1, right after its Get-BoundedInt calls). A kept (non-
+# inverted) pair, including the equal case, is left alone. knob_validate_all
+# touches every knob, so give the other ten a valid value first (set -u).
+VL_BAR_WIDTH=5; VL_PATH_DEPTH=4; VL_NAME_MAX=0; VL_COST_DECIMALS=2
+VL_MAX_LINES=3; VL_WRAP_MARGIN=4
+CORALLINE_BURN_WINDOW=600; BURN_TRIM=1500; BURN_SLACK=500
+VL_WARN_PCT=60; VL_HOT_PCT=40; knob_validate_all
+eq 'HOT<WARN resets WARN to default' "$VL_WARN_PCT" 50
+eq 'HOT<WARN resets HOT to default' "$VL_HOT_PCT" 75
+VL_WARN_PCT=60; VL_HOT_PCT=60; knob_validate_all
+eq 'WARN=HOT kept (equal, not inverted)' "$VL_WARN_PCT" 60
+eq 'WARN=HOT kept (equal, not inverted), HOT side' "$VL_HOT_PCT" 60
+VL_WARN_PCT=30; VL_HOT_PCT=80; knob_validate_all
+eq 'ordinary WARN<HOT kept, WARN side' "$VL_WARN_PCT" 30
+eq 'ordinary WARN<HOT kept, HOT side' "$VL_HOT_PCT" 80
 
 printf 'SUMMARY pass=%s fail=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
