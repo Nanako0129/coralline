@@ -1368,7 +1368,7 @@ function Get-SubagentEffort([string]$Transcript, [string]$Id) {
         } finally { $stream.Dispose() }
     } catch { return '' }
     $lines = [System.Text.Encoding]::UTF8.GetString($bytes, 0, $length).Split([char]10)
-    $max = [Math]::Min(16, $lines.Count - 1)
+    $max = [Math]::Min(64, $lines.Count - 1)
     for ($i = 0; $i -lt $max; $i++) {
         $line = $lines[$i]
         if (-not $line.Contains('"type":"assistant"')) { continue }
@@ -1399,6 +1399,8 @@ function Get-SubagentRole([string]$Transcript, [string]$Id) {
 function Get-SubagentModelShort([string]$Model) {
     if (-not $Model.StartsWith('claude-', [System.StringComparison]::Ordinal)) { return $Model }
     $value = $Model.Substring(7)
+    # Context suffix, e.g. claude-opus-5-5[1m]; mirrors model_short in statusline.sh.
+    if ($value.EndsWith(']', [System.StringComparison]::Ordinal) -and $value.LastIndexOf('[') -ge 0) { $value = $value.Substring(0, $value.LastIndexOf('[')) }
     if ($value -match '-[0-9]{8}\z') { $value = $value.Substring(0, $value.Length - 9) }
     $dash = $value.IndexOf('-')
     if ($dash -le 0 -or $dash -ge ($value.Length - 1)) { return $Model }

@@ -1402,6 +1402,7 @@ model_short() {
   _MS="$1"
   case "$s" in (claude-*) ;; (*) return 0 ;; esac
   s="${s#claude-}"
+  case "$s" in (*']') s="${s%[[]*}" ;; esac  # context suffix, e.g. claude-opus-5-5[1m]
   case "$s" in (*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) s="${s%-*}" ;; esac
   fam="${s%%-*}" ; ver="${s#"$fam"}" ; ver="${ver#-}"
   case "$ver" in (''|*[!0-9-]*) return 0 ;; esac
@@ -1934,13 +1935,16 @@ subagent_effort() {  # → _SUB_EFFORT ; effort the task's first API response re
   # subagent transcript, and omits it where it sent none (Haiku 4.5), so this is
   # the applied value — unlike the payload's `effort`, which is the definition's
   # raw frontmatter and absent for agents running at the model default. Only the
-  # first assistant line is read: across 590 local transcripts (CC 2.1.222-2.1.280)
-  # it was on line 2-15, and no transcript recorded more than one level. The
+  # first assistant line is read, looking at most 64 lines in. Across 714 local
+  # transcripts (CC 2.1.222-2.1.280) it sat on line 2-18: sessions that load more
+  # skills, memory and hooks put more attachment lines ahead of it, which is why
+  # an earlier bound of 16 missed some. No transcript recorded more than one
+  # level. The
   # anchor `","perTurnEffort":` cannot occur unescaped inside a JSON string value.
   local path="$_SUB_BASE.jsonl" line lvl n=0
   _SUB_EFFORT=""
   [ -r "$path" ] || return 1
-  while [ "$n" -lt 16 ] && IFS= read -r line; do
+  while [ "$n" -lt 64 ] && IFS= read -r line; do
     n=$((n + 1))
     case "$line" in (*'"type":"assistant"'*) ;; (*) continue ;; esac
     case "$line" in (*'","perTurnEffort":'*) ;; (*) return 1 ;; esac
