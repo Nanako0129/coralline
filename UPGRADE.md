@@ -10,6 +10,11 @@
 > [Windows without Git Bash](README.md#windows-without-git-bash). It preserves
 > `coralline.conf` and keeps `subagentStatusLine` unchanged by default; use
 > `-SubagentRows on` or `-SubagentRows off` only for an explicit user choice.
+> Its default `-Runtime auto` switches to the Bash runtime when Git for Windows
+> is installed for all users in its standard location (the path in its HKLM
+> registry key, or `Program Files\Git`) and its bash can find jq; per-user and
+> junctioned (for example Scoop) Git installs are not detected and stay native.
+> Pass `-Runtime native` if the user wants to stay on the native runtime.
 
 ## Overview
 
