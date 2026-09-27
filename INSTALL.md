@@ -248,7 +248,12 @@ Ask concise questions. If the user says "you decide", choose the defaults.
    `~/.claude/coralline/burn-5h.tsv` while it is in the list, and nothing when it is not.
 4. **Layout**: responsive default (`VL_LAYOUT="auto"`, `VL_MAX_LINES=3`), single line,
    fixed two lines, or fixed three lines.
-5. **Details**: clock `12h` default, `24h`, or `off`; Nerd Font yes/no; if they use git
+5. **Details**: clock `12h` default, `24h`, or `off`; Nerd Font yes/no. Then do what the
+   visual wizard's glyph check does: print the `ctx` / `project` glyphs (always) and the
+   gauge (with a Nerd Font; ASCII mode already draws it as `#`/`-`) directly between arrows
+   and ask whether each glyph sits in its own cell, overlapping neither its neighbour nor
+   an arrow; only when the answer is No, write `VL_CTX_GLYPH="◔"` `VL_PROJECT_GLYPH="▣"`
+   and/or `VL_BAR_FILL="▪"` `VL_BAR_EMPTY="▫"` (#47). If they use git
    worktrees, suggest enabling `project`. If the user runs many concurrent Claude sessions
    and is bothered by `limit5h` / `limit7d` showing different percentages per session,
    mention `VL_LIMIT_SYNC=1`: a session holding a valid but older window follows a stored
