@@ -172,10 +172,12 @@ $Defaults = [ordered]@{
     VL_BG_PYTHON = ''
     VL_BG_CACHE = ''
     VL_BG_TOKS = ''
+    VL_BG_TTFT = ''
     VL_BG_BAR = ''
     VL_NODE_GLYPH = (Glyph 0xE718)
     VL_PY_GLYPH = (Glyph 0xE73C)
     VL_TOKS_GLYPH = (Glyph 0xF0E4)
+    VL_TTFT_GLYPH = (Glyph 0xF251)
     VL_RUNTIME_PROBE = '0'
 
     VL_FG_TEXT = '231'
@@ -802,6 +804,7 @@ if ($Cfg.VL_ASCII -eq '1') {
     $Cfg.VL_NODE_GLYPH = 'node'
     $Cfg.VL_PY_GLYPH = 'py'
     $Cfg.VL_TOKS_GLYPH = ''  # the pill already says tok/s; no word needed
+    $Cfg.VL_TTFT_GLYPH = 'ttft'  # a bare "2.4s" would not say what it measures
 }
 if ($Cfg.VL_STYLE -eq 'classic') {
     $Cfg.VL_STYLE = 'lean'
@@ -2602,6 +2605,7 @@ $durMs = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('cost', 'tot
 $effort = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('effort', 'level')))
 $apiMs = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('cost', 'total_api_duration_ms')))
 $sid = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('session_id')))
+$toksTranscript = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('transcript_path')))
 
 function ConvertTo-ProbePath([string]$Path) {
     if ([string]::IsNullOrEmpty($Path)) { return '' }
@@ -2919,13 +2923,16 @@ if ($BurnStateGate -or $Limit5StateGate -or $Limit7StateGate) {
     $State = Get-CorallineState $BurnStateGate $Limit5StateGate $Limit7StateGate
 }
 
-# Output speed of the last response; mirrors toks_sample() in statusline.sh (read the
-# comment there for the semantics). One sample per render, never from a segment
-# builder. State line: "sid api_ms key rate\n", rate empty while warming, in a file per
-# session (toks-<sid>); a shared slot ping-pongs between sessions that all render
-# every second under refreshInterval. Returns Ok=$false for unusable input;
-# Rate '' = no response timed yet.
+# Output speed and time to first token of the last response; mirrors toks_sample() and
+# toks_transcript() in statusline.sh (read the comments there for the semantics). One
+# sample per render, never from a segment builder. State line, 10 fields with '-' for
+# empty: "sid api_ms key rate tkey t_api decode ttft pkey tries\n", in a file per session
+# (toks-<sid>); a shared slot ping-pongs between sessions that all render every second
+# under refreshInterval. Returns Ok=$false for unusable input or a non-regular object at
+# the state path. Rate/Dec/Ttft '' = none yet.
 $ToksKeep = 32  # internal: max per-session files kept in the coralline dir
+$ToksTail = 1048576  # internal: transcript bytes read to find a response
+$ToksTries = 3  # internal: lookups per response before it is given up
 
 # Runs only when a session creates its file, so the steady state never lists the
 # directory. Removes at most the single least-recently-written toks file once
@@ -2939,67 +2946,276 @@ function Remove-OldestToksFile([string]$Dir) {
     } catch { }
 }
 
+# Digits-only count, or $null (also for a value past long). Mirrors bash's case '*[!0-9]*'.
+function ConvertTo-ToksCount([string]$Raw) {
+    $n = 0L
+    if ([regex]::IsMatch($Raw, '\A[0-9]+\z') -and [long]::TryParse($Raw, $IntegerStyle, $Invariant, [ref]$n)) { return $n }
+    return $null
+}
+
+function ConvertTo-ToksField([string]$Value) {
+    if ([string]::IsNullOrEmpty($Value)) { return '-' }
+    return $Value
+}
+
+# Bash: [ -w "$file" ] or (file absent and the directory writable). Opening an existing
+# file for write truncates nothing; an absent file is probed with a delete-on-close temp
+# file in the directory, which is only reached on the rare render that would read.
+function Test-ToksWritable([string]$File) {
+    try {
+        if (Test-StateObjectExists $File) {
+            $fs = [IO.FileStream]::new($File, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+            $fs.Dispose()
+            return $true
+        }
+        $dir = [IO.Path]::GetDirectoryName($File)
+        if (-not [IO.Directory]::Exists($dir) -or -not (Test-NoReparseComponents $dir)) { return $false }
+        $probe = [IO.Path]::Combine($dir, '.toks-probe-' + [guid]::NewGuid().ToString('N'))
+        $fs = [IO.FileStream]::new($probe, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose)
+        $fs.Dispose()
+        return $true
+    } catch { return $false }
+}
+
+# jq-shaped accessors for the transcript program. A missing member or a non-object is
+# null, as jq's `.a.b` yields on null; ,$null keeps arrays from being unrolled.
+function Get-TrMember($Object, [string]$Name) {
+    if ($Object -is [pscustomobject]) {
+        $p = $Object.PSObject.Properties[$Name]
+        if ($null -ne $p) { return ,$p.Value }
+    }
+    return ,$null
+}
+
+function Get-TrNumber($Value) {
+    if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [single] -or $Value -is [uint64] -or $Value -is [System.Numerics.BigInteger]) { return [double]$Value }
+    return $null
+}
+
+function Test-TrEqual($A, $B) {
+    if ($null -eq $A -or $null -eq $B) { return ($null -eq $A -and $null -eq $B) }
+    if ($A -is [string] -and $B -is [string]) { return ($A -ceq $B) }
+    if ($A -is [bool] -and $B -is [bool]) { return ($A -eq $B) }
+    $na = Get-TrNumber $A
+    $nb = Get-TrNumber $B
+    if ($null -ne $na -and $null -ne $nb) { return ($na -eq $nb) }
+    return $false
+}
+
+# jq: (.[0:19] + "Z" | fromdateiso8601) * 1000 + ((.[20:23] | tonumber?) // 0), UTC.
+# An unparsable value throws, as jq's error does, and the caller reports pending.
+# PowerShell 7's ConvertFrom-Json already turned ISO strings into DateTime.
+function Convert-TrTimestampMs($Value) {
+    if ($Value -is [datetime]) { return [double][DateTimeOffset]::new($Value.ToUniversalTime()).ToUnixTimeMilliseconds() }
+    if ($Value -isnot [string]) { throw 'timestamp' }
+    $head = $Value
+    if ($head.Length -gt 19) { $head = $head.Substring(0, 19) }
+    $m = [regex]::Match($head + 'Z', '\A([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z\z')
+    if (-not $m.Success) { throw 'timestamp' }
+    $g = @(1..6 | ForEach-Object { [int]::Parse($m.Groups[$_].Value, $Invariant) })
+    $sec = [DateTimeOffset]::new($g[0], $g[1], $g[2], $g[3], $g[4], $g[5], [TimeSpan]::Zero).ToUnixTimeSeconds()
+    $frac = 0
+    if ($Value.Length -gt 20) {
+        $slice = $Value.Substring(20, [Math]::Min(3, $Value.Length - 20))
+        if ($slice -match '\A[0-9]+\z') { $frac = [int]::Parse($slice, $Invariant) }
+    }
+    return [double]($sec * 1000 + $frac)
+}
+
+# Decode rate and TTFT of one response; the jq program in toks_transcript(), step for
+# step. Returns 'decode ttft_ms' (ttft may be '-'), 'pending' or 'na'. Reads only the
+# last $ToksTail bytes, so the first line may be cut and is skipped when it does not parse.
+function Get-ToksTranscript([string]$Path, [double]$In, [double]$Out) {
+    try {
+        $buf = $null
+        $got = 0
+        $fs = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+        try {
+            $len = $fs.Length
+            $start = [Math]::Max(0L, $len - $ToksTail)
+            [void]$fs.Seek($start, [IO.SeekOrigin]::Begin)
+            $buf = New-Object byte[] ([int]($len - $start))
+            while ($got -lt $buf.Length) {
+                $n = $fs.Read($buf, $got, $buf.Length - $got)
+                if ($n -le 0) { break }
+                $got += $n
+            }
+        } finally { $fs.Dispose() }
+        $entries = [System.Collections.Generic.List[object]]::new()
+        foreach ($line in $Utf8NoBom.GetString($buf, 0, $got).Split("`n")) {
+            $t = $line.Trim()
+            if ($t.Length -eq 0 -or $t[0] -ne '{') { continue }
+            try { $o = $t | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+            if ($o -is [pscustomobject]) { [void]$entries.Add($o) }
+        }
+        # The newest assistant entry whose usage matches the payload's in and out exactly.
+        $hit = -1
+        for ($i = 0; $i -lt $entries.Count; $i++) {
+            $x = $entries[$i]
+            $ty = Get-TrMember $x 'type'
+            if ($ty -isnot [string] -or $ty -cne 'assistant') { continue }
+            $usage = Get-TrMember (Get-TrMember $x 'message') 'usage'
+            $o = Get-TrNumber (Get-TrMember $usage 'output_tokens')
+            if ($null -eq $o -or $o -ne $Out) { continue }
+            $sum = 0.0
+            foreach ($name in @('input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')) {
+                $v = Get-TrMember $usage $name
+                if ($null -eq $v -or ($v -is [bool] -and -not $v)) { continue }  # jq: // 0
+                $nv = Get-TrNumber $v
+                if ($null -eq $nv) { throw 'usage' }
+                $sum += $nv
+            }
+            if ($sum -eq $In) { $hit = $i }
+        }
+        if ($hit -lt 0) { return 'pending' }
+        $mid = Get-TrMember (Get-TrMember $entries[$hit] 'message') 'id'
+        $firstIdx = -1
+        $lastIdx = -1
+        for ($i = 0; $i -lt $entries.Count; $i++) {
+            $ty = Get-TrMember $entries[$i] 'type'
+            if ($ty -isnot [string] -or $ty -cne 'assistant') { continue }
+            if (-not (Test-TrEqual (Get-TrMember (Get-TrMember $entries[$i] 'message') 'id') $mid)) { continue }
+            if ($firstIdx -lt 0) { $firstIdx = $i }
+            $lastIdx = $i
+        }
+        $first = $entries[$firstIdx]
+        $last = $entries[$lastIdx]
+        $content = Get-TrMember (Get-TrMember $first 'message') 'content'
+        $c0 = $null
+        if ($content -is [System.Array] -and $content.Count -gt 0) { $c0 = $content[0] }
+        $ct = Get-TrMember $c0 'type'
+        if ($ct -isnot [string] -or $ct -cne 'thinking') { return 'na' }
+        $dur = Get-TrMember $first 'thinkingDurationMs'
+        if ($null -eq $dur -or $dur -is [bool]) { return 'na' }
+        $d = Get-TrNumber $dur
+        if ($null -eq $d) { throw 'duration' }
+        if ($d -lt 2) { return 'na' }
+        $tf = (Convert-TrTimestampMs (Get-TrMember $first 'timestamp')) - $d
+        $te = Convert-TrTimestampMs (Get-TrMember $last 'timestamp')
+        if ($te -le $tf) { return 'na' }
+        # Request start: the latest stamp before the response that is not after the first token.
+        $tr = $null
+        for ($i = 0; $i -lt $firstIdx; $i++) {
+            $ts = Get-TrMember $entries[$i] 'timestamp'
+            if ($ts -isnot [string] -and $ts -isnot [datetime]) { continue }
+            $ms = Convert-TrTimestampMs $ts
+            if ($ms -le $tf -and ($null -eq $tr -or $ms -gt $tr)) { $tr = $ms }
+        }
+        $decode = [long][Math]::Floor($Out * 1000.0 / ($te - $tf) + 0.5)
+        $ttft = '-'
+        if ($null -ne $tr) { $ttft = ([long][Math]::Floor($tf - $tr)).ToString($Invariant) }
+        return ($decode.ToString($Invariant) + ' ' + $ttft)
+    } catch { return 'pending' }
+}
+
 function Get-ToksSample {
-    $none = [pscustomobject]@{ Ok=$false; Rate=''; ApiMs=0L }
+    $none = [pscustomobject]@{ Ok=$false; Rate=''; Dec=''; Ttft=''; ApiMs=0L }
     $api = $apiMs
     if ([string]::IsNullOrEmpty($api)) { $api = '0' }
     if (-not [regex]::IsMatch($api, '\A[0-9]+\z')) { return $none }
     if (-not [regex]::IsMatch($sid, '\A[0-9a-f][0-9a-f-]*\z')) { return $none }
     $apiL = 0L
     if (-not [long]::TryParse($api, $IntegerStyle, $Invariant, [ref]$apiL)) { return $none }
+    $file = $null
+    try { $file = [IO.Path]::GetFullPath([IO.Path]::Combine($CoralineDir, 'toks-' + $sid)) } catch { return $none }
+    # A link or a non-file under this name is not ours: never read, write or evict.
+    if ((Test-StateObjectExists $file) -and -not (Test-SafeRegularFile $file)) { return $none }
+    $result = [pscustomobject]@{ Ok=$true; Rate=''; Dec=''; Ttft=''; ApiMs=$apiL }
+
     $inRaw = $tokIn; if ([string]::IsNullOrEmpty($inRaw)) { $inRaw = '0' }
     $outRaw = $tokOut; if ([string]::IsNullOrEmpty($outRaw)) { $outRaw = '0' }
-    $key = $inRaw + ':' + $outRaw
-    $result = [pscustomobject]@{ Ok=$true; Rate=''; ApiMs=$apiL }
-    $file = $null
-    try { $file = [IO.Path]::GetFullPath([IO.Path]::Combine($CoralineDir, 'toks-' + $sid)) } catch { return $result }
+    $inL = ConvertTo-ToksCount $inRaw
+    $outL = ConvertTo-ToksCount $outRaw
+    $key = $(if ($null -ne $inL) { $inL.ToString($Invariant) } else { $inRaw }) + ':' + $(if ($null -ne $outL) { $outL.ToString($Invariant) } else { $outRaw })
 
-    $sSid = ''; $sMs = ''; $sKey = ''; $sRate = ''
+    $f = @('', '', '', '', '', '', '', '', '', '')
     if (Test-SafeRegularFile $file) {
         $text = Read-StrictUtf8File $file
         if ($null -ne $text) {
             $nl = $text.IndexOf("`n")
             if ($nl -ge 0) { $text = $text.Substring(0, $nl) }
-            $parts = [regex]::new('[ \t]+').Split($text.TrimStart(' ', "`t"), 4)
-            if ($parts.Length -ge 1) { $sSid = $parts[0] }
-            if ($parts.Length -ge 2) { $sMs = $parts[1] }
-            if ($parts.Length -ge 3) { $sKey = $parts[2] }
-            if ($parts.Length -ge 4) { $sRate = $parts[3].TrimEnd(' ', "`t") }
+            $parts = [regex]::new('[ \t]+').Split($text.TrimStart(' ', "`t"), 10)
+            for ($i = 0; $i -lt $parts.Length -and $i -lt 10; $i++) { $f[$i] = $parts[$i] }
+            $f[9] = $f[9].TrimEnd(' ', "`t")
         }
     }
-    $sMsL = 0L
-    if (-not [regex]::IsMatch($sMs, '\A[0-9]+\z') -or -not [long]::TryParse($sMs, $IntegerStyle, $Invariant, [ref]$sMsL)) { $sSid = '' }
-    if (-not [regex]::IsMatch($sRate, '\A[0-9]*\z')) { $sRate = '' }
+    $sSid = $f[0]
+    $sKey = $f[2]
+    $sMsL = ConvertTo-ToksCount $f[1]
+    if ($null -eq $sMsL) { $sSid = ''; $sMsL = 0L }
+    $tKey = $f[4]
+    if ($tKey -ceq '-') { $tKey = '' }
+    $tApi = ConvertTo-ToksCount $f[5]
+    if ($null -eq $tApi) { $tKey = ''; $tApi = 0L }
+    $pTry = ConvertTo-ToksCount $f[9]
+    if ($null -eq $pTry) { $pTry = 0L }
+    # rate/decode/ttft: digits only, normalized (no leading zeros), else empty
+    $sRate = ''; $tDec = ''; $tTtft = ''
+    $n = ConvertTo-ToksCount $f[3]; if ($null -ne $n) { $sRate = $n.ToString($Invariant) }
+    $n = ConvertTo-ToksCount $f[6]; if ($null -ne $n) { $tDec = $n.ToString($Invariant) }
+    $n = ConvertTo-ToksCount $f[7]; if ($null -ne $n) { $tTtft = $n.ToString($Invariant) }
+    $pKey = $f[8]
+    if ($pKey -ceq '-') { $pKey = '' }
 
+    $dirty = $false
     if ($sSid -cne $sid -or $apiL -lt $sMsL) {
-        $sRate = ''
-    } elseif ($apiL -eq $sMsL) {
-        $result.Rate = $sRate
-        return $result
-    } elseif ($key -cne $sKey) {
-        $outL = 0L
+        $sMsL = $apiL; $sKey = $key; $sRate = ''
+        $tKey = ''; $tApi = $apiL; $tDec = ''; $tTtft = ''; $pKey = ''; $pTry = 0L
+        $dirty = $true
+    } elseif ($apiL -gt $sMsL) {
         # ponytail: a token count above 9e15 would overflow the *1000; Bash wraps there, this keeps the stored rate.
-        if ([regex]::IsMatch($tokOut, '\A[0-9]+\z') -and [long]::TryParse($tokOut, $IntegerStyle, $Invariant, [ref]$outL) -and $outL -le 9000000000000000L) {
+        if ($key -cne $sKey -and $null -ne $outL -and $outL -le 9000000000000000L) {
             $delta = $apiL - $sMsL
             $rem = 0L
-            $sRate = [string][Math]::DivRem(($outL * 1000L + ($delta -shr 1)), $delta, [ref]$rem)
+            $sRate = ([Math]::DivRem(($outL * 1000L + ($delta -shr 1)), $delta, [ref]$rem)).ToString($Invariant)
+        }
+        $sMsL = $apiL; $sKey = $key
+        $dirty = $true
+    }
+
+    # Transcript step, apart from the anchor: it fires on a key it has not resolved once
+    # API time has landed since its last resolution, in whichever order the payload
+    # delivers the two. A state file that cannot be written never triggers it.
+    $noSample = ([string]$env:CORALLINE_NO_SAMPLE -eq '1')
+    if (-not $noSample -and $key -cne $tKey -and $apiL -gt $tApi -and $null -ne $inL -and $null -ne $outL -and
+        -not [string]::IsNullOrEmpty($toksTranscript) -and -not $toksTranscript.StartsWith('\\') -and -not $toksTranscript.StartsWith('//')) {
+        $trPath = ''
+        try { $trPath = [IO.Path]::GetFullPath($toksTranscript) } catch { $trPath = '' }
+        if ($trPath -ne '' -and (Test-SafeRegularFile $trPath) -and (Test-ToksWritable $file)) {
+            if ($pKey -cne $key) { $pKey = $key; $pTry = 0L }
+            $tt = Get-ToksTranscript $trPath ([double]$inL) ([double]$outL)
+            if ($tt -ceq 'pending') {
+                $pTry++
+                if ($pTry -ge $ToksTries) { $tt = 'na' }
+            }
+            if ($tt -ceq 'na') {
+                $tKey = $key; $tApi = $apiL; $tDec = ''; $tTtft = ''; $pKey = ''; $pTry = 0L
+            } elseif ($tt -cne 'pending') {
+                $pair = $tt.Split(' ')
+                $tKey = $key; $tApi = $apiL; $tDec = $pair[0]; $tTtft = $pair[1]; $pKey = ''; $pTry = 0L
+                if ($tTtft -ceq '-') { $tTtft = '' }
+            }
+            $dirty = $true
         }
     }
     $result.Rate = $sRate
-    if ([string]$env:CORALLINE_NO_SAMPLE -eq '1') { return $result }
+    $result.Dec = $tDec
+    $result.Ttft = $tTtft
+    if (-not $dirty -or $noSample) { return $result }
     try {
         $parent = [IO.Path]::GetDirectoryName($file)
         if (-not (Test-NoReparseComponents $parent)) { return $result }
         if (-not [IO.Directory]::Exists($parent)) { [void][IO.Directory]::CreateDirectory($parent) }
-        if ((Test-StateObjectExists $file) -and -not (Test-SafeRegularFile $file)) { return $result }
         if (-not (Test-StateObjectExists $file)) { Remove-OldestToksFile $parent }
-        [IO.File]::WriteAllBytes($file, $Utf8NoBom.GetBytes("$sid $api $key $sRate`n"))
+        $fields = @($sid, $sMsL.ToString($Invariant), $sKey, (ConvertTo-ToksField $sRate), (ConvertTo-ToksField $tKey),
+            $tApi.ToString($Invariant), (ConvertTo-ToksField $tDec), (ConvertTo-ToksField $tTtft), (ConvertTo-ToksField $pKey), $pTry.ToString($Invariant))
+        [IO.File]::WriteAllBytes($file, $Utf8NoBom.GetBytes(($fields -join ' ') + "`n"))
     } catch { }
     return $result
 }
 
-$Toks = [pscustomobject]@{ Ok=$false; Rate=''; ApiMs=0L }
-if ($ProbeSegmentNames.Contains('toks')) { $Toks = Get-ToksSample }
+$Toks = [pscustomobject]@{ Ok=$false; Rate=''; Dec=''; Ttft=''; ApiMs=0L }
+if ($ProbeSegmentNames.Contains('toks') -or $ProbeSegmentNames.Contains('ttft')) { $Toks = Get-ToksSample }
 
 $GitState = @{ Branch = ''; Marks = ''; Ab = ''; Dirty = $false }
 $GitRoot = ''
@@ -3358,17 +3574,46 @@ function Add-ToksSegment {
     # The ground is the dark data segment (ctx), so the inks are the gauge ones every
     # theme tunes for it, as ctx and cache use: the value in OK, the unit in DIM.
     # VL_FG_TEXT is the pastel-pill ink and reads dark on dark in seven of the ten themes.
+    # The value is the last resolved decode rate; when the last response could not be
+    # resolved, the prefill-inclusive rate stands in with a leading U+2265, since it can
+    # only understate the decode rate.
     $bg = $Cfg.VL_BG_TOKS
     if ([string]::IsNullOrEmpty($bg)) { $bg = $Cfg.VL_BG_CTX }
     $g = ''
     if (-not [string]::IsNullOrEmpty($Cfg.VL_TOKS_GLYPH)) { $g = $Cfg.VL_TOKS_GLYPH + ' ' }
     $dfg = Get-Fg $Cfg.VL_FG_DIM
-    if ([string]::IsNullOrEmpty($Toks.Rate)) {
+    $pre = ''
+    if (-not [string]::IsNullOrEmpty($Toks.Dec)) { $v = $Toks.Dec }
+    elseif (-not [string]::IsNullOrEmpty($Toks.Rate)) { $v = $Toks.Rate; $pre = [string][char]0x2265 }
+    else {
         Push-Segment $bg "${dfg} ${g}$([char]0x2026) tok/s "
         return
     }
     $fg = Get-Fg $Cfg.VL_FG_OK
-    Push-Segment $bg "${fg} ${g}$(Format-Tok $Toks.Rate) ${dfg}tok/s "
+    Push-Segment $bg "${fg} ${g}${pre}$(Format-Tok $v) ${dfg}tok/s "
+}
+
+function Add-TtftSegment {
+    if (-not $Toks.Ok -or [string]::IsNullOrEmpty($Toks.Ttft)) { return }
+    $ms = ConvertTo-ToksCount $Toks.Ttft
+    if ($null -eq $ms) { return }
+    $bg = $Cfg.VL_BG_TTFT
+    if ([string]::IsNullOrEmpty($bg)) { $bg = $Cfg.VL_BG_CTX }
+    $g = ''
+    if (-not [string]::IsNullOrEmpty($Cfg.VL_TTFT_GLYPH)) { $g = $Cfg.VL_TTFT_GLYPH + ' ' }
+    $dfg = Get-Fg $Cfg.VL_FG_DIM
+    $unit = 's'
+    $rem = 0L
+    $tenths = [Math]::DivRem($ms + 50L, 100L, [ref]$rem)  # tenths of a second
+    if ($tenths -lt 100) {
+        $whole = [Math]::DivRem($tenths, 10L, [ref]$rem)
+        $v = $whole.ToString($Invariant) + '.' + $rem.ToString($Invariant)
+    } else {
+        $v = Format-Duration $ms $true
+        $unit = ''
+    }
+    $fg = Get-Fg $Cfg.VL_FG_OK
+    Push-Segment $bg "${fg} ${g}${v}${dfg}${unit} "
 }
 
 $SegmentBuilders = [ordered]@{
@@ -3391,6 +3636,7 @@ $SegmentBuilders = [ordered]@{
     stash = { Add-StashSegment }
     style = { Add-StyleSegment }
     toks = { Add-ToksSegment }
+    ttft = { Add-TtftSegment }
 }
 $SupportedSegmentNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 foreach ($name in $SegmentBuilders.Keys) { [void]$SupportedSegmentNames.Add([string]$name) }

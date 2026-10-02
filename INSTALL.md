@@ -233,21 +233,22 @@ Ask concise questions. If the user says "you decide", choose the defaults.
    `best-themes/github-dark`.
 2. **Style**: `pill` default, `lean`, or `classic` (p10k's uniform dark-bar look).
 3. **Segments**: default is `dir git model ctx limit5h limit7d cost clock`.
-   Optional extras: `project`, `node`, `python`, `effort`, `cache`, `toks`, `burn`,
-   `lines`, `style`, `duration`, `stash`. `node` shows the active Node version
+   Optional extras: `project`, `node`, `python`, `effort`, `cache`, `toks`, `ttft`,
+   `burn`, `lines`, `style`, `duration`, `stash`. `node` shows the active Node version
    (`.nvmrc` / `.node-version`, else `node` on `PATH`) and `python` the active env
    (`$VIRTUAL_ENV` / conda / `.python-version`, else `python3`); each stays hidden
    until something is detected.
    Write the chosen segments to `VL_SEGMENTS` in this canonical order (keep only the
    ones the user wants): `dir project git node python model effort ctx cache toks
-   limit5h limit7d burn lines cost style duration stash clock`. So opting in `effort`
-   lands it right after `model`.
+   ttft limit5h limit7d burn lines cost style duration stash clock`. So opting in
+   `effort` lands it right after `model`.
    `cache` (prompt-cache hit ratio plus the countdown to the cache expiring) reads
    `prompt_cache` from the payload, which Claude Code only sends on v2.1.263 and newer;
    on an older build it stays hidden with no other effect.
-   `toks` (output tokens per second of the last response) keeps one small file per session
-   in `~/.claude/coralline/toks-*` (the 32 most recent) while it is in the list, and
-   shows `… tok/s` until it has timed a response.
+   `toks` (decode speed of the last response, prefill excluded) and `ttft` (time to
+   first token) keep one small file per session in `~/.claude/coralline/toks-*` (the
+   32 most recent) while either is in the list, read the end of the session transcript
+   once per response, and show `… tok/s` (ttft: nothing) until a response is timed.
    `burn` (projected time until a rate limit binds) writes a small sample file to
    `~/.claude/coralline/burn-5h.tsv` while it is in the list, and nothing when it is not.
 4. **Layout**: responsive default (`VL_LAYOUT="auto"`, `VL_MAX_LINES=3`), single line,
