@@ -1,4 +1,5 @@
 {
+  "session_id": "5a3c0b1e-7d2f-4c8a-9e61-0b4d2f8a6c13",
   "cwd": "/Users/demo/projects/coralline",
   "workspace": { "current_dir": "/Users/demo/projects/coralline" },
   "model": { "display_name": "Claude Fable 5" },
@@ -27,6 +28,7 @@
     "total_cost_usd": 1.2345,
     "total_lines_added": 321,
     "total_lines_removed": 87,
-    "total_duration_ms": 5432100
+    "total_duration_ms": 5432100,
+    "total_api_duration_ms": 1234567
   }
 }

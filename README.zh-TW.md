@@ -25,6 +25,8 @@
 | `effort` | 否 | 推理強度：`low`、`med`、`high`、`xhigh` 或 `max` |
 | `ctx` | 是 | context 用量條與輸入、輸出、快取 token 數 |
 | `cache` | 否 | prompt cache 命中率，以及快取失效的倒數；失效後顯示 `cold` |
+| `toks` | 否 | 最後一則回應的生成速度（每秒輸出 token 數，不含 prefill）；`≥` 表示改用含 prefill 的替代值 |
+| `ttft` | 否 | 最後一則回應的第一個 token 等待時間；推算不出來時隱藏 |
 | `limit5h` | 是 | 五小時額度量表與重置倒數 |
 | `limit7d` | 是 | 七天額度量表與重置倒數 |
 | `burn` | 否 | 綁定中的 5h 或 7d 額度到達 100% 的預估時間 |
@@ -38,6 +40,8 @@
 量表會從綠色變成 50% 的黃色與 75% 的紅色；兩個門檻都能自訂。`cache` 使用同樣的門檻但方向相反，因為命中率高才是好結果：低於 50% 轉黃、低於 25% 轉紅。
 
 `cache` 需要 Claude Code v2.1.263 以上，`prompt_cache` 是從該版本開始出現在 statusline payload 裡。session 送出第一個 request 之前這一段會自我隱藏。倒數在一小時以內會顯示秒數（`10m12s`、`42s`），超過一小時則不顯示（`1h06m`）；快取失效之後，或從來沒熱過的情況，倒數會換成 `cold`。百分比是這個 session 的累計命中率，兩種情況下都仍然是真實數字，不會被歸零：`cold` 告訴你的是後面還有沒有一份活著的快取。倒數顯示的是「上次 render 當下」的值，不是即時時鐘：Claude Code 只在 payload 事件（以及快取到期的那一刻）重繪 statusline，不會每秒重繪，除非你在 settings 裡設定 `statusLine.refreshInterval`。
+
+`toks` 是最後一則回應的生成速度：這則回應的 output token 數（含 thinking token），除以從第一個 token 到最後一個 token 的時間。`ttft` 是第一個 token 出來之前的等待時間。statusline payload 沒有這兩個值，所以每則回應結束時，coralline 會讀一次 session transcript 的尾端來推算：每個串流的 block 結束時都會記下時間戳，thinking block 另外記錄它串流了多久，由此可以定位第一個 token。回應如果是以文字或 tool call 開頭，就沒有這個記號，這時 `ttft` 會隱藏，`toks` 改顯示含 prefill 的速度，並加上 `≥`，因為這個數字只可能低估生成速度。這個替代值是這則回應的 output token 數除以上次 render 之後新增的 API 時間（payload 的 `total_output_tokens` 是最後一則回應的數字，`total_api_duration_ms` 是整個 session 所有 request 的總和）；同一段時間裡有 subagent 或其他 request 完成，數字會偏低；沒有設定 `statusLine.refreshInterval` 時，在兩則回應之間執行的 subagent 會整筆算到下一則回應頭上。tool call 永遠不會算進去，因為那個總和只包含 API 時間。只要任一個 segment 在清單裡，coralline 就會在 `~/.claude/coralline/toks-*` 為每個 session 留一個小檔案（只保留最近 32 個 session），量到第一則回應之前顯示 `… tok/s`，在結束一則回應的那次 render 多花一次 `tail` 和一次 `jq`（transcript 還沒寫完的話最多再重試兩次），中間的 render 不會。session 送出第一個 request 之前兩者都會自我隱藏。wizard 預覽沒有 transcript，所以預覽裡只會看到 `… tok/s`，不會出現 `ttft`。
 
 ## 安裝
 

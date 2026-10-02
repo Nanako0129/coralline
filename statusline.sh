@@ -7,7 +7,9 @@
 #   * Minimal process spawning per render — helpers return via globals
 #     (printf -v) instead of $(...) subshells, so it stays cheap even under
 #     Git Bash on Windows, where fork() is emulated and expensive.
-#   * One jq call, one git call. Pure bash arithmetic (no bc).
+#   * One jq call, one git call. Pure bash arithmetic (no bc). Exception, opt-in:
+#     with `toks` or `ttft` listed, the render that closes a response (and at most
+#     two retries while the transcript catches up) adds one tail and one jq.
 #   * Works on macOS bash 3.2 and Linux/Windows (Git Bash) bash 4+/5.
 #   * Everything themeable via ~/.claude/coralline.conf (sourced bash)
 #
@@ -157,11 +159,15 @@ VL_BG_EFFORT=141
 VL_BG_NODE=""                   # optional; falls back to VL_BG_MODEL when empty
 VL_BG_PYTHON=""                 # optional; falls back to VL_BG_MODEL when empty
 VL_BG_CACHE=""                  # optional; falls back to VL_BG_CTX when empty
+VL_BG_TOKS=""                   # optional; falls back to VL_BG_CTX when empty
+VL_BG_TTFT=""                   # optional; falls back to VL_BG_CTX when empty
 VL_BG_BAR=""                   # classic style only — the uniform bar behind the whole
                                # row ("R,G,B" or a 256 index); empty → p10k's 238.
                                # An explicit VL_LEAN_BG overrides it.
 printf -v VL_NODE_GLYPH '\xee\x9c\x98'   # U+E718 Nerd Font node glyph (word in VL_ASCII)
 printf -v VL_PY_GLYPH   '\xee\x9c\xbc'   # U+E73C Nerd Font python glyph (word in VL_ASCII)
+printf -v VL_TOKS_GLYPH '\xef\x83\xa4'   # U+F0E4 Nerd Font tachometer (dropped in VL_ASCII)
+printf -v VL_TTFT_GLYPH '\xef\x89\x91'   # U+F251 Nerd Font hourglass-start (word in VL_ASCII)
 VL_RUNTIME_PROBE=0              # node/python: 1 = also detect via `node`/`python3`
                                # on PATH when no pin file (forks per render; off by default)
 
@@ -277,6 +283,8 @@ if [ "$VL_ASCII" = "1" ]; then
   VL_CAP_L="" ; VL_CAP_R="" ; VL_SEP=""
   VL_BAR_FILL="#" ; VL_BAR_EMPTY="-"
   VL_NODE_GLYPH="node" ; VL_PY_GLYPH="py"
+  VL_TOKS_GLYPH=""                # the pill already says tok/s; no word needed
+  VL_TTFT_GLYPH="ttft"            # a bare "2.4s" would not say what it measures
 fi
 
 # Classic style: Powerlevel10k's stock "Classic" preset — lean rendering on one
@@ -1616,6 +1624,187 @@ seg_cache() {  # prompt-cache hit ratio, and the countdown to the cache expiring
   push "${VL_BG_CACHE:-$VL_BG_CTX}" "${fgc} ${VL_CACHE_GLYPH} ${v}% ${left} "
 }
 
+# Output speed of the last response. Neither payload field is a rate:
+# context_window.total_output_tokens is the LAST response's output (despite the
+# name), and cost.total_api_duration_ms is the process-wide sum of API wall time
+# (every request: subagents, side queries, retries, prefill). So each render keeps
+# an anchor (api total, last-response key, rate) in a per-session file, and the
+# rate is the new response's tokens over the API time that landed since. Only a
+# render where the total grew can close a response: a render that sees a new
+# response before its duration lands leaves the anchor alone. A grown total with
+# the same response is foreign time and is absorbed into the anchor rather than
+# charged to the next response; parallel work that lands in the same interval
+# still reads low, which the payload cannot separate. That rate includes prefill,
+# so it is only the fallback: see toks_transcript for the decode rate and TTFT.
+# One file per session, never shared: with refreshInterval every open session
+# renders each second, so a shared slot was observed ping-ponging between two
+# idle-and-active sessions and re-anchoring both forever. Reads and writes are
+# builtins (no fork); a torn or foreign line fails validation and re-anchors.
+# Line: "sid api key rate tkey t_api decode ttft tries", "-" for empty (a
+# whitespace IFS would collapse an empty middle field). tkey/t_api/decode/ttft are
+# the last transcript resolution; tries counts lookups that found nothing since it.
+# The sid must be lowercase hex and dashes (a Claude Code session UUID); the
+# classes are spelled out because bash 3.2 matches [a-f] by locale collation.
+TOKS_KEEP=32                    # internal: max per-session files kept in CORALLINE_DIR
+TOKS_TAIL=1048576               # internal: transcript bytes read to find a response
+TOKS_TRIES=3                    # internal: lookups per response before it is given up
+toks_sample() {  # once per render → _TOKS_OK, _TOKS_RATE, _TOKS_DEC, _TOKS_TTFT ("" = none)
+  _TOKS_OK=0; _TOKS_RATE=""; _TOKS_DEC=""; _TOKS_TTFT=""
+  case "$api_ms" in (''|*[!0-9]*) return 0 ;; esac
+  case "$sid" in ([0123456789abcdef]*) ;; (*) return 0 ;; esac
+  case "$sid" in (*[!0123456789abcdef-]*) return 0 ;; esac
+  local file="$CORALLINE_DIR/toks-$sid"
+  # A link or a non-file under this name is not ours: never read through it, never
+  # write through it, and never treat it as missing (that would evict every render).
+  [ -L "$file" ] && return 0
+  [ -e "$file" ] && [ ! -f "$file" ] && return 0
+  _TOKS_OK=1
+  # 10#: a digits-only value with a leading zero is octal to $(( )), and an 8 or 9
+  # in it aborts the whole script on bash 3.2.
+  api_ms=$(( 10#$api_ms ))
+  local in="" out="" key s_sid="" s_ms="" s_key="" s_rate="" t_key="" t_api="" t_dec="" t_ttft=""
+  local p_try="" dirty=0
+  case "$tok_in" in (''|*[!0-9]*) ;; (*) in=$(( 10#$tok_in )) ;; esac
+  case "$tok_out" in (''|*[!0-9]*) ;; (*) out=$(( 10#$tok_out )) ;; esac
+  key="${in:-$tok_in}:${out:-$tok_out}"
+  [ -f "$file" ] && read -r s_sid s_ms s_key s_rate t_key t_api t_dec t_ttft p_try 2>/dev/null < "$file"
+  case "$s_ms" in (''|*[!0-9]*) s_sid="" ;; (*) s_ms=$(( 10#$s_ms )) ;; esac
+  case "$t_api" in (''|*[!0-9]*) t_key=""; t_api=0 ;; (*) t_api=$(( 10#$t_api )) ;; esac
+  case "$p_try" in (''|*[!0-9]*) p_try=0 ;; (*) p_try=$(( 10#$p_try )) ;; esac
+  case "$s_rate" in (''|*[!0-9]*) s_rate="" ;; (*) s_rate=$(( 10#$s_rate )) ;; esac
+  case "$t_dec" in (''|*[!0-9]*) t_dec="" ;; (*) t_dec=$(( 10#$t_dec )) ;; esac
+  case "$t_ttft" in (''|*[!0-9]*) t_ttft="" ;; (*) t_ttft=$(( 10#$t_ttft )) ;; esac
+  [ "$t_key" = - ] && t_key=""
+  if [ "$s_sid" != "$sid" ] || [ "$api_ms" -lt "$s_ms" ]; then
+    s_ms=$api_ms; s_key=$key; s_rate=""
+    t_key=""; t_api=$api_ms; t_dec=""; t_ttft=""; p_try=0; dirty=1
+  elif [ "$api_ms" -gt "$s_ms" ]; then
+    if [ "$key" != "$s_key" ] && [ -n "$out" ]; then
+      s_rate=$(( (out * 1000 + (api_ms - s_ms) / 2) / (api_ms - s_ms) ))
+    fi
+    s_ms=$api_ms; s_key=$key; dirty=1
+  fi
+  # Transcript step, deliberately apart from the anchor above: it fires on a key it
+  # has not resolved once any API time has landed since its last resolution, in
+  # whichever order the payload delivers the two. Mid-stream renders (new key, no
+  # new time) skip it. A state file that cannot be written never triggers it, so a
+  # write failure cannot turn into a read on every render. Tries reset only when a
+  # lookup resolves (or gives up), never on a key change: a key that kept changing
+  # after API time landed would otherwise read on every render.
+  if [ "$key" != "$t_key" ] && [ "$api_ms" -gt "$t_api" ] && [ -n "$in" ] && [ -n "$out" ] \
+     && [ "${CORALLINE_NO_SAMPLE:-0}" != 1 ] && [ -f "$transcript" ] \
+     && { [ -w "$file" ] || { [ ! -e "$file" ] && [ -w "$CORALLINE_DIR" ]; }; }; then
+    toks_transcript "$in" "$out"
+    if [ "$_TT" = pending ]; then
+      p_try=$(( p_try + 1 )); [ "$p_try" -ge "$TOKS_TRIES" ] && _TT=na
+    fi
+    case "$_TT" in
+      (pending) ;;
+      (na) t_key=$key; t_api=$api_ms; t_dec=""; t_ttft=""; p_try=0 ;;
+      (*) t_key=$key; t_api=$api_ms; t_dec=${_TT%% *}; t_ttft=${_TT#* }; p_try=0
+          [ "$t_ttft" = - ] && t_ttft="" ;;
+    esac
+    dirty=1
+  fi
+  _TOKS_RATE=$s_rate; _TOKS_DEC=$t_dec; _TOKS_TTFT=$t_ttft
+  [ "$dirty" = 1 ] && [ "${CORALLINE_NO_SAMPLE:-0}" != 1 ] || return 0
+  [ -d "$CORALLINE_DIR" ] || mkdir -p "$CORALLINE_DIR" 2>/dev/null
+  [ -e "$file" ] || toks_evict
+  printf '%s %s %s %s %s %s %s %s %s\n' "$sid" "$s_ms" "$s_key" "${s_rate:--}" "${t_key:--}" \
+    "$t_api" "${t_dec:--}" "${t_ttft:--}" "$p_try" 2>/dev/null >| "$file"
+}
+
+# Decode rate and TTFT of one response, from the transcript, because the payload
+# carries neither. Every streamed block becomes a transcript entry stamped at its
+# content_block_stop, and a thinking block also records thinkingDurationMs, its
+# start-to-stop time (Claude Code 2.1.287). So for a response that opens with
+# thinking: first token ≈ first entry's stamp − thinkingDurationMs, end = last
+# entry's stamp, request start ≈ the latest earlier stamp not after the first token.
+# The response is the newest message whose usage matches the payload's in and out
+# exactly; no match means the transcript has not been flushed yet (pending). A
+# response that opens with text or a tool call has no start mark (na). Runs only
+# from toks_sample's transcript step: one tail and one jq, bounded per response.
+toks_transcript() {  # $1=in $2=out → _TT: "decode ttft_ms" (ttft may be -) | pending | na
+  local d t
+  _TT=$(tail -c "$TOKS_TAIL" -- "$transcript" 2>/dev/null | jq -Rrn --argjson in "$1" --argjson out "$2" '
+    def ms: (.[0:19] + "Z" | fromdateiso8601) * 1000 + ((.[20:23] | tonumber?) // 0);
+    def insum: (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0);
+    [inputs | fromjson? | select(type == "object")] as $e
+    | [range(0; $e | length) | select($e[.].type == "assistant"
+        and $e[.].message.usage.output_tokens == $out and ($e[.].message.usage | insum) == $in)] as $hit
+    | if ($hit | length) == 0 then "pending"
+      else $e[$hit[-1]].message.id as $mid
+      | [range(0; $e | length) | select($e[.].type == "assistant" and $e[.].message.id == $mid)] as $mi
+      | $e[$mi[0]] as $first | $e[$mi[-1]] as $last
+      | if ($first.message.content[0].type? != "thinking") or (($first.thinkingDurationMs // 0) < 2) then "na"
+        else (($first.timestamp | ms) - $first.thinkingDurationMs) as $tf
+        | ($last.timestamp | ms) as $te
+        | if $te <= $tf then "na"
+          else ([$e[0:$mi[0]][] | .timestamp? | select(type == "string") | (ms? // empty) | select(. <= $tf)] | max) as $tr
+          | "\(($out * 1000 / ($te - $tf) + 0.5) | floor) \(if $tr == null then "-" else ($tf - $tr | floor) end)"
+          end
+        end
+      end' 2>/dev/null)
+  _TT=${_TT%$'\r'}               # native Windows jq writes CRLF
+  case "$_TT" in (na|pending) return 0 ;; esac
+  d=${_TT%% *}; t=${_TT#* }
+  case "$d" in (''|*[!0-9]*) _TT=pending; return 0 ;; esac
+  case "$t" in (-) ;; (''|*[!0-9]*) _TT=pending ;; esac
+}
+
+# Runs only when a session creates its file (its first render, or after being
+# evicted), so the steady state stays fork-free. Each creation removes at most
+# the single least-recently-written file once TOKS_KEEP is reached, which keeps
+# the store bounded. Evicting a live but idle session costs it one re-anchor.
+toks_evict() {
+  local f oldest="" n=0
+  for f in "$CORALLINE_DIR"/toks-*; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    n=$(( n + 1 ))
+    [ -z "$oldest" ] || [ "$f" -ot "$oldest" ] && oldest="$f"
+  done
+  [ "$n" -ge "$TOKS_KEEP" ] && [ -n "$oldest" ] && rm -f "$oldest" 2>/dev/null
+  return 0
+}
+
+seg_toks() {  # output tokens per second of the last response, prefill excluded
+  [ "${_TOKS_OK:-0}" = 1 ] && [ "$api_ms" -gt 0 ] || return 0
+  # The ground is the dark data segment (ctx), so the inks are the gauge ones every
+  # theme tunes for it, as ctx and cache use: the value in OK, the unit in DIM.
+  # VL_FG_TEXT is the pastel-pill ink and reads dark on dark in seven of the ten
+  # themes (catppuccin, dracula, nord, tokyo-night, lunar-pink, morning-haze, reverie).
+  # The value is the last resolved decode rate. When the last response could not be
+  # resolved (no opening thinking block), the prefill-inclusive rate stands in with
+  # ≥, since it can only understate the decode rate.
+  local bg="${VL_BG_TOKS:-$VL_BG_CTX}" g="${VL_TOKS_GLYPH:+$VL_TOKS_GLYPH }" fgd v pre=""
+  fg "$VL_FG_DIM"; fgd="$_FG"
+  if [ -n "$_TOKS_DEC" ]; then v=$_TOKS_DEC
+  elif [ -n "$_TOKS_RATE" ]; then v=$_TOKS_RATE; pre="≥"
+  else
+    push "$bg" "${fgd} ${g}… tok/s "
+    return 0
+  fi
+  fmt_tok "$v"
+  fg "$VL_FG_OK"
+  push "$bg" "${_FG} ${g}${pre}${_TOK} ${fgd}tok/s "
+}
+
+seg_ttft() {  # time to first token of the last response that opened with thinking
+  [ "${_TOKS_OK:-0}" = 1 ] && [ -n "$_TOKS_TTFT" ] || return 0
+  local bg="${VL_BG_TTFT:-$VL_BG_CTX}" g="${VL_TTFT_GLYPH:+$VL_TTFT_GLYPH }" fgd v unit=s t
+  fg "$VL_FG_DIM"; fgd="$_FG"
+  t=$(( (_TOKS_TTFT + 50) / 100 ))          # tenths of a second
+  if [ "$t" -lt 100 ]; then
+    printf -v v '%d.%d' $(( t / 10 )) $(( t % 10 ))
+  else
+    # Whole seconds, rounded like the tenths above: fmt_duration truncates, which
+    # would show 9950-9999 ms as "9s", below the "9.9s" of 9900-9949 ms.
+    fmt_duration $(( (_TOKS_TTFT + 500) / 1000 * 1000 )) 1; v=$_DUR; unit=""
+  fi
+  fg "$VL_FG_OK"
+  push "$bg" "${_FG} ${g}${v}${fgd}${unit} "
+}
+
 seg_limit() {  # $1=label $2=pct $3=resets_at $4=bg $5=canonical pct_milli(optional)
   [ -n "$2" ] || return 0
   local v fgc rst=""
@@ -2210,7 +2399,10 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
     ((member(member(.; "prompt_cache"); "hit_ratio")) as $h |
       if ($h|type) == "number" then ($h * 100 | tostring) else "" end),
     ((member(member(.; "prompt_cache"); "expires_at")) as $x |
-      if ($x|type) == "number" then ($x | tostring) else "" end)
+      if ($x|type) == "number" then ($x | tostring) else "" end),
+    (member(member(.; "cost"); "total_api_duration_ms") // 0),
+    (member(.; "transcript_path") // ""),
+    (member(.; "session_id") // "")
   ] | map(scrub) | join("\u001f")
   end' 2>/dev/null); then
   _JSON_OK=1
@@ -2218,9 +2410,10 @@ fi
 IFS=$'\037' read -r cwd model ctx_pct _CTX_EMPTY tok_in tok_out tok_cr tok_cw \
                  fh_pct fh_rst wd_pct wd_rst cost _COST_KIND \
                  lines_add lines_del out_style dur_ms effort \
-                 cache_pct cache_exp <<JSON
+                 cache_pct cache_exp api_ms transcript sid <<JSON
 $_JSON_FIELDS
 JSON
+sid="${sid%$'\r'}"  # native Windows jq writes CRLF; the last field keeps the CR
 
 _SEG_SCAN=" $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 "
 [ "$VL_FLOAT" = "1" ] && _SEG_SCAN="$_SEG_SCAN$VL_FLOAT_SEGMENTS "
@@ -2253,6 +2446,8 @@ if [ "$_STATE_BURN_GATE" = 1 ] || [ "$_STATE_RL5_GATE" = 1 ] || [ "$_STATE_RL7_G
   fi
   case "$_SEG_SCAN" in (*" burn "*) burn_estimate ;; esac
 fi
+_TOKS_OK=0; _TOKS_RATE=""; _TOKS_DEC=""; _TOKS_TTFT=""
+case "$_SEG_SCAN" in (*" toks "*|*" ttft "*) toks_sample ;; esac
 
 # Defensive ANSI stripper (the VL_NOCOLOR path should already emit none) → _PLAIN.
 strip_ansi() {
