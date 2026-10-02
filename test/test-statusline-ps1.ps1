@@ -1637,6 +1637,14 @@ fi
     $trR = Render-Tr 21000 8000 10
     $trPlain = Plain $trR.Stdout
     Check 'toks writable again: decode 5 tok/s and ttft 1.0s' ($trPlain.Contains(' 5 tok/s ') -and $trPlain.Contains($ttftGlyph + ' 1.0s '))
+
+    # Whole seconds round like the tenths do: 9960 ms is 10s, never the truncated 9s.
+    $ttftRoundDir = Join-Path $toksRoot 'ttft-round'
+    $ttftRoundState = Join-Path $ttftRoundDir ('coralline\toks-' + $toksSid)
+    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($ttftRoundState))
+    [IO.File]::WriteAllText($ttftRoundState, "$toksSid 9000 5000:400 - 5000:400 9000 100 9960 - 0`n", [Text.UTF8Encoding]::new($false))
+    $ttftRoundR = Render-Tr 9000 5000 400 $trConfig @{ CLAUDE_CONFIG_DIR=$ttftRoundDir; CORALLINE_NO_SAMPLE='1' }
+    Check 'ttft 9960 ms rounds to 10s' ((Plain $ttftRoundR.Stdout).Contains($ttftGlyph + ' 10s '))
     Check 'toks writable again: state' ((Read-TrState) -ceq (Toks-Line 21000 '8000:10' 3 '8000:10' 21000 5 1000 $null 0))
 
     # CORALLINE_NO_SAMPLE never reads the transcript or writes state.

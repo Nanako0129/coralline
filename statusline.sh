@@ -7,7 +7,9 @@
 #   * Minimal process spawning per render — helpers return via globals
 #     (printf -v) instead of $(...) subshells, so it stays cheap even under
 #     Git Bash on Windows, where fork() is emulated and expensive.
-#   * One jq call, one git call. Pure bash arithmetic (no bc).
+#   * One jq call, one git call. Pure bash arithmetic (no bc). Exception, opt-in:
+#     with `toks` or `ttft` listed, the render that closes a response (and at most
+#     two retries while the transcript catches up) adds one tail and one jq.
 #   * Works on macOS bash 3.2 and Linux/Windows (Git Bash) bash 4+/5.
 #   * Everything themeable via ~/.claude/coralline.conf (sourced bash)
 #
@@ -1669,9 +1671,9 @@ toks_sample() {  # once per render → _TOKS_OK, _TOKS_RATE, _TOKS_DEC, _TOKS_TT
   case "$s_ms" in (''|*[!0-9]*) s_sid="" ;; (*) s_ms=$(( 10#$s_ms )) ;; esac
   case "$t_api" in (''|*[!0-9]*) t_key=""; t_api=0 ;; (*) t_api=$(( 10#$t_api )) ;; esac
   case "$p_try" in (''|*[!0-9]*) p_try=0 ;; (*) p_try=$(( 10#$p_try )) ;; esac
-  for f in s_rate t_dec t_ttft; do
-    eval "case \"\$$f\" in (''|*[!0-9]*) $f='' ;; (*) $f=\$(( 10#\$$f )) ;; esac"
-  done
+  case "$s_rate" in (''|*[!0-9]*) s_rate="" ;; (*) s_rate=$(( 10#$s_rate )) ;; esac
+  case "$t_dec" in (''|*[!0-9]*) t_dec="" ;; (*) t_dec=$(( 10#$t_dec )) ;; esac
+  case "$t_ttft" in (''|*[!0-9]*) t_ttft="" ;; (*) t_ttft=$(( 10#$t_ttft )) ;; esac
   [ "$t_key" = - ] && t_key=""
   [ "$p_key" = - ] && p_key=""
   if [ "$s_sid" != "$sid" ] || [ "$api_ms" -lt "$s_ms" ]; then
@@ -1738,7 +1740,7 @@ toks_transcript() {  # $1=in $2=out → _TT: "decode ttft_ms" (ttft may be -) | 
         else (($first.timestamp | ms) - $first.thinkingDurationMs) as $tf
         | ($last.timestamp | ms) as $te
         | if $te <= $tf then "na"
-          else ([$e[0:$mi[0]][] | .timestamp? | select(type == "string") | ms | select(. <= $tf)] | max) as $tr
+          else ([$e[0:$mi[0]][] | .timestamp? | select(type == "string") | (ms? // empty) | select(. <= $tf)] | max) as $tr
           | "\(($out * 1000 / ($te - $tf) + 0.5) | floor) \(if $tr == null then "-" else ($tf - $tr | floor) end)"
           end
         end
@@ -1795,7 +1797,9 @@ seg_ttft() {  # time to first token of the last response that opened with thinki
   if [ "$t" -lt 100 ]; then
     printf -v v '%d.%d' $(( t / 10 )) $(( t % 10 ))
   else
-    fmt_duration "$_TOKS_TTFT" 1; v=$_DUR; unit=""
+    # Whole seconds, rounded like the tenths above: fmt_duration truncates, which
+    # would show 9950-9999 ms as "9s", below the "9.9s" of 9900-9949 ms.
+    fmt_duration $(( (_TOKS_TTFT + 500) / 1000 * 1000 )) 1; v=$_DUR; unit=""
   fi
   fg "$VL_FG_OK"
   push "$bg" "${_FG} ${g}${v}${fgd}${unit} "

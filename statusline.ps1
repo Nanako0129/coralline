@@ -2933,6 +2933,7 @@ if ($BurnStateGate -or $Limit5StateGate -or $Limit7StateGate) {
 $ToksKeep = 32  # internal: max per-session files kept in the coralline dir
 $ToksTail = 1048576  # internal: transcript bytes read to find a response
 $ToksTries = 3  # internal: lookups per response before it is given up
+$ToksScanBack = 50  # internal: lines before a response searched for its request stamp
 
 # Runs only when a session creates its file, so the steady state never lists the
 # directory. Removes at most the single least-recently-written toks file once
@@ -3022,6 +3023,15 @@ function Convert-TrTimestampMs($Value) {
     return [double]($sec * 1000 + $frac)
 }
 
+# One transcript line as an object, or $null (blank, cut, or not a JSON object).
+function ConvertFrom-ToksLine([string]$Line) {
+    $t = $Line.Trim()
+    if ($t.Length -eq 0 -or $t[0] -ne '{') { return $null }
+    try { $o = $t | ConvertFrom-Json -ErrorAction Stop } catch { return $null }
+    if ($o -is [pscustomobject]) { return $o }
+    return $null
+}
+
 # Decode rate and TTFT of one response; the jq program in toks_transcript(), step for
 # step. Returns 'decode ttft_ms' (ttft may be '-'), 'pending' or 'na'. Reads only the
 # last $ToksTail bytes, so the first line may be cut and is skipped when it does not parse.
@@ -3041,17 +3051,24 @@ function Get-ToksTranscript([string]$Path, [double]$In, [double]$Out) {
                 $got += $n
             }
         } finally { $fs.Dispose() }
-        $entries = [System.Collections.Generic.List[object]]::new()
-        foreach ($line in $Utf8NoBom.GetString($buf, 0, $got).Split("`n")) {
-            $t = $line.Trim()
-            if ($t.Length -eq 0 -or $t[0] -ne '{') { continue }
-            try { $o = $t | ConvertFrom-Json -ErrorAction Stop } catch { continue }
-            if ($o -is [pscustomobject]) { [void]$entries.Add($o) }
+        # Parse lazily: a ConvertFrom-Json per line of a 1 MiB tail is slow on Windows
+        # PowerShell 5.1. Only lines carrying this response's output_tokens can be it (every
+        # entry of one message repeats its usage), so only those are parsed for the match,
+        # and only the $ToksScanBack lines before it for the request stamp. bash's jq scans
+        # every earlier entry; the latest stamp at or before the first token sits right
+        # before the response, so the window only matters for a pathological tail.
+        $lines = $Utf8NoBom.GetString($buf, 0, $got).Split("`n")
+        $outRe = [regex]::new('"output_tokens"\s*:\s*' + ([long]$Out).ToString($Invariant) + '(?![0-9.eE])')
+        $cand = [System.Collections.Generic.List[object]]::new()
+        for ($i = 0; $i -lt $lines.Length; $i++) {
+            if (-not $outRe.IsMatch($lines[$i])) { continue }
+            $o = ConvertFrom-ToksLine $lines[$i]
+            if ($null -ne $o) { [void]$cand.Add(@($i, $o)) }
         }
         # The newest assistant entry whose usage matches the payload's in and out exactly.
-        $hit = -1
-        for ($i = 0; $i -lt $entries.Count; $i++) {
-            $x = $entries[$i]
+        $hit = $null
+        foreach ($c in $cand) {
+            $x = $c[1]
             $ty = Get-TrMember $x 'type'
             if ($ty -isnot [string] -or $ty -cne 'assistant') { continue }
             $usage = Get-TrMember (Get-TrMember $x 'message') 'usage'
@@ -3065,21 +3082,20 @@ function Get-ToksTranscript([string]$Path, [double]$In, [double]$Out) {
                 if ($null -eq $nv) { throw 'usage' }
                 $sum += $nv
             }
-            if ($sum -eq $In) { $hit = $i }
+            if ($sum -eq $In) { $hit = $x }
         }
-        if ($hit -lt 0) { return 'pending' }
-        $mid = Get-TrMember (Get-TrMember $entries[$hit] 'message') 'id'
+        if ($null -eq $hit) { return 'pending' }
+        $mid = Get-TrMember (Get-TrMember $hit 'message') 'id'
         $firstIdx = -1
-        $lastIdx = -1
-        for ($i = 0; $i -lt $entries.Count; $i++) {
-            $ty = Get-TrMember $entries[$i] 'type'
+        $first = $null
+        $last = $null
+        foreach ($c in $cand) {
+            $ty = Get-TrMember $c[1] 'type'
             if ($ty -isnot [string] -or $ty -cne 'assistant') { continue }
-            if (-not (Test-TrEqual (Get-TrMember (Get-TrMember $entries[$i] 'message') 'id') $mid)) { continue }
-            if ($firstIdx -lt 0) { $firstIdx = $i }
-            $lastIdx = $i
+            if (-not (Test-TrEqual (Get-TrMember (Get-TrMember $c[1] 'message') 'id') $mid)) { continue }
+            if ($firstIdx -lt 0) { $firstIdx = [int]$c[0]; $first = $c[1] }
+            $last = $c[1]
         }
-        $first = $entries[$firstIdx]
-        $last = $entries[$lastIdx]
         $content = Get-TrMember (Get-TrMember $first 'message') 'content'
         $c0 = $null
         if ($content -is [System.Array] -and $content.Count -gt 0) { $c0 = $content[0] }
@@ -3093,12 +3109,15 @@ function Get-ToksTranscript([string]$Path, [double]$In, [double]$Out) {
         $tf = (Convert-TrTimestampMs (Get-TrMember $first 'timestamp')) - $d
         $te = Convert-TrTimestampMs (Get-TrMember $last 'timestamp')
         if ($te -le $tf) { return 'na' }
-        # Request start: the latest stamp before the response that is not after the first token.
+        # Request start: the latest stamp before the response that is not after the first
+        # token. An unparsable stamp is skipped, as jq's `(ms? // empty)` skips it.
         $tr = $null
-        for ($i = 0; $i -lt $firstIdx; $i++) {
-            $ts = Get-TrMember $entries[$i] 'timestamp'
+        for ($i = $firstIdx - 1; $i -ge [Math]::Max(0, $firstIdx - $ToksScanBack); $i--) {
+            $o = ConvertFrom-ToksLine $lines[$i]
+            if ($null -eq $o) { continue }
+            $ts = Get-TrMember $o 'timestamp'
             if ($ts -isnot [string] -and $ts -isnot [datetime]) { continue }
-            $ms = Convert-TrTimestampMs $ts
+            try { $ms = Convert-TrTimestampMs $ts } catch { continue }
             if ($ms -le $tf -and ($null -eq $tr -or $ms -gt $tr)) { $tr = $ms }
         }
         $decode = [long][Math]::Floor($Out * 1000.0 / ($te - $tf) + 0.5)
@@ -3181,7 +3200,10 @@ function Get-ToksSample {
         -not [string]::IsNullOrEmpty($toksTranscript) -and -not $toksTranscript.StartsWith('\\') -and -not $toksTranscript.StartsWith('//')) {
         $trPath = ''
         try { $trPath = [IO.Path]::GetFullPath($toksTranscript) } catch { $trPath = '' }
-        if ($trPath -ne '' -and (Test-SafeRegularFile $trPath) -and (Test-ToksWritable $file)) {
+        # The transcript is only read, so a plain regular-file test: Test-SafeRegularFile
+        # would refuse a junctioned or symlinked ~/.claude (dotfiles, OneDrive) and
+        # silently disable decode and ttft, where bash's [ -f ] follows the link.
+        if ($trPath -ne '' -and [IO.File]::Exists($trPath) -and (Test-ToksWritable $file)) {
             if ($pKey -cne $key) { $pKey = $key; $pTry = 0L }
             $tt = Get-ToksTranscript $trPath ([double]$inL) ([double]$outL)
             if ($tt -ceq 'pending') {
@@ -3609,7 +3631,10 @@ function Add-TtftSegment {
         $whole = [Math]::DivRem($tenths, 10L, [ref]$rem)
         $v = $whole.ToString($Invariant) + '.' + $rem.ToString($Invariant)
     } else {
-        $v = Format-Duration $ms $true
+        # Whole seconds, rounded like the tenths above: Format-Duration truncates, which
+        # would show 9950-9999 ms as "9s", below the "9.9s" of 9900-9949 ms.
+        $rounded = [Math]::DivRem($ms + 500L, 1000L, [ref]$rem) * 1000L
+        $v = Format-Duration ([double]$rounded) $true
         $unit = ''
     }
     $fg = Get-Fg $Cfg.VL_FG_OK

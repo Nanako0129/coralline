@@ -190,6 +190,9 @@ check ""                     "ttft hidden when unknown"  "$(paintt '')"
 check "<ok> H 2.4<dim>s "    "ttft in tenths"            "$(paintt 2378)"
 check "<ok> H 0.0<dim>s "    "ttft under 50ms"           "$(paintt 40)"
 check "<ok> H 28s<dim> "     "ttft from 10s up"          "$(paintt 28053)"
+# Whole seconds round like the tenths: fmt_duration alone truncated 9950-9999 ms to 9s.
+check "<ok> H 9.9<dim>s "    "ttft 9949 ms"              "$(paintt 9949)"
+check "<ok> H 10s<dim> "     "ttft 9960 ms rounds up"    "$(paintt 9960)"
 check "<ok> H 1m05s<dim> "   "ttft past a minute"        "$(paintt 65000)"
 _TOKS_TTFT=2378; seg_ttft
 check "238" "empty VL_BG_TTFT → ctx" "$_BG"
@@ -233,6 +236,10 @@ toks_transcript 5000 400; check "100 2000" "older response still exact"     "$_T
 { ev user 10.000; ev attachment 13.000
   ev assistant 14.000 m4 thinking 3000 7000 300; ev assistant 17.000 m4 tool_use "" 7000 300; } >| "$TR"
 toks_transcript 7000 300; check "50 1000" "out-of-order stamp excluded" "$_TT"
+# One unparsable stamp among the earlier entries is skipped, not fatal.
+{ ev user 10.000; printf '{"type":"system","timestamp":"not-a-date"}\n'
+  ev assistant 14.000 m4 thinking 3000 7000 300; ev assistant 17.000 m4 tool_use "" 7000 300; } >| "$TR"
+toks_transcript 7000 300; check "50 1000" "bad earlier stamp skipped" "$_TT"
 { ev assistant 14.000 m5 thinking 3000 7000 300; } >| "$TR"
 toks_transcript 7000 300; check "100 -" "no earlier stamp: ttft unknown" "$_TT"
 { ev assistant 14.000 m6 thinking 3000 7000 300; ev assistant 10.000 m6 text "" 7000 300; } >| "$TR"
