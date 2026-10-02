@@ -55,8 +55,8 @@ sample() {  # $1=api_ms $2=tok_in $3=tok_out [$4=sid] → "<ok>|<rate>"
   printf '%s|%s' "$_TOKS_OK" "$_TOKS_RATE"
 }
 state() { cat "$SLOT" 2>/dev/null; }
-# Expected state line: $1=api $2=key $3=rate $4=tkey $5=t_api $6=decode $7=ttft $8=pkey $9=tries
-line() { printf '%s %s %s %s %s %s %s %s %s %s' "$SID" "$1" "$2" "${3:--}" "${4:--}" "$5" "${6:--}" "${7:--}" "${8:--}" "${9:-0}"; }
+# Expected state line: $1=api $2=key $3=rate $4=tkey $5=t_api $6=decode $7=ttft $8=tries
+line() { printf '%s %s %s %s %s %s %s %s %s' "$SID" "$1" "$2" "${3:--}" "${4:--}" "$5" "${6:--}" "${7:--}" "${8:-0}"; }
 
 # ── Unusable input: no state, segment suppressed ─────────────────────────────
 check "0|" "empty session_id"                "$(sample 0 0 0 '')"
@@ -118,7 +118,7 @@ sample 0 0 0 >/dev/null
 # ── Hostile or odd stored values (code review of the first cut) ──────────────
 # A digits-only value with a leading zero is octal to $(( )), and an 8 or 9 in it
 # made bash 3.2 abort the whole script, not just hide the pill.
-printf '%s 0089 1:1 - - 0089 - - - 0\n' "$SID" >| "$SLOT"
+printf '%s 0089 1:1 - - 0089 - - 0\n' "$SID" >| "$SLOT"
 check "1|500" "leading zeros are decimal"  "$(sample 0189 00010 0050)"   # 50 tok / 100 ms
 check "$(line 189 10:50 500 '' 89)" "normalized on write" "$(state)"
 # A link or a non-file in this session's name is never read, written through, or
@@ -131,7 +131,7 @@ rm -f "$SLOT"; mkdir "$SLOT"
 ( TOKS_KEEP=1; sample 9000 1 1 >/dev/null )
 check "1" "directory in our name: nothing evicted" "$(ls "$CORALLINE_DIR" | wc -l | tr -d ' ')"
 rmdir "$SLOT"
-printf '%s 1000 1:1 - - 1000 - - - 0\n' "$SID" >| "$SLOT"; chmod 000 "$SLOT"
+printf '%s 1000 1:1 - - 1000 - - 0\n' "$SID" >| "$SLOT"; chmod 000 "$SLOT"
 err=$( { sample 5000 3 100 >/dev/null; } 2>&1 )
 check "" "unreadable state prints nothing" "$err"
 chmod 600 "$SLOT"
@@ -280,7 +280,7 @@ check 2 "render B read the transcript" "$(reads)"
 # Pending: the response is not in the transcript yet. Each retry is counted in the
 # state line and the lookups stop after TOKS_TRIES, resolving it as not derivable.
 sample 15000 7000 90 >/dev/null
-check "$(line 15000 7000:90 30 6000:200 12000 67 1000 7000:90 1)" "pending counted" "$(state)"
+check "$(line 15000 7000:90 30 6000:200 12000 67 1000 1)" "pending counted" "$(state)"
 check "67 1000" "pending keeps the last resolution" "$_TOKS_DEC $_TOKS_TTFT"
 sample 15000 7000 90 >/dev/null; sample 15000 7000 90 >/dev/null
 check "$(line 15000 7000:90 30 7000:90 15000)" "given up after three" "$(state)"
@@ -294,6 +294,14 @@ check 5 "read-only state: no reads" "$(reads)"
 chmod 600 "$SLOT"
 CORALLINE_NO_SAMPLE=1 sample 21000 8100 10 >/dev/null
 check 5 "no-sample: no reads" "$(reads)"
+# A key that keeps changing after API time landed (foreign time, then a response
+# whose usage moves render by render) must not reset the tries: three lookups give
+# up, then nothing until more API time lands. Resetting per key read on every render.
+sample 24000 8200 10 >/dev/null                      # lookup 1 (none of these are in TR)
+sample 30000 9000 11 >/dev/null                      # lookup 2, new key: tries kept
+sample 30000 9000 12 >/dev/null                      # lookup 3: given up
+sample 30000 9000 13 >/dev/null; sample 30000 9000 14 >/dev/null; sample 30000 9000 15 >/dev/null
+check 8 "changing keys: lookups stay bounded" "$(reads)"
 transcript=""
 payload() {  # $1=api_ms $2=tok_in $3=tok_out → sample-input with those fields
   jq -c --argjson ms "$1" --argjson in "$2" --argjson out "$3" --arg sid "$SID" \

@@ -1640,9 +1640,9 @@ seg_cache() {  # prompt-cache hit ratio, and the countdown to the cache expiring
 # renders each second, so a shared slot was observed ping-ponging between two
 # idle-and-active sessions and re-anchoring both forever. Reads and writes are
 # builtins (no fork); a torn or foreign line fails validation and re-anchors.
-# Line: "sid api key rate tkey t_api decode ttft pkey tries", "-" for empty (a
+# Line: "sid api key rate tkey t_api decode ttft tries", "-" for empty (a
 # whitespace IFS would collapse an empty middle field). tkey/t_api/decode/ttft are
-# the last transcript resolution, pkey/tries a lookup still pending for a key.
+# the last transcript resolution; tries counts lookups that found nothing since it.
 # The sid must be lowercase hex and dashes (a Claude Code session UUID); the
 # classes are spelled out because bash 3.2 matches [a-f] by locale collation.
 TOKS_KEEP=32                    # internal: max per-session files kept in CORALLINE_DIR
@@ -1663,11 +1663,11 @@ toks_sample() {  # once per render → _TOKS_OK, _TOKS_RATE, _TOKS_DEC, _TOKS_TT
   # in it aborts the whole script on bash 3.2.
   api_ms=$(( 10#$api_ms ))
   local in="" out="" key s_sid="" s_ms="" s_key="" s_rate="" t_key="" t_api="" t_dec="" t_ttft=""
-  local p_key="" p_try="" dirty=0
+  local p_try="" dirty=0
   case "$tok_in" in (''|*[!0-9]*) ;; (*) in=$(( 10#$tok_in )) ;; esac
   case "$tok_out" in (''|*[!0-9]*) ;; (*) out=$(( 10#$tok_out )) ;; esac
   key="${in:-$tok_in}:${out:-$tok_out}"
-  [ -f "$file" ] && read -r s_sid s_ms s_key s_rate t_key t_api t_dec t_ttft p_key p_try 2>/dev/null < "$file"
+  [ -f "$file" ] && read -r s_sid s_ms s_key s_rate t_key t_api t_dec t_ttft p_try 2>/dev/null < "$file"
   case "$s_ms" in (''|*[!0-9]*) s_sid="" ;; (*) s_ms=$(( 10#$s_ms )) ;; esac
   case "$t_api" in (''|*[!0-9]*) t_key=""; t_api=0 ;; (*) t_api=$(( 10#$t_api )) ;; esac
   case "$p_try" in (''|*[!0-9]*) p_try=0 ;; (*) p_try=$(( 10#$p_try )) ;; esac
@@ -1675,10 +1675,9 @@ toks_sample() {  # once per render → _TOKS_OK, _TOKS_RATE, _TOKS_DEC, _TOKS_TT
   case "$t_dec" in (''|*[!0-9]*) t_dec="" ;; (*) t_dec=$(( 10#$t_dec )) ;; esac
   case "$t_ttft" in (''|*[!0-9]*) t_ttft="" ;; (*) t_ttft=$(( 10#$t_ttft )) ;; esac
   [ "$t_key" = - ] && t_key=""
-  [ "$p_key" = - ] && p_key=""
   if [ "$s_sid" != "$sid" ] || [ "$api_ms" -lt "$s_ms" ]; then
     s_ms=$api_ms; s_key=$key; s_rate=""
-    t_key=""; t_api=$api_ms; t_dec=""; t_ttft=""; p_key=""; p_try=0; dirty=1
+    t_key=""; t_api=$api_ms; t_dec=""; t_ttft=""; p_try=0; dirty=1
   elif [ "$api_ms" -gt "$s_ms" ]; then
     if [ "$key" != "$s_key" ] && [ -n "$out" ]; then
       s_rate=$(( (out * 1000 + (api_ms - s_ms) / 2) / (api_ms - s_ms) ))
@@ -1689,19 +1688,20 @@ toks_sample() {  # once per render → _TOKS_OK, _TOKS_RATE, _TOKS_DEC, _TOKS_TT
   # has not resolved once any API time has landed since its last resolution, in
   # whichever order the payload delivers the two. Mid-stream renders (new key, no
   # new time) skip it. A state file that cannot be written never triggers it, so a
-  # write failure cannot turn into a read on every render; tries bound the rest.
+  # write failure cannot turn into a read on every render. Tries reset only when a
+  # lookup resolves (or gives up), never on a key change: a key that kept changing
+  # after API time landed would otherwise read on every render.
   if [ "$key" != "$t_key" ] && [ "$api_ms" -gt "$t_api" ] && [ -n "$in" ] && [ -n "$out" ] \
      && [ "${CORALLINE_NO_SAMPLE:-0}" != 1 ] && [ -f "$transcript" ] \
      && { [ -w "$file" ] || { [ ! -e "$file" ] && [ -w "$CORALLINE_DIR" ]; }; }; then
-    [ "$p_key" = "$key" ] || { p_key=$key; p_try=0; }
     toks_transcript "$in" "$out"
     if [ "$_TT" = pending ]; then
       p_try=$(( p_try + 1 )); [ "$p_try" -ge "$TOKS_TRIES" ] && _TT=na
     fi
     case "$_TT" in
       (pending) ;;
-      (na) t_key=$key; t_api=$api_ms; t_dec=""; t_ttft=""; p_key=""; p_try=0 ;;
-      (*) t_key=$key; t_api=$api_ms; t_dec=${_TT%% *}; t_ttft=${_TT#* }; p_key=""; p_try=0
+      (na) t_key=$key; t_api=$api_ms; t_dec=""; t_ttft=""; p_try=0 ;;
+      (*) t_key=$key; t_api=$api_ms; t_dec=${_TT%% *}; t_ttft=${_TT#* }; p_try=0
           [ "$t_ttft" = - ] && t_ttft="" ;;
     esac
     dirty=1
@@ -1710,8 +1710,8 @@ toks_sample() {  # once per render → _TOKS_OK, _TOKS_RATE, _TOKS_DEC, _TOKS_TT
   [ "$dirty" = 1 ] && [ "${CORALLINE_NO_SAMPLE:-0}" != 1 ] || return 0
   [ -d "$CORALLINE_DIR" ] || mkdir -p "$CORALLINE_DIR" 2>/dev/null
   [ -e "$file" ] || toks_evict
-  printf '%s %s %s %s %s %s %s %s %s %s\n' "$sid" "$s_ms" "$s_key" "${s_rate:--}" "${t_key:--}" \
-    "$t_api" "${t_dec:--}" "${t_ttft:--}" "${p_key:--}" "$p_try" 2>/dev/null >| "$file"
+  printf '%s %s %s %s %s %s %s %s %s\n' "$sid" "$s_ms" "$s_key" "${s_rate:--}" "${t_key:--}" \
+    "$t_api" "${t_dec:--}" "${t_ttft:--}" "$p_try" 2>/dev/null >| "$file"
 }
 
 # Decode rate and TTFT of one response, from the transcript, because the payload

@@ -1410,7 +1410,7 @@ fi
     $ttftTableDir = Join-Path $toksRoot 'ttft-table'
     $ttftTableState = Join-Path $ttftTableDir ('coralline\toks-' + $toksSid)
     [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($ttftTableState))
-    [IO.File]::WriteAllText($ttftTableState, "$toksSid 5000 1234567:45678 - 1234567:45678 5000 80 2400 - 0`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($ttftTableState, "$toksSid 5000 1234567:45678 - 1234567:45678 5000 80 2400 0`n", [Text.UTF8Encoding]::new($false))
     $segmentCases = [ordered]@{
         burn = [pscustomobject]@{ Show=@('VL_SEGMENTS=burn','VL_CLOCK=off'); Needle=((Glyph 0x2197) + ' 7d ' + (Glyph 0x21E2)); Payload=$burnPayload; Environment=@{CORALLINE_TEST_NOW='1000000'}; Suppress={ param($p) $p.rate_limits.five_hour.used_percentage=$null; $p.rate_limits.seven_day.used_percentage=$null; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=burn' }
         # The payload's expires_at (1000300) is 300s past the pinned CORALLINE_TEST_NOW,
@@ -1466,9 +1466,9 @@ fi
     }
     $toksConfig = New-Config 'toks-e2e' @(('VL_SEGMENTS=' + (Quote-FromConfigure 'model toks')), 'VL_CLOCK=off')
     $toksDir = Join-Path $toksRoot 'live'
-    # Expected state line: sid api key rate tkey t_api decode ttft pkey tries, '-' for empty.
-    function Toks-Line([long]$Api, [string]$Key, $Rate, $TKey, [long]$TApi, $Dec, $Ttft, $PKey, [int]$Tries) {
-        $fields = @($toksSid, $Api, $Key, $Rate, $TKey, $TApi, $Dec, $Ttft, $PKey, $Tries) | ForEach-Object { if ($null -eq $_ -or [string]$_ -eq '') { '-' } else { [string]$_ } }
+    # Expected state line: sid api key rate tkey t_api decode ttft tries, '-' for empty.
+    function Toks-Line([long]$Api, [string]$Key, $Rate, $TKey, [long]$TApi, $Dec, $Ttft, [int]$Tries) {
+        $fields = @($toksSid, $Api, $Key, $Rate, $TKey, $TApi, $Dec, $Ttft, $Tries) | ForEach-Object { if ($null -eq $_ -or [string]$_ -eq '') { '-' } else { [string]$_ } }
         return (($fields -join ' ') + "`n")
     }
     $toksState = Join-Path $toksDir ('coralline\toks-' + $toksSid)
@@ -1482,26 +1482,26 @@ fi
     $toksRun1 = Invoke-Statusline (Json (New-ToksPayload 1000 5000 40)) $toksConfig $toksWrite '' 5000
     Check-Run 'toks anchor render' $toksRun1
     Check 'toks anchor render is warming' ((Plain $toksRun1.Stdout).Contains((Glyph 0x2026) + ' tok/s'))
-    Check 'toks anchor bytes match Bash printf format' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq (Toks-Line 1000 '5000:40' $null $null 1000 $null $null $null 0))
+    Check 'toks anchor bytes match Bash printf format' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq (Toks-Line 1000 '5000:40' $null $null 1000 $null $null 0))
     $toksRun2 = Invoke-Statusline (Json (New-ToksPayload 3000 6000 150)) $toksConfig $toksWrite '' 5000
     Check-Run 'toks timed render' $toksRun2
     Check 'toks 150 tokens over 2000ms is exactly 75 tok/s (fallback, marked with U+2265)' ((Plain $toksRun2.Stdout).Contains(' ' + [string][char]0x2265 + '75 tok/s '))
-    Check 'toks timed state bytes' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq (Toks-Line 3000 '6000:150' 75 $null 1000 $null $null $null 0))
+    Check 'toks timed state bytes' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq (Toks-Line 3000 '6000:150' 75 $null 1000 $null $null 0))
     Check 'toks state is LF only' (-not [IO.File]::ReadAllText($toksState, $StrictUtf8).Contains("`r"))
 
     $toksForeign = Invoke-Statusline (Json (New-ToksPayload 5000 6000 150)) $toksConfig $toksWrite '' 5000
     Check 'toks foreign time keeps the rate' ((Plain $toksForeign.Stdout).Contains(' ' + [string][char]0x2265 + '75 tok/s '))
-    Check 'toks foreign time is absorbed into the anchor' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq (Toks-Line 5000 '6000:150' 75 $null 1000 $null $null $null 0))
+    Check 'toks foreign time is absorbed into the anchor' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq (Toks-Line 5000 '6000:150' 75 $null 1000 $null $null 0))
 
     $toksPartial = Invoke-Statusline (Json (New-ToksPayload 5000 7000 300)) $toksConfig $toksWrite '' 5000
     Check 'toks partial render keeps the stored rate' ((Plain $toksPartial.Stdout).Contains(' ' + [string][char]0x2265 + '75 tok/s '))
-    Check 'toks partial render leaves the anchor' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq (Toks-Line 5000 '6000:150' 75 $null 1000 $null $null $null 0))
+    Check 'toks partial render leaves the anchor' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq (Toks-Line 5000 '6000:150' 75 $null 1000 $null $null 0))
     $toksNext = Invoke-Statusline (Json (New-ToksPayload 8000 7000 300)) $toksConfig $toksWrite '' 5000
     Check 'toks next response: 300 tokens over 3000ms is 100 tok/s' ((Plain $toksNext.Stdout).Contains(' ' + [string][char]0x2265 + '100 tok/s '))
 
     $toksRestart = Invoke-Statusline (Json (New-ToksPayload 1000 9000 50)) $toksConfig $toksWrite '' 5000
     Check 'toks api total falling re-anchors warming' ((Plain $toksRestart.Stdout).Contains((Glyph 0x2026) + ' tok/s'))
-    Check 'toks restart state bytes' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq (Toks-Line 1000 '9000:50' $null $null 1000 $null $null $null 0))
+    Check 'toks restart state bytes' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq (Toks-Line 1000 '9000:50' $null $null 1000 $null $null 0))
 
     $toksFloat = Invoke-Statusline (Json (New-ToksPayload 3000 9500 100)) $toksConfig $toksWrite '' 5000
     Check 'toks first response after a restart: 100 tokens over 2000ms is 50 tok/s' ((Plain $toksFloat.Stdout).Contains(' ' + [string][char]0x2265 + '50 tok/s '))
@@ -1587,9 +1587,9 @@ fi
     $trPlain = Plain $trR.Stdout
     Check 'toks thinking-first: decode rate 100, no fallback mark' ($trPlain.Contains(' 100 tok/s ') -and -not $trPlain.Contains($ge))
     Check 'ttft thinking-first: 2.0s' ($trPlain.Contains($ttftGlyph + ' 2.0s '))
-    Check 'toks thinking-first: resolution stored' ((Read-TrState) -ceq (Toks-Line 9000 '5000:400' 50 '5000:400' 9000 100 2000 $null 0))
+    Check 'toks thinking-first: resolution stored' ((Read-TrState) -ceq (Toks-Line 9000 '5000:400' 50 '5000:400' 9000 100 2000 0))
     [void](Render-Tr 9000 5000 400)
-    Check 'toks steady render leaves the state alone' ((Read-TrState) -ceq (Toks-Line 9000 '5000:400' 50 '5000:400' 9000 100 2000 $null 0))
+    Check 'toks steady render leaves the state alone' ((Read-TrState) -ceq (Toks-Line 9000 '5000:400' 50 '5000:400' 9000 100 2000 0))
 
     # A text-first newest response has no start mark: fallback with the mark, ttft hidden.
     Write-TrFile $trFile @((New-TrEntry user '07.000'), (New-TrEntry assistant '09.000' 'm3' 'text' $null 6000 50)) $true
@@ -1597,30 +1597,30 @@ fi
     $trPlain = Plain $trR.Stdout
     Check 'toks text-first newest: fallback with the mark' ($trPlain.Contains(' ' + $ge + '17 tok/s '))
     Check 'ttft text-first newest: hidden' (-not $trPlain.Contains($ttftGlyph))
-    Check 'toks text-first newest: resolved as na' ((Read-TrState) -ceq (Toks-Line 12000 '6000:50' 17 '6000:50' 12000 $null $null $null 0))
+    Check 'toks text-first newest: resolved as na' ((Read-TrState) -ceq (Toks-Line 12000 '6000:50' 17 '6000:50' 12000 $null $null 0))
 
     # Reverse order: the time lands under the old key, the key arrives a render later at an
     # equal total. The transcript step still resolves it on the second render.
     Write-TrFile $trFile @((New-TrEntry user '13.000'), (New-TrEntry assistant '15.000' 'm7' 'thinking' 1000 6000 200), (New-TrEntry assistant '17.000' 'm7' 'text' $null 6000 200)) $true
     [void](Render-Tr 15000 6000 50)
-    Check 'toks reverse order: old key resolves nothing' ((Read-TrState) -ceq (Toks-Line 15000 '6000:50' 17 '6000:50' 12000 $null $null $null 0))
+    Check 'toks reverse order: old key resolves nothing' ((Read-TrState) -ceq (Toks-Line 15000 '6000:50' 17 '6000:50' 12000 $null $null 0))
     $trR = Render-Tr 15000 6000 200
     $trPlain = Plain $trR.Stdout
     Check 'toks reverse order: resolved on the second render (67 tok/s)' ($trPlain.Contains(' 67 tok/s '))
     Check 'ttft reverse order: 1.0s' ($trPlain.Contains($ttftGlyph + ' 1.0s '))
-    Check 'toks reverse order: state' ((Read-TrState) -ceq (Toks-Line 15000 '6000:50' 17 '6000:200' 15000 67 1000 $null 0))
+    Check 'toks reverse order: state' ((Read-TrState) -ceq (Toks-Line 15000 '6000:50' 17 '6000:200' 15000 67 1000 0))
 
     # Pending: the response is not in the transcript yet. Retries are counted in the state
     # line, the last resolution stays on screen, and the third miss gives up as na.
     $trR = Render-Tr 18000 7000 90
     $trPlain = Plain $trR.Stdout
     Check 'toks pending: last resolution stays' ($trPlain.Contains(' 67 tok/s ') -and $trPlain.Contains($ttftGlyph + ' 1.0s '))
-    Check 'toks pending: counted' ((Read-TrState) -ceq (Toks-Line 18000 '7000:90' 30 '6000:200' 15000 67 1000 '7000:90' 1))
+    Check 'toks pending: counted' ((Read-TrState) -ceq (Toks-Line 18000 '7000:90' 30 '6000:200' 15000 67 1000 1))
     [void](Render-Tr 18000 7000 90)
-    Check 'toks pending: second miss counted' ((Read-TrState) -ceq (Toks-Line 18000 '7000:90' 30 '6000:200' 15000 67 1000 '7000:90' 2))
+    Check 'toks pending: second miss counted' ((Read-TrState) -ceq (Toks-Line 18000 '7000:90' 30 '6000:200' 15000 67 1000 2))
     $trR = Render-Tr 18000 7000 90
     $trPlain = Plain $trR.Stdout
-    Check 'toks gives up after three misses' ((Read-TrState) -ceq (Toks-Line 18000 '7000:90' 30 '7000:90' 18000 $null $null $null 0))
+    Check 'toks gives up after three misses' ((Read-TrState) -ceq (Toks-Line 18000 '7000:90' 30 '7000:90' 18000 $null $null 0))
     Check 'toks given up: fallback with the mark, ttft hidden' ($trPlain.Contains(' ' + $ge + '30 tok/s ') -and -not $trPlain.Contains($ttftGlyph))
 
     # A state file that cannot be written must not turn into a transcript read: the new
@@ -1642,10 +1642,15 @@ fi
     $ttftRoundDir = Join-Path $toksRoot 'ttft-round'
     $ttftRoundState = Join-Path $ttftRoundDir ('coralline\toks-' + $toksSid)
     [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($ttftRoundState))
-    [IO.File]::WriteAllText($ttftRoundState, "$toksSid 9000 5000:400 - 5000:400 9000 100 9960 - 0`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($ttftRoundState, "$toksSid 9000 5000:400 - 5000:400 9000 100 9960 0`n", [Text.UTF8Encoding]::new($false))
     $ttftRoundR = Render-Tr 9000 5000 400 $trConfig @{ CLAUDE_CONFIG_DIR=$ttftRoundDir; CORALLINE_NO_SAMPLE='1' }
     Check 'ttft 9960 ms rounds to 10s' ((Plain $ttftRoundR.Stdout).Contains($ttftGlyph + ' 10s '))
-    Check 'toks writable again: state' ((Read-TrState) -ceq (Toks-Line 21000 '8000:10' 3 '8000:10' 21000 5 1000 $null 0))
+    Check 'toks writable again: state' ((Read-TrState) -ceq (Toks-Line 21000 '8000:10' 3 '8000:10' 21000 5 1000 0))
+    # Tries reset only when a lookup resolves or gives up, never on a key change: a key
+    # that kept changing after API time landed would otherwise read on every render.
+    [void](Render-Tr 24000 7771 7771)
+    [void](Render-Tr 24000 7772 7772)
+    Check 'toks key change keeps the tries' ((Read-TrState) -ceq (Toks-Line 24000 '7771:7771' 2590 '8000:10' 21000 5 1000 2))
 
     # CORALLINE_NO_SAMPLE never reads the transcript or writes state.
     $nsDir = Join-Path $toksRoot 'tr-nosample'

@@ -2926,7 +2926,7 @@ if ($BurnStateGate -or $Limit5StateGate -or $Limit7StateGate) {
 # Output speed and time to first token of the last response; mirrors toks_sample() and
 # toks_transcript() in statusline.sh (read the comments there for the semantics). One
 # sample per render, never from a segment builder. State line, 10 fields with '-' for
-# empty: "sid api_ms key rate tkey t_api decode ttft pkey tries\n", in a file per session
+# empty: "sid api_ms key rate tkey t_api decode ttft tries\n", in a file per session
 # (toks-<sid>); a shared slot ping-pongs between sessions that all render every second
 # under refreshInterval. Returns Ok=$false for unusable input or a non-regular object at
 # the state path. Rate/Dec/Ttft '' = none yet.
@@ -3086,16 +3086,24 @@ function Get-ToksTranscript([string]$Path, [double]$In, [double]$Out) {
         }
         if ($null -eq $hit) { return 'pending' }
         $mid = Get-TrMember (Get-TrMember $hit 'message') 'id'
+        # First and last entries of that message, found by its id across every line (as
+        # jq does), not only among the output_tokens matches: an entry written with
+        # interim usage must still count as the message's first.
         $firstIdx = -1
         $first = $null
         $last = $null
-        foreach ($c in $cand) {
-            $ty = Get-TrMember $c[1] 'type'
+        $idRe = [regex]::new('"id"\s*:\s*"' + [regex]::Escape([string]$mid) + '"')
+        for ($i = 0; $i -lt $lines.Length; $i++) {
+            if (-not $idRe.IsMatch($lines[$i])) { continue }
+            $o = ConvertFrom-ToksLine $lines[$i]
+            if ($null -eq $o) { continue }
+            $ty = Get-TrMember $o 'type'
             if ($ty -isnot [string] -or $ty -cne 'assistant') { continue }
-            if (-not (Test-TrEqual (Get-TrMember (Get-TrMember $c[1] 'message') 'id') $mid)) { continue }
-            if ($firstIdx -lt 0) { $firstIdx = [int]$c[0]; $first = $c[1] }
-            $last = $c[1]
+            if (-not (Test-TrEqual (Get-TrMember (Get-TrMember $o 'message') 'id') $mid)) { continue }
+            if ($firstIdx -lt 0) { $firstIdx = $i; $first = $o }
+            $last = $o
         }
+        if ($null -eq $first) { return 'pending' }
         $content = Get-TrMember (Get-TrMember $first 'message') 'content'
         $c0 = $null
         if ($content -is [System.Array] -and $content.Count -gt 0) { $c0 = $content[0] }
@@ -3147,15 +3155,15 @@ function Get-ToksSample {
     $outL = ConvertTo-ToksCount $outRaw
     $key = $(if ($null -ne $inL) { $inL.ToString($Invariant) } else { $inRaw }) + ':' + $(if ($null -ne $outL) { $outL.ToString($Invariant) } else { $outRaw })
 
-    $f = @('', '', '', '', '', '', '', '', '', '')
+    $f = @('', '', '', '', '', '', '', '', '')
     if (Test-SafeRegularFile $file) {
         $text = Read-StrictUtf8File $file
         if ($null -ne $text) {
             $nl = $text.IndexOf("`n")
             if ($nl -ge 0) { $text = $text.Substring(0, $nl) }
-            $parts = [regex]::new('[ \t]+').Split($text.TrimStart(' ', "`t"), 10)
-            for ($i = 0; $i -lt $parts.Length -and $i -lt 10; $i++) { $f[$i] = $parts[$i] }
-            $f[9] = $f[9].TrimEnd(' ', "`t")
+            $parts = [regex]::new('[ \t]+').Split($text.TrimStart(' ', "`t"), 9)
+            for ($i = 0; $i -lt $parts.Length -and $i -lt 9; $i++) { $f[$i] = $parts[$i] }
+            $f[8] = $f[8].TrimEnd(' ', "`t")
         }
     }
     $sSid = $f[0]
@@ -3166,20 +3174,18 @@ function Get-ToksSample {
     if ($tKey -ceq '-') { $tKey = '' }
     $tApi = ConvertTo-ToksCount $f[5]
     if ($null -eq $tApi) { $tKey = ''; $tApi = 0L }
-    $pTry = ConvertTo-ToksCount $f[9]
+    $pTry = ConvertTo-ToksCount $f[8]
     if ($null -eq $pTry) { $pTry = 0L }
     # rate/decode/ttft: digits only, normalized (no leading zeros), else empty
     $sRate = ''; $tDec = ''; $tTtft = ''
     $n = ConvertTo-ToksCount $f[3]; if ($null -ne $n) { $sRate = $n.ToString($Invariant) }
     $n = ConvertTo-ToksCount $f[6]; if ($null -ne $n) { $tDec = $n.ToString($Invariant) }
     $n = ConvertTo-ToksCount $f[7]; if ($null -ne $n) { $tTtft = $n.ToString($Invariant) }
-    $pKey = $f[8]
-    if ($pKey -ceq '-') { $pKey = '' }
 
     $dirty = $false
     if ($sSid -cne $sid -or $apiL -lt $sMsL) {
         $sMsL = $apiL; $sKey = $key; $sRate = ''
-        $tKey = ''; $tApi = $apiL; $tDec = ''; $tTtft = ''; $pKey = ''; $pTry = 0L
+        $tKey = ''; $tApi = $apiL; $tDec = ''; $tTtft = ''; $pTry = 0L
         $dirty = $true
     } elseif ($apiL -gt $sMsL) {
         # ponytail: a token count above 9e15 would overflow the *1000; Bash wraps there, this keeps the stored rate.
@@ -3204,17 +3210,17 @@ function Get-ToksSample {
         # would refuse a junctioned or symlinked ~/.claude (dotfiles, OneDrive) and
         # silently disable decode and ttft, where bash's [ -f ] follows the link.
         if ($trPath -ne '' -and [IO.File]::Exists($trPath) -and (Test-ToksWritable $file)) {
-            if ($pKey -cne $key) { $pKey = $key; $pTry = 0L }
+            # Tries reset only when a lookup resolves or gives up, never on a key change.
             $tt = Get-ToksTranscript $trPath ([double]$inL) ([double]$outL)
             if ($tt -ceq 'pending') {
                 $pTry++
                 if ($pTry -ge $ToksTries) { $tt = 'na' }
             }
             if ($tt -ceq 'na') {
-                $tKey = $key; $tApi = $apiL; $tDec = ''; $tTtft = ''; $pKey = ''; $pTry = 0L
+                $tKey = $key; $tApi = $apiL; $tDec = ''; $tTtft = ''; $pTry = 0L
             } elseif ($tt -cne 'pending') {
                 $pair = $tt.Split(' ')
-                $tKey = $key; $tApi = $apiL; $tDec = $pair[0]; $tTtft = $pair[1]; $pKey = ''; $pTry = 0L
+                $tKey = $key; $tApi = $apiL; $tDec = $pair[0]; $tTtft = $pair[1]; $pTry = 0L
                 if ($tTtft -ceq '-') { $tTtft = '' }
             }
             $dirty = $true
@@ -3230,7 +3236,7 @@ function Get-ToksSample {
         if (-not [IO.Directory]::Exists($parent)) { [void][IO.Directory]::CreateDirectory($parent) }
         if (-not (Test-StateObjectExists $file)) { Remove-OldestToksFile $parent }
         $fields = @($sid, $sMsL.ToString($Invariant), $sKey, (ConvertTo-ToksField $sRate), (ConvertTo-ToksField $tKey),
-            $tApi.ToString($Invariant), (ConvertTo-ToksField $tDec), (ConvertTo-ToksField $tTtft), (ConvertTo-ToksField $pKey), $pTry.ToString($Invariant))
+            $tApi.ToString($Invariant), (ConvertTo-ToksField $tDec), (ConvertTo-ToksField $tTtft), $pTry.ToString($Invariant))
         [IO.File]::WriteAllBytes($file, $Utf8NoBom.GetBytes(($fields -join ' ') + "`n"))
     } catch { }
     return $result
