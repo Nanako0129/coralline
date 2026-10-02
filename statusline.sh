@@ -157,11 +157,13 @@ VL_BG_EFFORT=141
 VL_BG_NODE=""                   # optional; falls back to VL_BG_MODEL when empty
 VL_BG_PYTHON=""                 # optional; falls back to VL_BG_MODEL when empty
 VL_BG_CACHE=""                  # optional; falls back to VL_BG_CTX when empty
+VL_BG_TOKS=""                   # optional; falls back to VL_BG_CTX when empty
 VL_BG_BAR=""                   # classic style only — the uniform bar behind the whole
                                # row ("R,G,B" or a 256 index); empty → p10k's 238.
                                # An explicit VL_LEAN_BG overrides it.
 printf -v VL_NODE_GLYPH '\xee\x9c\x98'   # U+E718 Nerd Font node glyph (word in VL_ASCII)
 printf -v VL_PY_GLYPH   '\xee\x9c\xbc'   # U+E73C Nerd Font python glyph (word in VL_ASCII)
+printf -v VL_TOKS_GLYPH '\xef\x83\xa4'   # U+F0E4 Nerd Font tachometer (dropped in VL_ASCII)
 VL_RUNTIME_PROBE=0              # node/python: 1 = also detect via `node`/`python3`
                                # on PATH when no pin file (forks per render; off by default)
 
@@ -277,6 +279,7 @@ if [ "$VL_ASCII" = "1" ]; then
   VL_CAP_L="" ; VL_CAP_R="" ; VL_SEP=""
   VL_BAR_FILL="#" ; VL_BAR_EMPTY="-"
   VL_NODE_GLYPH="node" ; VL_PY_GLYPH="py"
+  VL_TOKS_GLYPH=""                # the pill already says tok/s; no word needed
 fi
 
 # Classic style: Powerlevel10k's stock "Classic" preset — lean rendering on one
@@ -1616,6 +1619,83 @@ seg_cache() {  # prompt-cache hit ratio, and the countdown to the cache expiring
   push "${VL_BG_CACHE:-$VL_BG_CTX}" "${fgc} ${VL_CACHE_GLYPH} ${v}% ${left} "
 }
 
+# Output speed of the last response. Neither payload field is a rate:
+# context_window.total_output_tokens is the LAST response's output (despite the
+# name), and cost.total_api_duration_ms is the process-wide sum of API wall time
+# (every request: subagents, side queries, retries, prefill). So each render keeps
+# an anchor (api total, last-response key, rate) in a per-session file, and the
+# rate is the new response's tokens over the API time that landed since. Only a
+# render where the total grew can close a response: a render that sees a new
+# response before its duration lands leaves the anchor alone. A grown total with
+# the same response is foreign time and is absorbed into the anchor rather than
+# charged to the next response; parallel work that lands in the same interval
+# still reads low, which the payload cannot separate.
+# One file per session, never shared: with refreshInterval every open session
+# renders each second, so a shared slot was observed ping-ponging between two
+# idle-and-active sessions and re-anchoring both forever. Reads and writes are
+# builtins (no fork); a torn or foreign line fails validation and re-anchors.
+# The sid must be a plain lowercase UUID; the classes are spelled out because
+# bash 3.2 matches a range like [a-f] by locale collation (A would pass).
+TOKS_KEEP=32                    # internal: max per-session files kept in CORALLINE_DIR
+toks_sample() {  # once per render → _TOKS_OK, _TOKS_RATE ("" = no response timed yet)
+  _TOKS_OK=0; _TOKS_RATE=""
+  case "$api_ms" in (''|*[!0-9]*) return 0 ;; esac
+  case "$sid" in ([0123456789abcdef]*) ;; (*) return 0 ;; esac
+  case "$sid" in (*[!0123456789abcdef-]*) return 0 ;; esac
+  _TOKS_OK=1
+  local file="$CORALLINE_DIR/toks-$sid" key="$tok_in:$tok_out" s_sid="" s_ms="" s_key="" s_rate=""
+  [ -f "$file" ] && read -r s_sid s_ms s_key s_rate < "$file" 2>/dev/null
+  case "$s_ms" in (''|*[!0-9]*) s_sid="" ;; esac
+  case "$s_rate" in (*[!0-9]*) s_rate="" ;; esac
+  if [ "$s_sid" != "$sid" ] || [ "$api_ms" -lt "$s_ms" ]; then
+    s_rate=""
+  elif [ "$api_ms" -eq "$s_ms" ]; then
+    _TOKS_RATE="$s_rate"; return 0
+  elif [ "$key" != "$s_key" ]; then
+    case "$tok_out" in
+      (''|*[!0-9]*) ;;
+      (*) s_rate=$(( (tok_out * 1000 + (api_ms - s_ms) / 2) / (api_ms - s_ms) )) ;;
+    esac
+  fi
+  _TOKS_RATE="$s_rate"
+  [ "${CORALLINE_NO_SAMPLE:-0}" = 1 ] && return 0
+  [ -d "$CORALLINE_DIR" ] || mkdir -p "$CORALLINE_DIR" 2>/dev/null
+  [ -f "$file" ] || toks_evict
+  printf '%s %s %s %s\n' "$sid" "$api_ms" "$key" "$s_rate" 2>/dev/null >| "$file"
+}
+
+# Runs only when a session creates its file (its first render, or after being
+# evicted), so the steady state stays fork-free. Each creation removes at most
+# the single least-recently-written file once TOKS_KEEP is reached, which keeps
+# the store bounded. Evicting a live but idle session costs it one re-anchor.
+toks_evict() {
+  local f oldest="" n=0
+  for f in "$CORALLINE_DIR"/toks-*; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    n=$(( n + 1 ))
+    [ -z "$oldest" ] || [ "$f" -ot "$oldest" ] && oldest="$f"
+  done
+  [ "$n" -ge "$TOKS_KEEP" ] && [ -n "$oldest" ] && rm -f "$oldest" 2>/dev/null
+  return 0
+}
+
+seg_toks() {  # output tokens per second of the last response
+  [ "${_TOKS_OK:-0}" = 1 ] && [ "$api_ms" -gt 0 ] || return 0
+  # The ground is the dark data segment (ctx), so the inks are the gauge ones every
+  # theme tunes for it, as ctx and cache use: the value in OK, the unit in DIM.
+  # VL_FG_TEXT is the pastel-pill ink and reads dark on dark in seven of the ten
+  # themes (catppuccin, dracula, nord, tokyo-night, lunar-pink, morning-haze, reverie).
+  local bg="${VL_BG_TOKS:-$VL_BG_CTX}" g="${VL_TOKS_GLYPH:+$VL_TOKS_GLYPH }" fgd
+  fg "$VL_FG_DIM"; fgd="$_FG"
+  if [ -z "$_TOKS_RATE" ]; then
+    push "$bg" "${fgd} ${g}… tok/s "
+    return 0
+  fi
+  fmt_tok "$_TOKS_RATE"
+  fg "$VL_FG_OK"
+  push "$bg" "${_FG} ${g}${_TOK} ${fgd}tok/s "
+}
+
 seg_limit() {  # $1=label $2=pct $3=resets_at $4=bg $5=canonical pct_milli(optional)
   [ -n "$2" ] || return 0
   local v fgc rst=""
@@ -2210,7 +2290,9 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
     ((member(member(.; "prompt_cache"); "hit_ratio")) as $h |
       if ($h|type) == "number" then ($h * 100 | tostring) else "" end),
     ((member(member(.; "prompt_cache"); "expires_at")) as $x |
-      if ($x|type) == "number" then ($x | tostring) else "" end)
+      if ($x|type) == "number" then ($x | tostring) else "" end),
+    (member(member(.; "cost"); "total_api_duration_ms") // 0),
+    (member(.; "session_id") // "")
   ] | map(scrub) | join("\u001f")
   end' 2>/dev/null); then
   _JSON_OK=1
@@ -2218,9 +2300,10 @@ fi
 IFS=$'\037' read -r cwd model ctx_pct _CTX_EMPTY tok_in tok_out tok_cr tok_cw \
                  fh_pct fh_rst wd_pct wd_rst cost _COST_KIND \
                  lines_add lines_del out_style dur_ms effort \
-                 cache_pct cache_exp <<JSON
+                 cache_pct cache_exp api_ms sid <<JSON
 $_JSON_FIELDS
 JSON
+sid="${sid%$'\r'}"  # native Windows jq writes CRLF; the last field keeps the CR
 
 _SEG_SCAN=" $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 "
 [ "$VL_FLOAT" = "1" ] && _SEG_SCAN="$_SEG_SCAN$VL_FLOAT_SEGMENTS "
@@ -2253,6 +2336,8 @@ if [ "$_STATE_BURN_GATE" = 1 ] || [ "$_STATE_RL5_GATE" = 1 ] || [ "$_STATE_RL7_G
   fi
   case "$_SEG_SCAN" in (*" burn "*) burn_estimate ;; esac
 fi
+_TOKS_OK=0; _TOKS_RATE=""
+case "$_SEG_SCAN" in (*" toks "*) toks_sample ;; esac
 
 # Defensive ANSI stripper (the VL_NOCOLOR path should already emit none) → _PLAIN.
 strip_ansi() {

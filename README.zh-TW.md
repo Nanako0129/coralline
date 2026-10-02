@@ -25,6 +25,7 @@
 | `effort` | 否 | 推理強度：`low`、`med`、`high`、`xhigh` 或 `max` |
 | `ctx` | 是 | context 用量條與輸入、輸出、快取 token 數 |
 | `cache` | 否 | prompt cache 命中率，以及快取失效的倒數；失效後顯示 `cold` |
+| `toks` | 否 | 最後一則回應每秒輸出的 token 數；量到之前顯示 `…` |
 | `limit5h` | 是 | 五小時額度量表與重置倒數 |
 | `limit7d` | 是 | 七天額度量表與重置倒數 |
 | `burn` | 否 | 綁定中的 5h 或 7d 額度到達 100% 的預估時間 |
@@ -38,6 +39,8 @@
 量表會從綠色變成 50% 的黃色與 75% 的紅色；兩個門檻都能自訂。`cache` 使用同樣的門檻但方向相反，因為命中率高才是好結果：低於 50% 轉黃、低於 25% 轉紅。
 
 `cache` 需要 Claude Code v2.1.263 以上，`prompt_cache` 是從該版本開始出現在 statusline payload 裡。session 送出第一個 request 之前這一段會自我隱藏。倒數在一小時以內會顯示秒數（`10m12s`、`42s`），超過一小時則不顯示（`1h06m`）；快取失效之後，或從來沒熱過的情況，倒數會換成 `cold`。百分比是這個 session 的累計命中率，兩種情況下都仍然是真實數字，不會被歸零：`cold` 告訴你的是後面還有沒有一份活著的快取。倒數顯示的是「上次 render 當下」的值，不是即時時鐘：Claude Code 只在 payload 事件（以及快取到期的那一刻）重繪 statusline，不會每秒重繪，除非你在 settings 裡設定 `statusLine.refreshInterval`。
+
+`toks` 是最後一則回應的輸出速度：這則回應的 output token 數（含 thinking token），除以上次 render 之後新增的 API 時間。payload 本身沒有速率欄位（`total_output_tokens` 是最後一則回應的數字，`total_api_duration_ms` 是整個 session 所有 request 的總和），所以 `toks` 在清單裡時，coralline 會在 `~/.claude/coralline/toks-*` 為每個 session 留一個小檔案（只保留最近 32 個 session），量到第一則回應之前顯示 `… tok/s`。時間包含 prefill，也就是第一個 token 出來之前的等待，所以像單一 tool call 這種短回應會比模型實際生成的速度慢；同一段時間裡有 subagent 或其他 request 完成，數字也會偏低。session 送出第一個 request 之前這一段會自我隱藏。
 
 ## 安裝
 

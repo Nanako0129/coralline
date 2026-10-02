@@ -25,6 +25,7 @@ This is the runtime default rendered from the bundled sample in a clean `main` w
 | `effort` | no | reasoning effort: `low`, `med`, `high`, `xhigh`, or `max` |
 | `ctx` | yes | context gauge and input, output, and cache token counts |
 | `cache` | no | prompt-cache hit ratio, and the countdown to the cache expiring or `cold` once it has |
+| `toks` | no | output tokens per second of the last response, or `…` until one has been timed |
 | `limit5h` | yes | five-hour rate-limit gauge and reset countdown |
 | `limit7d` | yes | seven-day rate-limit gauge and reset countdown |
 | `burn` | no | projected time until the binding 5h or 7d limit reaches 100% |
@@ -38,6 +39,8 @@ This is the runtime default rendered from the bundled sample in a clean `main` w
 Gauges change from green to yellow at 50% and red at 75%; both thresholds are configurable. `cache` reads the same thresholds inverted, because a high hit ratio is the good outcome: it turns yellow at 50% and red at 25%.
 
 `cache` needs Claude Code v2.1.263 or newer, which is where `prompt_cache` appears in the statusline payload. It hides itself before the session's first request. Below an hour the countdown carries seconds (`10m12s`, `42s`), above it does not (`1h06m`); once the cache has gone cold, or if it never went warm, the countdown is replaced by `cold`. The percentage is the session's cumulative hit ratio, so it stays accurate either way and is never zeroed: what the marker tells you is whether there is still a cache behind it. The countdown is the value at the last render, not a live clock: Claude Code refreshes the statusline on payload events (and once at the expiry itself), not every second, unless you set `statusLine.refreshInterval` in your settings.
+
+`toks` is the output speed of the last response: its output tokens, thinking tokens included, over the API time that landed since the previous render. The payload carries no rate of its own (`total_output_tokens` is the last response's count, and `total_api_duration_ms` sums every request in the session), so while `toks` is in the list coralline keeps one small file per session in `~/.claude/coralline/toks-*` (the 32 most recent sessions) and shows `… tok/s` until it has timed a response. The time includes prefill, the wait before the first token, so a short response such as a lone tool call reads slower than the model generates; a subagent or side request finishing in the same interval also makes it read low. It hides itself before the session's first request.
 
 ## Install
 

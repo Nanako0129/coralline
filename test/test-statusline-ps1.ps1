@@ -555,7 +555,7 @@ esac
     Check 'reparse validation precedes config read' ($source.IndexOf('Test-SafeRegularFile $Path') -lt $source.IndexOf('Read-StrictUtf8File $Path'))
     Check 'Bash oracle main extraction contains central scrub' ($bashSource.Contains('] | map(scrub) | join('))
 
-    $expectedRegistry = @('burn','cache','clock','cost','ctx','dir','duration','effort','git','limit5h','limit7d','lines','model','node','project','python','stash','style')
+    $expectedRegistry = @('burn','cache','clock','cost','ctx','dir','duration','effort','git','limit5h','limit7d','lines','model','node','project','python','stash','style','toks')
     $builderBlock = [regex]::Match($source, '(?s)\$SegmentBuilders = \[ordered\]@\{(.*?)\n\}').Groups[1].Value
     $actualRegistry = @([regex]::Matches($builderBlock, '(?m)^    ([A-Za-z0-9]+) =') | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
     Check 'closed PowerShell registry equals WIN-02 inventory' (($actualRegistry -join ' ') -eq (($expectedRegistry | Sort-Object) -join ' '))
@@ -1396,6 +1396,14 @@ fi
     $burnPayload.rate_limits.five_hour.resets_at = $null
     $burnPayload.rate_limits.seven_day.used_percentage = '30'
     $burnPayload.rate_limits.seven_day.resets_at = '1345600'
+    # toks reads session_id and cost.total_api_duration_ms, which the base payload lacks.
+    # Its own CLAUDE_CONFIG_DIR keeps the render off the real ~/.claude/coralline store.
+    $toksSid = 'a1b2c3d4-0000-4000-8000-000000000000'
+    $toksPayload = Clone-Object $basePayload
+    Add-Member -InputObject $toksPayload -NotePropertyName session_id -NotePropertyValue $toksSid -Force
+    Add-Member -InputObject $toksPayload.cost -NotePropertyName total_api_duration_ms -NotePropertyValue 5000 -Force
+    $toksRoot = Join-Path $TempRoot 'toks'
+    $toksTableDir = Join-Path $toksRoot 'table'
     $segmentCases = [ordered]@{
         burn = [pscustomobject]@{ Show=@('VL_SEGMENTS=burn','VL_CLOCK=off'); Needle=((Glyph 0x2197) + ' 7d ' + (Glyph 0x21E2)); Payload=$burnPayload; Environment=@{CORALLINE_TEST_NOW='1000000'}; Suppress={ param($p) $p.rate_limits.five_hour.used_percentage=$null; $p.rate_limits.seven_day.used_percentage=$null; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=burn' }
         # The payload's expires_at (1000300) is 300s past the pinned CORALLINE_TEST_NOW,
@@ -1417,6 +1425,7 @@ fi
         python = [pscustomobject]@{ Show=@('VL_SEGMENTS=python','VL_CLOCK=off'); Needle='3.12.2'; Suppress={ param($p) $p.cwd='C:/tmp/coralline-win01-no-pin'; $p.workspace.current_dir=$p.cwd; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=python' }
         stash = [pscustomobject]@{ Show=@('VL_SEGMENTS=stash','VL_CLOCK=off'); Needle='1'; Suppress={ param($p) $p.cwd='C:/tmp/coralline-win01-no-repo'; $p.workspace.current_dir=$p.cwd; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=stash' }
         style = [pscustomobject]@{ Show=@('VL_SEGMENTS=style','VL_CLOCK=off'); Needle='Explanatory'; Suppress={ param($p) $p.output_style.name='default'; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=style' }
+        toks = [pscustomobject]@{ Show=@('VL_SEGMENTS=toks','VL_CLOCK=off'); Needle=((Glyph 0x2026) + ' tok/s'); Payload=$toksPayload; Environment=@{CLAUDE_CONFIG_DIR=$toksTableDir}; Suppress={ param($p) $p.cost.total_api_duration_ms=0; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=toks' }
     }
 
     foreach ($name in $expectedRegistry) {
@@ -1436,6 +1445,91 @@ fi
         Check-Run "$name suppress" $suppress
         Check "$name suppresses without an empty pill" ([string]::IsNullOrEmpty($suppress.Stdout))
     }
+
+    # toks: a per-session anchor in <coralline dir>/toks-<sid>. Every state-writing
+    # render clears CORALLINE_NO_SAMPLE and points CLAUDE_CONFIG_DIR at a private dir.
+    function New-ToksPayload([long]$ApiMs, [long]$In, [long]$Out, [string]$Sid = $toksSid) {
+        $tp = Clone-Object $basePayload
+        Add-Member -InputObject $tp -NotePropertyName session_id -NotePropertyValue $Sid -Force
+        Add-Member -InputObject $tp.cost -NotePropertyName total_api_duration_ms -NotePropertyValue $ApiMs -Force
+        $tp.context_window.total_input_tokens = $In
+        $tp.context_window.total_output_tokens = $Out
+        return $tp
+    }
+    $toksConfig = New-Config 'toks-e2e' @(('VL_SEGMENTS=' + (Quote-FromConfigure 'model toks')), 'VL_CLOCK=off')
+    $toksDir = Join-Path $toksRoot 'live'
+    $toksState = Join-Path $toksDir ('coralline\toks-' + $toksSid)
+    $toksWrite = @{ CLAUDE_CONFIG_DIR=$toksDir; CORALLINE_NO_SAMPLE=$null }
+    $toksPreviewDir = Join-Path $toksRoot 'preview'
+    $toksPreview = Invoke-Statusline (Json $toksPayload) $toksConfig @{ CLAUDE_CONFIG_DIR=$toksPreviewDir } '' 5000
+    Check-Run 'toks no-sample preview' $toksPreview
+    Check 'toks no-sample shows the warming pill' ((Plain $toksPreview.Stdout).Contains((Glyph 0x2026) + ' tok/s'))
+    Check 'toks no-sample creates no state' (-not [IO.Directory]::Exists($toksPreviewDir) -or @([IO.Directory]::GetFileSystemEntries($toksPreviewDir, '*', [IO.SearchOption]::AllDirectories)).Count -eq 0)
+
+    $toksRun1 = Invoke-Statusline (Json (New-ToksPayload 1000 5000 40)) $toksConfig $toksWrite '' 5000
+    Check-Run 'toks anchor render' $toksRun1
+    Check 'toks anchor render is warming' ((Plain $toksRun1.Stdout).Contains((Glyph 0x2026) + ' tok/s'))
+    Check 'toks anchor bytes match Bash printf format' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq "$toksSid 1000 5000:40 `n")
+    $toksRun2 = Invoke-Statusline (Json (New-ToksPayload 3000 6000 150)) $toksConfig $toksWrite '' 5000
+    Check-Run 'toks timed render' $toksRun2
+    Check 'toks 150 tokens over 2000ms is exactly 75 tok/s' ((Plain $toksRun2.Stdout).Contains(' 75 tok/s '))
+    Check 'toks timed state bytes' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq "$toksSid 3000 6000:150 75`n")
+    Check 'toks state is LF only' (-not [IO.File]::ReadAllText($toksState, $StrictUtf8).Contains("`r"))
+
+    $toksForeign = Invoke-Statusline (Json (New-ToksPayload 5000 6000 150)) $toksConfig $toksWrite '' 5000
+    Check 'toks foreign time keeps the rate' ((Plain $toksForeign.Stdout).Contains(' 75 tok/s '))
+    Check 'toks foreign time is absorbed into the anchor' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq "$toksSid 5000 6000:150 75`n")
+
+    $toksPartial = Invoke-Statusline (Json (New-ToksPayload 5000 7000 300)) $toksConfig $toksWrite '' 5000
+    Check 'toks partial render keeps the stored rate' ((Plain $toksPartial.Stdout).Contains(' 75 tok/s '))
+    Check 'toks partial render leaves the anchor' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq "$toksSid 5000 6000:150 75`n")
+    $toksNext = Invoke-Statusline (Json (New-ToksPayload 8000 7000 300)) $toksConfig $toksWrite '' 5000
+    Check 'toks next response: 300 tokens over 3000ms is 100 tok/s' ((Plain $toksNext.Stdout).Contains(' 100 tok/s '))
+
+    $toksRestart = Invoke-Statusline (Json (New-ToksPayload 1000 9000 50)) $toksConfig $toksWrite '' 5000
+    Check 'toks api total falling re-anchors warming' ((Plain $toksRestart.Stdout).Contains((Glyph 0x2026) + ' tok/s'))
+    Check 'toks restart state bytes' ([IO.File]::ReadAllText($toksState, $StrictUtf8) -ceq "$toksSid 1000 9000:50 `n")
+
+    $toksFloat = Invoke-Statusline (Json (New-ToksPayload 3000 9500 100)) $toksConfig $toksWrite '' 5000
+    Check 'toks first response after a restart: 100 tokens over 2000ms is 50 tok/s' ((Plain $toksFloat.Stdout).Contains(' 50 tok/s '))
+    $toksBig = Invoke-Statusline (Json (New-ToksPayload 4000 9600 1234)) $toksConfig $toksWrite '' 5000
+    Check 'toks rate of 1234 uses the token formatter' ((Plain $toksBig.Stdout).Contains(' 1.2k tok/s '))
+
+    # Regression: under refreshInterval every open session renders each second, and two
+    # sessions whose ids share a first digit used to share one slot and re-anchor each
+    # other forever. Interleaved, each must time its own response from its own file.
+    $toksOther = 'a1ffffff-0000-4000-8000-000000000000'
+    $toksPairDir = Join-Path $toksRoot 'pair'
+    $toksPair = @{ CLAUDE_CONFIG_DIR=$toksPairDir; CORALLINE_NO_SAMPLE=$null }
+    [void](Invoke-Statusline (Json (New-ToksPayload 0 0 0)) $toksConfig $toksPair '' 5000)
+    [void](Invoke-Statusline (Json (New-ToksPayload 0 0 0 $toksOther)) $toksConfig $toksPair '' 5000)
+    $toksPairA = Invoke-Statusline (Json (New-ToksPayload 2000 10 100)) $toksConfig $toksPair '' 5000
+    $toksPairB = Invoke-Statusline (Json (New-ToksPayload 3000 20 90 $toksOther)) $toksConfig $toksPair '' 5000
+    $toksPairA2 = Invoke-Statusline (Json (New-ToksPayload 2000 10 100)) $toksConfig $toksPair '' 5000
+    Check 'toks session A times its own response (50 tok/s)' ((Plain $toksPairA.Stdout).Contains(' 50 tok/s '))
+    Check 'toks session B times its own response (30 tok/s)' ((Plain $toksPairB.Stdout).Contains(' 30 tok/s '))
+    Check 'toks session A keeps its rate after B renders' ((Plain $toksPairA2.Stdout).Contains(' 50 tok/s '))
+
+    # Bounded store: only a session creating its file evicts, and only the single
+    # least-recently-written toks file once $ToksKeep (32) exist; other files stay.
+    $toksEvictDir = Join-Path $toksRoot 'evict'
+    $toksEvictStore = Join-Path $toksEvictDir 'coralline'
+    [void][IO.Directory]::CreateDirectory($toksEvictStore)
+    for ($i = 0; $i -lt 32; $i++) {
+        $f = Join-Path $toksEvictStore ('toks-f' + $i.ToString('0000000', $Invariant) + '-0000-4000-8000-000000000000')
+        [IO.File]::WriteAllText($f, "x`n")
+        [IO.File]::SetLastWriteTimeUtc($f, [datetime]::new(2021, 1, 1, 0, 0, 0, [DateTimeKind]::Utc).AddMinutes($i))
+    }
+    $toksBurnDecoy = Join-Path $toksEvictStore 'burn-5h.tsv'
+    [IO.File]::WriteAllText($toksBurnDecoy, "x`n")
+    [IO.File]::SetLastWriteTimeUtc($toksBurnDecoy, [datetime]::new(2019, 1, 1, 0, 0, 0, [DateTimeKind]::Utc))
+    $toksEvict = @{ CLAUDE_CONFIG_DIR=$toksEvictDir; CORALLINE_NO_SAMPLE=$null }
+    [void](Invoke-Statusline (Json (New-ToksPayload 0 0 0)) $toksConfig $toksEvict '' 5000)
+    [void](Invoke-Statusline (Json (New-ToksPayload 5 0 0)) $toksConfig $toksEvict '' 5000)
+    Check 'toks eviction removes only the oldest toks file' (-not [IO.File]::Exists((Join-Path $toksEvictStore 'toks-f0000000-0000-4000-8000-000000000000')))
+    Check 'toks eviction keeps the next oldest' ([IO.File]::Exists((Join-Path $toksEvictStore 'toks-f0000001-0000-4000-8000-000000000000')))
+    Check 'toks eviction never touches non-toks files' ([IO.File]::Exists($toksBurnDecoy))
+    Check 'toks store stays at the cap' (@([IO.Directory]::GetFiles($toksEvictStore, 'toks-*')).Count -eq 32)
 
     $orderedNames = @('dir','project','git','node','python','model','effort','ctx','limit5h','limit7d','lines','cost','style','duration','stash')
     $orderedValue = $orderedNames -join ' '

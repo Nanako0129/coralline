@@ -171,9 +171,11 @@ $Defaults = [ordered]@{
     VL_BG_NODE = ''
     VL_BG_PYTHON = ''
     VL_BG_CACHE = ''
+    VL_BG_TOKS = ''
     VL_BG_BAR = ''
     VL_NODE_GLYPH = (Glyph 0xE718)
     VL_PY_GLYPH = (Glyph 0xE73C)
+    VL_TOKS_GLYPH = (Glyph 0xF0E4)
     VL_RUNTIME_PROBE = '0'
 
     VL_FG_TEXT = '231'
@@ -799,6 +801,7 @@ if ($Cfg.VL_ASCII -eq '1') {
     $Cfg.VL_BAR_EMPTY = '-'
     $Cfg.VL_NODE_GLYPH = 'node'
     $Cfg.VL_PY_GLYPH = 'py'
+    $Cfg.VL_TOKS_GLYPH = ''  # the pill already says tok/s; no word needed
 }
 if ($Cfg.VL_STYLE -eq 'classic') {
     $Cfg.VL_STYLE = 'lean'
@@ -2597,6 +2600,8 @@ $linesDel = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('cost', '
 $outStyle = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('output_style', 'name')))
 $durMs = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('cost', 'total_duration_ms')))
 $effort = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('effort', 'level')))
+$apiMs = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('cost', 'total_api_duration_ms')))
+$sid = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('session_id')))
 
 function ConvertTo-ProbePath([string]$Path) {
     if ([string]::IsNullOrEmpty($Path)) { return '' }
@@ -2913,6 +2918,88 @@ $State = $null
 if ($BurnStateGate -or $Limit5StateGate -or $Limit7StateGate) {
     $State = Get-CorallineState $BurnStateGate $Limit5StateGate $Limit7StateGate
 }
+
+# Output speed of the last response; mirrors toks_sample() in statusline.sh (read the
+# comment there for the semantics). One sample per render, never from a segment
+# builder. State line: "sid api_ms key rate\n", rate empty while warming, in a file per
+# session (toks-<sid>); a shared slot ping-pongs between sessions that all render
+# every second under refreshInterval. Returns Ok=$false for unusable input;
+# Rate '' = no response timed yet.
+$ToksKeep = 32  # internal: max per-session files kept in the coralline dir
+
+# Runs only when a session creates its file, so the steady state never lists the
+# directory. Removes at most the single least-recently-written toks file once
+# $ToksKeep exist; evicting a live but idle session costs it one re-anchor.
+function Remove-OldestToksFile([string]$Dir) {
+    try {
+        $files = @([IO.Directory]::GetFiles($Dir, 'toks-*') | Where-Object { Test-SafeRegularFile $_ })
+        if ($files.Count -lt $ToksKeep) { return }
+        $oldest = $files | Sort-Object { [IO.File]::GetLastWriteTimeUtc($_) } | Select-Object -First 1
+        [IO.File]::Delete($oldest)
+    } catch { }
+}
+
+function Get-ToksSample {
+    $none = [pscustomobject]@{ Ok=$false; Rate=''; ApiMs=0L }
+    $api = $apiMs
+    if ([string]::IsNullOrEmpty($api)) { $api = '0' }
+    if (-not [regex]::IsMatch($api, '\A[0-9]+\z')) { return $none }
+    if (-not [regex]::IsMatch($sid, '\A[0-9a-f][0-9a-f-]*\z')) { return $none }
+    $apiL = 0L
+    if (-not [long]::TryParse($api, $IntegerStyle, $Invariant, [ref]$apiL)) { return $none }
+    $inRaw = $tokIn; if ([string]::IsNullOrEmpty($inRaw)) { $inRaw = '0' }
+    $outRaw = $tokOut; if ([string]::IsNullOrEmpty($outRaw)) { $outRaw = '0' }
+    $key = $inRaw + ':' + $outRaw
+    $result = [pscustomobject]@{ Ok=$true; Rate=''; ApiMs=$apiL }
+    $file = $null
+    try { $file = [IO.Path]::GetFullPath([IO.Path]::Combine($CoralineDir, 'toks-' + $sid)) } catch { return $result }
+
+    $sSid = ''; $sMs = ''; $sKey = ''; $sRate = ''
+    if (Test-SafeRegularFile $file) {
+        $text = Read-StrictUtf8File $file
+        if ($null -ne $text) {
+            $nl = $text.IndexOf("`n")
+            if ($nl -ge 0) { $text = $text.Substring(0, $nl) }
+            $parts = [regex]::new('[ \t]+').Split($text.TrimStart(' ', "`t"), 4)
+            if ($parts.Length -ge 1) { $sSid = $parts[0] }
+            if ($parts.Length -ge 2) { $sMs = $parts[1] }
+            if ($parts.Length -ge 3) { $sKey = $parts[2] }
+            if ($parts.Length -ge 4) { $sRate = $parts[3].TrimEnd(' ', "`t") }
+        }
+    }
+    $sMsL = 0L
+    if (-not [regex]::IsMatch($sMs, '\A[0-9]+\z') -or -not [long]::TryParse($sMs, $IntegerStyle, $Invariant, [ref]$sMsL)) { $sSid = '' }
+    if (-not [regex]::IsMatch($sRate, '\A[0-9]*\z')) { $sRate = '' }
+
+    if ($sSid -cne $sid -or $apiL -lt $sMsL) {
+        $sRate = ''
+    } elseif ($apiL -eq $sMsL) {
+        $result.Rate = $sRate
+        return $result
+    } elseif ($key -cne $sKey) {
+        $outL = 0L
+        # ponytail: a token count above 9e15 would overflow the *1000; Bash wraps there, this keeps the stored rate.
+        if ([regex]::IsMatch($tokOut, '\A[0-9]+\z') -and [long]::TryParse($tokOut, $IntegerStyle, $Invariant, [ref]$outL) -and $outL -le 9000000000000000L) {
+            $delta = $apiL - $sMsL
+            $rem = 0L
+            $sRate = [string][Math]::DivRem(($outL * 1000L + ($delta -shr 1)), $delta, [ref]$rem)
+        }
+    }
+    $result.Rate = $sRate
+    if ([string]$env:CORALLINE_NO_SAMPLE -eq '1') { return $result }
+    try {
+        $parent = [IO.Path]::GetDirectoryName($file)
+        if (-not (Test-NoReparseComponents $parent)) { return $result }
+        if (-not [IO.Directory]::Exists($parent)) { [void][IO.Directory]::CreateDirectory($parent) }
+        if ((Test-StateObjectExists $file) -and -not (Test-SafeRegularFile $file)) { return $result }
+        if (-not (Test-StateObjectExists $file)) { Remove-OldestToksFile $parent }
+        [IO.File]::WriteAllBytes($file, $Utf8NoBom.GetBytes("$sid $api $key $sRate`n"))
+    } catch { }
+    return $result
+}
+
+$Toks = [pscustomobject]@{ Ok=$false; Rate=''; ApiMs=0L }
+if ($ProbeSegmentNames.Contains('toks')) { $Toks = Get-ToksSample }
 
 $GitState = @{ Branch = ''; Marks = ''; Ab = ''; Dirty = $false }
 $GitRoot = ''
@@ -3266,6 +3353,24 @@ function Add-PythonSegment {
     Push-Segment $bg "${fg} $($Cfg.VL_PY_GLYPH) $version "
 }
 
+function Add-ToksSegment {
+    if (-not $Toks.Ok -or $Toks.ApiMs -le 0) { return }
+    # The ground is the dark data segment (ctx), so the inks are the gauge ones every
+    # theme tunes for it, as ctx and cache use: the value in OK, the unit in DIM.
+    # VL_FG_TEXT is the pastel-pill ink and reads dark on dark in seven of the ten themes.
+    $bg = $Cfg.VL_BG_TOKS
+    if ([string]::IsNullOrEmpty($bg)) { $bg = $Cfg.VL_BG_CTX }
+    $g = ''
+    if (-not [string]::IsNullOrEmpty($Cfg.VL_TOKS_GLYPH)) { $g = $Cfg.VL_TOKS_GLYPH + ' ' }
+    $dfg = Get-Fg $Cfg.VL_FG_DIM
+    if ([string]::IsNullOrEmpty($Toks.Rate)) {
+        Push-Segment $bg "${dfg} ${g}$([char]0x2026) tok/s "
+        return
+    }
+    $fg = Get-Fg $Cfg.VL_FG_OK
+    Push-Segment $bg "${fg} ${g}$(Format-Tok $Toks.Rate) ${dfg}tok/s "
+}
+
 $SegmentBuilders = [ordered]@{
     burn = { Add-BurnSegment }
     cache = { Add-CacheSegment }
@@ -3285,6 +3390,7 @@ $SegmentBuilders = [ordered]@{
     python = { Add-PythonSegment }
     stash = { Add-StashSegment }
     style = { Add-StyleSegment }
+    toks = { Add-ToksSegment }
 }
 $SupportedSegmentNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 foreach ($name in $SegmentBuilders.Keys) { [void]$SupportedSegmentNames.Add([string]$name) }
