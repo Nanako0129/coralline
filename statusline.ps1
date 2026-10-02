@@ -3242,8 +3242,63 @@ function Get-ToksSample {
     return $result
 }
 
+# Steady-state fast path. Most renders change nothing: the API total equals the stored
+# one and the transcript step cannot fire. Windows PowerShell compiles a function on its
+# first call in every process, and that, not the I/O, is what Get-ToksSample costs: on
+# .188 (2026-10-03) its first call took 22.8 ms against 2.25 ms for a second call in the
+# same process. This function does an attribute read per path component, one file read
+# and a regex, and answers only when it can prove the full machine would neither write
+# nor read the transcript and would return the same values; anything else returns $null
+# and Get-ToksSample decides. Measured end to end on .188 (N=60 interleaved, median):
+# toks+ttft steady renders cost 17.9 ms over the default instead of 35.0 ms.
+function Get-ToksSteady {
+    $digits = '\A(0|[1-9][0-9]{0,17})\z'
+    $in = $tokIn; if ([string]::IsNullOrEmpty($in)) { $in = '0' }
+    $out = $tokOut; if ([string]::IsNullOrEmpty($out)) { $out = '0' }
+    if ($sid -cnotmatch '\A[0-9a-f][0-9a-f-]*\z' -or $apiMs -cnotmatch $digits -or $in -cnotmatch $digits -or $out -cnotmatch $digits) { return $null }
+    try {
+        # GetFullPath as the full machine does: it turns '/' into '\' and resolves a
+        # relative dir, so the walk below sees every component it would see.
+        $file = [IO.Path]::GetFullPath([IO.Path]::Combine($CoralineDir, 'toks-' + $sid))
+        # The full machine's refusals, inline so no helper gets compiled: no component
+        # of the path may be a reparse point (Test-SafeRegularFile walks every ancestor,
+        # so a junctioned config dir hides the pills there and must here too), the leaf
+        # must be a file, and the bytes must pass Read-StrictUtf8File's strict UTF-8
+        # decode and 1 MiB cap, or the full machine would re-anchor instead.
+        $root = [IO.Path]::GetPathRoot($file)
+        $cur = $root
+        foreach ($part in $file.Substring($root.Length).Split('\')) {
+            if ($part.Length -eq 0) { continue }
+            $cur = [IO.Path]::Combine($cur, $part)
+            if (([IO.File]::GetAttributes($cur) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $null }
+        }
+        if (([IO.File]::GetAttributes($file) -band [IO.FileAttributes]::Directory) -ne 0) { return $null }
+        if ([IO.FileInfo]::new($file).Length -gt 1048576) { return $null }
+        $text = $StrictUtf8.GetString([IO.File]::ReadAllBytes($file))
+    } catch { return $null }
+    # Only the exact line the full machine writes: one LF-terminated line, single
+    # spaces, canonical digits or '-'. Any other shape (tabs, double spaces, more lines,
+    # a BOM) splits differently under its '[ \t]+' reader, so it gets to decide.
+    $n = '(?:0|[1-9][0-9]{0,17})'
+    $line = '\A([0-9a-f][0-9a-f-]*) (' + $n + ') ([0-9]+:[0-9]+) (-|' + $n + ') (-|[0-9]+:[0-9]+) (' + $n + ') (-|' + $n + ') (-|' + $n + ') (' + $n + ')\n\z'
+    if ($text -cnotmatch $line) { return $null }
+    $f = @($Matches[1], $Matches[2], $Matches[3], $Matches[4], $Matches[5], $Matches[6], $Matches[7], $Matches[8], $Matches[9])
+    if ($f[0] -cne $sid -or $f[1] -cne $apiMs) { return $null }
+    # The transcript step fires on a key it has not resolved once API time has landed
+    # since its last resolution; only when it cannot is this render a pure read.
+    if ($f[4] -cne ($in + ':' + $out) -and [long]$apiMs -gt [long]$f[5]) { return $null }
+    $r = [pscustomobject]@{ Ok=$true; Rate=''; Dec=''; Ttft=''; ApiMs=[long]$apiMs }
+    if ($f[3] -cne '-') { $r.Rate = $f[3] }
+    if ($f[6] -cne '-') { $r.Dec = $f[6] }
+    if ($f[7] -cne '-') { $r.Ttft = $f[7] }
+    return $r
+}
+
 $Toks = [pscustomobject]@{ Ok=$false; Rate=''; Dec=''; Ttft=''; ApiMs=0L }
-if ($ProbeSegmentNames.Contains('toks') -or $ProbeSegmentNames.Contains('ttft')) { $Toks = Get-ToksSample }
+if ($ProbeSegmentNames.Contains('toks') -or $ProbeSegmentNames.Contains('ttft')) {
+    $Toks = Get-ToksSteady
+    if ($null -eq $Toks) { $Toks = Get-ToksSample }
+}
 
 $GitState = @{ Branch = ''; Marks = ''; Ab = ''; Dirty = $false }
 $GitRoot = ''
@@ -3622,25 +3677,24 @@ function Add-ToksSegment {
 }
 
 function Add-TtftSegment {
-    if (-not $Toks.Ok -or [string]::IsNullOrEmpty($Toks.Ttft)) { return }
-    $ms = ConvertTo-ToksCount $Toks.Ttft
-    if ($null -eq $ms) { return }
+    # Operators rather than [Math]::DivRem and helper calls: each distinct .NET call site
+    # and each first-called function is compiled per process (see Get-ToksSteady).
+    # Up to 18 digits, so ms + 500 stays inside a long; a transcript cannot produce more.
+    if (-not $Toks.Ok -or $Toks.Ttft -cnotmatch '\A[0-9]{1,18}\z') { return }
+    $ms = [long]$Toks.Ttft
     $bg = $Cfg.VL_BG_TTFT
     if ([string]::IsNullOrEmpty($bg)) { $bg = $Cfg.VL_BG_CTX }
     $g = ''
     if (-not [string]::IsNullOrEmpty($Cfg.VL_TTFT_GLYPH)) { $g = $Cfg.VL_TTFT_GLYPH + ' ' }
     $dfg = Get-Fg $Cfg.VL_FG_DIM
     $unit = 's'
-    $rem = 0L
-    $tenths = [Math]::DivRem($ms + 50L, 100L, [ref]$rem)  # tenths of a second
-    if ($tenths -lt 100) {
-        $whole = [Math]::DivRem($tenths, 10L, [ref]$rem)
-        $v = $whole.ToString($Invariant) + '.' + $rem.ToString($Invariant)
+    $t = ($ms + 50 - ($ms + 50) % 100) / 100  # tenths of a second (exact, so integral)
+    if ($t -lt 100) {
+        $v = [string](($t - $t % 10) / 10) + '.' + [string]($t % 10)
     } else {
         # Whole seconds, rounded like the tenths above: Format-Duration truncates, which
         # would show 9950-9999 ms as "9s", below the "9.9s" of 9900-9949 ms.
-        $rounded = [Math]::DivRem($ms + 500L, 1000L, [ref]$rem) * 1000L
-        $v = Format-Duration ([double]$rounded) $true
+        $v = Format-Duration ([double]($ms + 500 - ($ms + 500) % 1000)) $true
         $unit = ''
     }
     $fg = Get-Fg $Cfg.VL_FG_OK

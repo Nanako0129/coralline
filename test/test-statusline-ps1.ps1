@@ -1645,6 +1645,56 @@ fi
     [IO.File]::WriteAllText($ttftRoundState, "$toksSid 9000 5000:400 - 5000:400 9000 100 9960 0`n", [Text.UTF8Encoding]::new($false))
     $ttftRoundR = Render-Tr 9000 5000 400 $trConfig @{ CLAUDE_CONFIG_DIR=$ttftRoundDir; CORALLINE_NO_SAMPLE='1' }
     Check 'ttft 9960 ms rounds to 10s' ((Plain $ttftRoundR.Stdout).Contains($ttftGlyph + ' 10s '))
+
+    # The steady fast path (Get-ToksSteady) must refuse whatever the full machine
+    # refuses, or a render would show values the full machine hides or re-anchors.
+    # A state file under a junctioned config dir: Test-SafeRegularFile walks every
+    # ancestor, so both pills stay hidden and the file is not touched.
+    $jReal = Join-Path $toksRoot 'junction-real'
+    $jLink = Join-Path $toksRoot 'junction-link'
+    [void][IO.Directory]::CreateDirectory((Join-Path $jReal 'coralline'))
+    [void](New-Item -ItemType Junction -Path $jLink -Target $jReal)
+    $jState = Join-Path $jReal ('coralline\toks-' + $toksSid)
+    $jLine = "$toksSid 9000 5000:400 - 5000:400 9000 100 2000 0`n"
+    [IO.File]::WriteAllText($jState, $jLine, [Text.UTF8Encoding]::new($false))
+    $jPlain = Plain (Render-Tr 9000 5000 400 $trConfig @{ CLAUDE_CONFIG_DIR=$jLink; CORALLINE_NO_SAMPLE=$null }).Stdout
+    Check 'toks junctioned config dir: both pills hidden' (-not $jPlain.Contains('tok/s') -and -not $jPlain.Contains($ttftGlyph))
+    Check 'toks junctioned config dir: state untouched' ([IO.File]::ReadAllText($jState, $StrictUtf8) -ceq $jLine)
+    # The same junction above a config dir written with forward slashes: the full
+    # machine normalizes with GetFullPath before walking, so the fast path must too.
+    $jFwdState = Join-Path $jReal ('cfg\coralline\toks-' + $toksSid)
+    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($jFwdState))
+    [IO.File]::WriteAllText($jFwdState, $jLine, [Text.UTF8Encoding]::new($false))
+    $jFwdDir = (Join-Path $jLink 'cfg') -replace '\\', '/'
+    $jFwdPlain = Plain (Render-Tr 9000 5000 400 $trConfig @{ CLAUDE_CONFIG_DIR=$jFwdDir; CORALLINE_NO_SAMPLE=$null }).Stdout
+    Check 'toks junction above a forward-slash config dir: both pills hidden' (-not $jFwdPlain.Contains('tok/s') -and -not $jFwdPlain.Contains($ttftGlyph))
+    Check 'toks junction above a forward-slash config dir: state untouched' ([IO.File]::ReadAllText($jFwdState, $StrictUtf8) -ceq $jLine)
+    # A line no writer produces (a tab inside a field) is read by the full machine's
+    # '[ \t]+' split, which shifts the fields: decode 9000, ttft 100. The fast path must
+    # not answer from its own reading of it (that would show 100 tok/s and 2.0s).
+    $wDir = Join-Path $toksRoot 'ws-odd'
+    $wState = Join-Path $wDir ('coralline\toks-' + $toksSid)
+    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($wState))
+    [IO.File]::WriteAllText($wState, "$toksSid 9000 5000:400`tX - 5000:400 9000 100 2000 0`n", [Text.UTF8Encoding]::new($false))
+    $wPlain = Plain (Render-Tr 9000 5000 400 $trConfig @{ CLAUDE_CONFIG_DIR=$wDir; CORALLINE_NO_SAMPLE='1' }).Stdout
+    Check 'toks non-canonical state line: read as the full machine reads it' ($wPlain.Contains(' 9.0k tok/s ') -and $wPlain.Contains($ttftGlyph + ' 0.1s '))
+    # Invalid UTF-8 in a field the fast path does not otherwise read: strict decoding
+    # fails, so the full machine re-anchors and the pill warms up again.
+    $uDir = Join-Path $toksRoot 'utf8-bad'
+    $uState = Join-Path $uDir ('coralline\toks-' + $toksSid)
+    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($uState))
+    $uGood = [Text.Encoding]::ASCII.GetBytes("$toksSid 9000 5000:400 - 5000:400 9000 100 2000 ")
+    [IO.File]::WriteAllBytes($uState, [byte[]]($uGood + [byte[]](0xFF, 0x0A)))
+    $uPlain = Plain (Render-Tr 9000 5000 400 $trConfig @{ CLAUDE_CONFIG_DIR=$uDir; CORALLINE_NO_SAMPLE=$null }).Stdout
+    Check 'toks invalid UTF-8 state: re-anchored' ((Read-TrState $uState) -ceq (Toks-Line 9000 '5000:400' $null $null 9000 $null $null 0))
+    Check 'toks invalid UTF-8 state: warming pill' ($uPlain.Contains((Glyph 0x2026) + ' tok/s'))
+    # A 16-digit ttft (only a hand-edited file holds one) still formats, as before.
+    $bDir = Join-Path $toksRoot 'ttft-big'
+    $bState = Join-Path $bDir ('coralline\toks-' + $toksSid)
+    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($bState))
+    [IO.File]::WriteAllText($bState, "$toksSid 9000 5000:400 - 5000:400 9000 100 1000000000000000 0`n", [Text.UTF8Encoding]::new($false))
+    $bPlain = Plain (Render-Tr 9000 5000 400 $trConfig @{ CLAUDE_CONFIG_DIR=$bDir; CORALLINE_NO_SAMPLE='1' }).Stdout
+    Check 'ttft 16-digit value still formats' ($bPlain.Contains('277777777h46m40s'))
     Check 'toks writable again: state' ((Read-TrState) -ceq (Toks-Line 21000 '8000:10' 3 '8000:10' 21000 5 1000 0))
     # Tries reset only when a lookup resolves or gives up, never on a key change: a key
     # that kept changing after API time landed would otherwise read on every render.
