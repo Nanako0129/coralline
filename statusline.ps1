@@ -2925,11 +2925,13 @@ if ($BurnStateGate -or $Limit5StateGate -or $Limit7StateGate) {
 
 # Output speed and time to first token of the last response; mirrors toks_sample() and
 # toks_transcript() in statusline.sh (read the comments there for the semantics). One
-# sample per render, never from a segment builder. State line, 10 fields with '-' for
+# sample per render, never from a segment builder. State line, 9 fields with '-' for
 # empty: "sid api_ms key rate tkey t_api decode ttft tries\n", in a file per session
 # (toks-<sid>); a shared slot ping-pongs between sessions that all render every second
 # under refreshInterval. Returns Ok=$false for unusable input or a non-regular object at
-# the state path. Rate/Dec/Ttft '' = none yet.
+# the state path. Rate/Dec/Ttft '' = none yet. Get-ToksSteady restates this function's
+# no-op conditions and refusals so steady renders skip compiling it: a change to either
+# the state machine or its refusals must be made in Get-ToksSteady too.
 $ToksKeep = 32  # internal: max per-session files kept in the coralline dir
 $ToksTail = 1048576  # internal: transcript bytes read to find a response
 $ToksTries = 3  # internal: lookups per response before it is given up
@@ -3249,10 +3251,12 @@ function Get-ToksSample {
 # same process. This function does an attribute read per path component, one file read
 # and a regex, and answers only when it can prove the full machine would neither write
 # nor read the transcript and would return the same values; anything else returns $null
-# and Get-ToksSample decides. Measured end to end on .188 (N=60 interleaved, median):
-# toks+ttft steady renders cost 17.9 ms over the default instead of 35.0 ms.
+# and Get-ToksSample decides. Measured end to end on .188 (N=50 interleaved, median):
+# toks+ttft steady renders cost 21.2 ms over the default instead of 34.1 ms; the render
+# that closes a response pays this function on top of Get-ToksSample (+6 ms).
 function Get-ToksSteady {
-    $digits = '\A(0|[1-9][0-9]{0,17})\z'
+    $n = '(?:0|[1-9][0-9]{0,17})'  # a canonical count, 1-18 digits, as Get-ToksSample writes it
+    $digits = '\A' + $n + '\z'
     $in = $tokIn; if ([string]::IsNullOrEmpty($in)) { $in = '0' }
     $out = $tokOut; if ([string]::IsNullOrEmpty($out)) { $out = '0' }
     if ($sid -cnotmatch '\A[0-9a-f][0-9a-f-]*\z' -or $apiMs -cnotmatch $digits -or $in -cnotmatch $digits -or $out -cnotmatch $digits) { return $null }
@@ -3267,26 +3271,36 @@ function Get-ToksSteady {
         # decode and 1 MiB cap, or the full machine would re-anchor instead.
         $root = [IO.Path]::GetPathRoot($file)
         $cur = $root
+        $a = [IO.FileAttributes]::Directory
         foreach ($part in $file.Substring($root.Length).Split('\')) {
             if ($part.Length -eq 0) { continue }
             $cur = [IO.Path]::Combine($cur, $part)
-            if (([IO.File]::GetAttributes($cur) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $null }
+            $a = [IO.File]::GetAttributes($cur)
+            if (($a -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $null }
         }
-        if (([IO.File]::GetAttributes($file) -band [IO.FileAttributes]::Directory) -ne 0) { return $null }
+        if (($a -band [IO.FileAttributes]::Directory) -ne 0) { return $null }  # $a is the leaf's
         if ([IO.FileInfo]::new($file).Length -gt 1048576) { return $null }
         $text = $StrictUtf8.GetString([IO.File]::ReadAllBytes($file))
     } catch { return $null }
     # Only the exact line the full machine writes: one LF-terminated line, single
     # spaces, canonical digits or '-'. Any other shape (tabs, double spaces, more lines,
     # a BOM) splits differently under its '[ \t]+' reader, so it gets to decide.
-    $n = '(?:0|[1-9][0-9]{0,17})'
     $line = '\A([0-9a-f][0-9a-f-]*) (' + $n + ') ([0-9]+:[0-9]+) (-|' + $n + ') (-|[0-9]+:[0-9]+) (' + $n + ') (-|' + $n + ') (-|' + $n + ') (' + $n + ')\n\z'
     if ($text -cnotmatch $line) { return $null }
     $f = @($Matches[1], $Matches[2], $Matches[3], $Matches[4], $Matches[5], $Matches[6], $Matches[7], $Matches[8], $Matches[9])
     if ($f[0] -cne $sid -or $f[1] -cne $apiMs) { return $null }
     # The transcript step fires on a key it has not resolved once API time has landed
-    # since its last resolution; only when it cannot is this render a pure read.
-    if ($f[4] -cne ($in + ':' + $out) -and [long]$apiMs -gt [long]$f[5]) { return $null }
+    # since its last resolution; only when it cannot is this render a pure read. Its
+    # cheap preconditions are restated too (no-sample, a usable transcript path that
+    # exists): without them it never fires, and a session with no transcript would
+    # otherwise pay the full compile on every render. Writability is not restated, so
+    # an unwritable state still goes the long way; that is only slower, never wrong.
+    if ($f[4] -cne ($in + ':' + $out) -and [long]$apiMs -gt [long]$f[5] -and [string]$env:CORALLINE_NO_SAMPLE -ne '1' -and
+        -not [string]::IsNullOrEmpty($toksTranscript) -and -not $toksTranscript.StartsWith('\\') -and -not $toksTranscript.StartsWith('//')) {
+        $tp = ''
+        try { $tp = [IO.Path]::GetFullPath($toksTranscript) } catch { $tp = '' }
+        if ($tp -ne '' -and [IO.File]::Exists($tp)) { return $null }
+    }
     $r = [pscustomobject]@{ Ok=$true; Rate=''; Dec=''; Ttft=''; ApiMs=[long]$apiMs }
     if ($f[3] -cne '-') { $r.Rate = $f[3] }
     if ($f[6] -cne '-') { $r.Dec = $f[6] }
