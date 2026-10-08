@@ -1,0 +1,15 @@
+{
+  "cwd": "/Users/demo/projects/coralline",
+  "workspace": { "current_dir": "/Users/demo/projects/coralline" },
+  "model": { "display_name": "Grok 4.6" },
+  "effort": { "level": "high" },
+  "context_window": {
+    "used_percentage": 25,
+    "context_tokens": 12345
+  },
+  "cost": {
+    "total_cost_usd": 1.2345,
+    "total_duration_ms": 5432100
+  },
+  "trigger": "state"
+}

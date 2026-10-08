@@ -71,6 +71,14 @@ Options:
                Register (or remove) the subagent panel renderer in Claude
                settings and exit — the non-interactive twin of the wizard's
                closing question, for AI installs and upgrades.
+  --register-grok
+               Install the Grok runtime under GROK_HOME and append
+               [ui.status_line] to Grok config.toml, then exit. The entrypoint
+               takes its conf and limit store from GROK_HOME, so Grok shares
+               neither with Claude Code. Skips the append when config.toml
+               mentions status_line in any spelling (a duplicate key would
+               invalidate the whole file) and prints the command instead.
+               Touches nothing under ~/.claude.
   --import-p10k
                Import ~/.p10k.zsh without opening the setup menu.
   --wizard     Open the visual wizard directly.
@@ -1290,6 +1298,13 @@ install_files() {
   # that never replaced the file.
   cp "$SCRIPT_DIR/statusline.sh" "$TARGET_DIR/statusline.sh" \
     || die "could not write $TARGET_DIR/statusline.sh (check permissions on the existing file)"
+  # Grok's entrypoint is optional here: --register-grok installs its own copy
+  # under GROK_HOME. Claude Code never runs this one, so a failure to place it
+  # (an unwritable target directory on an upgrade, an older source tree without
+  # the file) must not abort a Claude install -- same fail-open treatment as
+  # configure.sh and the sample payload below.
+  [ -f "$SCRIPT_DIR/statusline-grok.sh" ] \
+    && cp "$SCRIPT_DIR/statusline-grok.sh" "$TARGET_DIR/statusline-grok.sh" 2>/dev/null
   cp "$SCRIPT_DIR/configure.sh" "$TARGET_DIR/configure.sh"
   cp "$SCRIPT_DIR/test/sample-input.json" "$TARGET_DIR/sample-input.json"
   theme_dir="$SCRIPT_DIR/themes"
@@ -1301,6 +1316,7 @@ install_files() {
 $(cd "$theme_dir" && find . -type f -name '*.conf' | sed 's#^\./##')
 THEMES
   chmod +x "$TARGET_DIR/statusline.sh" "$TARGET_DIR/configure.sh"
+  [ -f "$TARGET_DIR/statusline-grok.sh" ] && chmod +x "$TARGET_DIR/statusline-grok.sh"
   installed=1
 }
 
@@ -1349,6 +1365,138 @@ update_settings() {
   settings_merge '.statusLine = {"type": "command", "command": $command, "refreshInterval": 1}' \
     --arg command "$command"
   printf 'Updated %s\n' "$SETTINGS_FILE"
+}
+
+register_grok() {  # append [ui.status_line] to Grok config.toml if the table is absent
+  local cfg dir target cmd last stamp backup n=0 grok_root gconf gdir sl theme rel tmp depth
+  need_file "$SCRIPT_DIR/statusline.sh"
+  need_file "$SCRIPT_DIR/statusline-grok.sh"
+  # Everything Grok needs is copied from SCRIPT_DIR into GROK_HOME below, so a
+  # Grok-only machine never gets a ~/.claude/coralline/ it has no use for.
+  if [ -n "${GROK_HOME:-}" ]; then
+    grok_root="$GROK_HOME"
+  else
+    grok_root="$HOME/.grok"
+  fi
+  cfg="$grok_root/config.toml"
+  # Follow the WHOLE chain, not one link. The write below finishes with a rename
+  # onto $cfg, and a rename replaces the path it is given: stopping at an
+  # intermediate link turns that link into a regular file and leaves the real
+  # config untouched. Appending with >> used to follow the chain for free, so
+  # this became load-bearing only once the write became atomic. The depth cap
+  # matches the kernel's own ELOOP limit and is what stops a symlink cycle from
+  # spinning here.
+  depth=0
+  while [ -L "$cfg" ]; do
+    depth=$((depth + 1))
+    [ "$depth" -le 40 ] || die "too many levels of symbolic links resolving $grok_root/config.toml"
+    dir=$(cd "$(dirname "$cfg")" && pwd -P) || die "could not resolve directory for $cfg"
+    target=$(readlink "$cfg") || die "could not read symlink $cfg"
+    case "$target" in
+      /*) cfg="$target" ;;
+      *)  cfg="$dir/$target" ;;
+    esac
+  done
+  mkdir -p "$grok_root/coralline" || die "could not create $grok_root/coralline"
+  gdir=$(cd "$grok_root/coralline" && pwd)
+  cp "$SCRIPT_DIR/statusline.sh" "$gdir/statusline.sh" \
+    || die "could not write $gdir/statusline.sh"
+  cp "$SCRIPT_DIR/statusline-grok.sh" "$gdir/statusline-grok.sh" \
+    || die "could not write $gdir/statusline-grok.sh"
+  chmod +x "$gdir/statusline.sh" "$gdir/statusline-grok.sh"
+  # Themes travel with the Grok runtime. Sourcing them out of $TARGET_DIR would
+  # tie ~/.grok to a Claude install the documented Grok-only user never makes,
+  # and every render would print "No such file or directory" once it went away.
+  if [ -d "$SCRIPT_DIR/themes" ]; then
+    mkdir -p "$gdir/themes" || die "could not create $gdir/themes"
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      cp "$SCRIPT_DIR/themes/$rel" "$gdir/themes/$rel" \
+        || die "could not write $gdir/themes/$rel"
+    done <<GTHEMES
+$(cd "$SCRIPT_DIR/themes" && find . -type f -name '*.conf' | sed 's#^\./##')
+GTHEMES
+  fi
+  sl="$gdir/statusline-grok.sh"
+  gconf=$(cd "$grok_root" && pwd)/coralline.conf
+  if [ ! -f "$gconf" ]; then
+    theme="$gdir/themes/claude-coral.conf"
+    {
+      printf '# coralline config for Grok Build. Independent of ~/.claude/coralline.conf.\n'
+      if [ -f "$theme" ]; then
+        printf '. %q\n' "$theme"
+      fi
+      printf 'VL_SEGMENTS="dir git model effort ctx cost clock"\n'
+      printf 'VL_LIMIT_SYNC=0\n'
+    } > "$gconf" || die "could not write $gconf"
+  fi
+  # Appending a second definition of ui.status_line makes the WHOLE file
+  # unparseable, so this has to catch every legal spelling, not the one we
+  # write: `[ui.status_line]`, `[ ui.status_line ]`, `["ui"."status_line"]`,
+  # and `status_line.type = ...` or `status_line = { ... }` under `[ui]`.
+  # Nothing here can parse TOML (bash + jq only), so any mention of the key is
+  # treated as "already configured" and the user is handed the command to set
+  # by hand. A false positive costs one message; a false negative costs their
+  # config file.
+  #
+  # A quoted key can also spell the name with escapes: `["ui"."status_line"]`
+  # and `"status_line".type = ...` both parse to ui.status_line (checked
+  # with tomllib) and neither carries the literal text. An escape is therefore
+  # unreadable-key territory and blocks the append too, but only where a key can
+  # sit -- inside a table header, or left of the `=`. An escape in a VALUE
+  # (`greeting = "café"`) is ordinary TOML and appending after it stays
+  # valid, so matching every `\u` in the file would refuse honest configs for
+  # nothing.
+  if [ -f "$cfg" ] \
+    && grep -Eq 'status_line|^[[:space:]]*(\[[^]]*\\[uU]|[^=]*\\[uU][^=]*=)' "$cfg"; then
+    printf 'Updated Grok runtime in %s\n' "$gdir"
+    printf 'Left unchanged: %s already mentions status_line\n' "$cfg"
+    printf 'To point Grok here, set that table to:\n'
+    printf '  type = "command"\n'
+    printf '  command = "bash %s"\n' "$sl"
+    return 0
+  fi
+  if [ -f "$cfg" ]; then
+    stamp=$(date +%Y%m%d%H%M%S)
+    backup="$cfg.bak.$stamp"
+    while [ -e "$backup" ]; do
+      n=$((n + 1)); backup="$cfg.bak.$stamp.$n"
+    done
+    cp "$cfg" "$backup" || die "could not back up $cfg; original left unchanged"
+  fi
+  dir=$(dirname "$cfg")
+  mkdir -p "$dir" || die "could not create $dir"
+  # Grok execs a path directly when it names an executable. `env VAR=... "script"`
+  # is not a path and can fail with Permission denied (os error 13). Invoke via
+  # bash, same as Claude Code's statusLine.command. The Grok entrypoint resolves
+  # its own conf and store from GROK_HOME, so no variables need passing here.
+  printf -v cmd 'bash %q' "$sl"
+  cmd="${cmd//\\/\\\\}"
+  cmd="${cmd//\"/\\\"}"
+  # Build the result in a sibling temp file and rename it into place. Appending
+  # straight to the live config leaves a half-written table if a write fails
+  # part way, and a malformed table is the failure this whole function exists to
+  # avoid. The rename is atomic within the directory, and $cfg is already
+  # symlink-resolved above, so a symlinked config.toml keeps pointing at the
+  # file that gets replaced. The backup above is not made redundant by this: it
+  # covers changing your mind, this covers a failed write.
+  tmp=$(mktemp "$dir/.coralline-grok.XXXXXX") || die "could not create a temp file in $dir"
+  if [ -f "$cfg" ]; then
+    cp -p "$cfg" "$tmp" || { rm -f "$tmp"; die "could not stage $cfg; original left unchanged"; }
+  fi
+  {
+    if [ -s "$tmp" ]; then
+      last=$(tail -c 1 "$tmp"; printf x)
+      last="${last%x}"
+      [ "$last" = $'\n' ] || printf '\n'
+    fi
+    printf '[ui.status_line]\n'
+    printf 'type = "command"\n'
+    printf 'command = "%s"\n' "$cmd"
+    printf 'refresh_interval = 1\n'
+  } >> "$tmp" || { rm -f "$tmp"; die "could not write $tmp; $cfg left unchanged"; }
+  mv "$tmp" "$cfg" || { rm -f "$tmp"; die "could not replace $cfg"; }
+  printf 'Updated %s\n' "$cfg"
 }
 
 subagent_enabled() {  # exit 0 when settings.json registers the subagent renderer
@@ -1539,6 +1687,7 @@ for arg in "$@"; do
     --default) setup_mode="default" ;;
     --subagent-rows=on)  enable_subagent_statusline;  verify_subagent_render; exit 0 ;;
     --subagent-rows=off) disable_subagent_statusline; exit 0 ;;
+    --register-grok) register_grok; exit 0 ;;
     --import-p10k) setup_mode="import-p10k" ;;
     --wizard) setup_mode="wizard" ;;
     --help|-h) usage; exit 0 ;;
