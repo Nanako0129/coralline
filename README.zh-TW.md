@@ -13,11 +13,13 @@ macOS、Linux 與 Git Bash 上是純 Bash，Windows 另有原生 PowerShell rend
 
 [English](./README.md) · **繁體中文**
 
-[快速開始](#快速開始) · [主題](#主題) · [風格](#風格與版面) · [區段](#區段) · [Subagent 面板](#subagent-面板) · [設定檔](#設定檔) · [安裝選項](#安裝選項) · [更新](#更新重新設定與移除)
+[快速開始](#快速開始) · [主題](#主題) · [風格](#風格與版面) · [區段](#區段) · [Subagent 面板](#subagent-面板) · [額度工具](#額度工具) · [設定檔](#設定檔) · [安裝選項](#安裝選項) · [更新](#更新重新設定與移除)
 
 </div>
 
 ![Claude Code 輸入框下方的 coralline：三列 powerline 膠囊，顯示目錄、git、model、effort、context、prompt cache、額度、費用與時鐘](./assets/hero.png)
+
+<p align="center"><sub>圖中是預設區段，另外加上選用的 <code>effort</code> 與 <code>cache</code>。</sub></p>
 
 <table>
 <tr>
@@ -203,7 +205,7 @@ Bash install-only 與一般更新不會自行新增或刪除 `subagentStatusLine
 
 ### 消耗率區段
 
-![burn 區段在完整狀態列中的樣子，以及它的各種狀態：重置前耗盡、勢均力敵、餘裕充足、永遠用不完、閒置、暖機中](./assets/burn-segment.png)
+![burn 區段在狀態列中的樣子，以及它的各種狀態：重置前耗盡、勢均力敵、餘裕充足、永遠用不完、閒置、暖機中](./assets/burn-segment.png)
 
 把 `burn` 加入 `VL_SEGMENTS`，即可顯示綁定中的 5h 或 7d 額度到達 100% 的預估時間。它預設關閉；列在清單中時會把樣本寫入 `~/.claude/coralline/burn-5h.tsv`，移除後停止寫入。`CORALLINE_BURN_WINDOW` 預設為 600 秒。動機與 estimator 契約見 [issue #17](https://github.com/Nanako0129/coralline/issues/17)。
 

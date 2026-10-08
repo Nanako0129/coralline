@@ -13,11 +13,13 @@ Pure Bash on macOS, Linux, and Git Bash, plus a native PowerShell renderer for W
 
 **English** · [繁體中文](./README.zh-TW.md)
 
-[Quick start](#quick-start) · [Themes](#themes) · [Styles](#styles-and-layout) · [Segments](#segments) · [Subagent panel](#subagent-panel) · [Configuration](#configuration) · [Install options](#install-options) · [Update](#update-reconfigure-and-uninstall)
+[Quick start](#quick-start) · [Themes](#themes) · [Styles](#styles-and-layout) · [Segments](#segments) · [Subagent panel](#subagent-panel) · [Rate-limit tools](#rate-limit-tools) · [Configuration](#configuration) · [Install options](#install-options) · [Update](#update-reconfigure-and-uninstall)
 
 </div>
 
 ![coralline under a Claude Code prompt: three rows of powerline pills showing directory, git, model, effort, context, prompt cache, rate limits, cost, and clock](./assets/hero.png)
+
+<p align="center"><sub>The default segments plus the opt-in <code>effort</code> and <code>cache</code>.</sub></p>
 
 <table>
 <tr>
@@ -203,7 +205,7 @@ Per-task model and context fields require Claude Code v2.1.205+. On v2.1.211, co
 
 ### Burn-rate segment
 
-![The burn segment in a full statusline, and each of its states: empties before reset, neck-and-neck, room to spare, never runs dry, idle, and warming up](./assets/burn-segment.png)
+![The burn segment in a statusline, and each of its states: empties before reset, neck-and-neck, room to spare, never runs dry, idle, and warming up](./assets/burn-segment.png)
 
 Add `burn` to `VL_SEGMENTS` to show the projected time until the binding 5h or 7d limit reaches 100%. It is off by default; while listed, it samples to `~/.claude/coralline/burn-5h.tsv`, and removing it stops writes. `CORALLINE_BURN_WINDOW` defaults to 600 seconds. The motivation and estimator contract are in [issue #17](https://github.com/Nanako0129/coralline/issues/17).
 

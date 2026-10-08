@@ -457,7 +457,7 @@ FULL_ROW2 = 'VL_SEGMENTS2="limit5h limit7d burn cost clock"\n'
 
 def burn_blocks():
     return [
-        ("the full statusline, burn included",     run_burn("claude-coral",
+        ("burn in the statusline",                 run_burn("claude-coral",
             FULL_ROW1, CLIMB_MED, 31, 7800, extra_conf=FULL_ROW2)),
         ("empties before the 5h window resets",    run_burn("claude-coral",
             "limit5h burn", CLIMB_MED, 31, 10800)),
@@ -500,43 +500,26 @@ def hero_rows():
     return run_bar("claude-coral", "dir git model effort", with_cache(MID), rows)
 
 def themes_cells():
-    # Two short rows per theme, so two columns stay legible at README width;
-    # 7d at 79% shows each theme's hot color.
-    return [(t, THEME_NOTES[t],
+    # Two short rows per theme, so two columns stay legible at README width.
+    # 5h at 41% rather than 7d at 79%: some hot foregrounds (lunar-pink's dark
+    # red) are unreadable on their pill at half size; the cards show hot states.
+    return [(t, THEME_NOTES.get(t, ""),
              run_bar(t, "dir git model", MID)
-             + run_bar(t, "limit7d cost clock", MID))
+             + run_bar(t, "limit5h cost clock", MID))
             for t in THEMES]
 
 def styles_blocks():
+    # A style is a look, not a palette: the stock claude-coral colours ride every
+    # style (classic = lean text on VL_BG_BAR plus a trailing cap). No clock here:
+    # in lean and classic, claude-coral's clock text is its dark navy pill colour,
+    # which all but disappears on the dark window and bar.
     look = lambda s: f'VL_STYLE="{s}"\n'
     rows = lambda extra: (run_bar("claude-coral", "dir git model effort", MID, extra)
-                          + run_bar("claude-coral", "limit5h limit7d cost clock", MID, extra))
+                          + run_bar("claude-coral", "limit5h limit7d cost", MID, extra))
     return [
         ("pill (default)", rows("")),
         ("lean",           rows(look("lean"))),
         ("classic",        rows(look("classic"))),
-    ]
-
-def lean_blocks():
-    lean = 'VL_STYLE="lean"\n'
-    return [
-        ("daily drive",       run_bar("claude-coral", "dir git model clock", LOW, lean)),
-        ("context & limits",  run_bar("claude-coral", "ctx limit5h limit7d cost", MID, lean)),
-        ("running hot",       run_bar("claude-coral", "ctx limit5h limit7d cost", HIGH, lean)),
-        ("extras",            run_bar("claude-coral", "effort lines style duration stash", HIGH, lean)),
-        ("same data, pill style", run_bar("claude-coral", "dir git model clock", LOW)),
-    ]
-
-def classic_blocks():
-    # Classic is a look, not a palette: the stock claude-coral colours ride p10k's
-    # own dark bar (VL_STYLE="classic" → lean text on VL_BG_BAR + a trailing cap).
-    classic = 'VL_STYLE="classic"\n'
-    return [
-        ("daily drive",       run_bar("claude-coral", "dir git model clock", LOW, classic)),
-        ("context & limits",  run_bar("claude-coral", "ctx limit5h limit7d cost", MID, classic)),
-        ("running hot",       run_bar("claude-coral", "ctx limit5h limit7d cost", HIGH, classic)),
-        ("extras",            run_bar("claude-coral", "effort lines style duration stash", HIGH, classic)),
-        ("same data, lean (no bar)", run_bar("claude-coral", "dir git model clock", LOW, 'VL_STYLE="lean"\n')),
     ]
 
 def run_panel(theme, tasks, extra_conf=""):
@@ -601,8 +584,6 @@ def main():
                 ASSETS / "themes.png")
     render_image("coralline · three styles, same data", styles_blocks(),
                  ASSETS / "styles.png")
-    render_image("coralline · lean style", lean_blocks(), ASSETS / "style-lean.png")
-    render_image("coralline · classic style", classic_blocks(), ASSETS / "style-classic.png")
     render_image("coralline · responsive wrap", wrap_blocks(), ASSETS / "wrap-demo.png")
     render_image("coralline · subagent panel", panel_blocks(), ASSETS / "subagent-panel.png")
     for theme in THEMES:
