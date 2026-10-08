@@ -27,7 +27,7 @@ macOS、Linux 與 Git Bash 上是純 Bash，Windows 另有原生 PowerShell rend
 <td width="50%" valign="top"><b>額度一眼看清。</b><br>5 小時與 7 天額度量表附重置倒數，另有選用的消耗率預估，也能在 session 之間同步開啟中的額度視窗。</td>
 </tr>
 <tr>
-<td valign="top"><b>套用主題的 subagent 面板。</b><br>每個執行中的 agent 各佔一列，顯示它的 model、context 量表、經過時間，也可以加上 reasoning effort。</td>
+<td valign="top"><b>套用主題的 subagent 面板。</b><br>每個 subagent task 各佔一列、依狀態上色，顯示它的 model、context 量表、經過時間，也可以加上 reasoning effort。</td>
 <td valign="top"><b>跟著視窗寬度走。</b><br><code>VL_LAYOUT="auto"</code> 會在終端機變窄時，把狀態列折成最多 <code>VL_MAX_LINES</code> 行。</td>
 </tr>
 <tr>

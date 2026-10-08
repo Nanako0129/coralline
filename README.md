@@ -27,7 +27,7 @@ Pure Bash on macOS, Linux, and Git Bash, plus a native PowerShell renderer for W
 <td width="50%" valign="top"><b>Limits you can plan around.</b><br>5-hour and 7-day gauges with reset countdowns, an opt-in burn-rate ETA, and optional sync of the open windows across sessions.</td>
 </tr>
 <tr>
-<td valign="top"><b>A themed subagent panel.</b><br>Each running agent gets its own row with its model, context gauge, elapsed time, and optionally its reasoning effort.</td>
+<td valign="top"><b>A themed subagent panel.</b><br>Each subagent task gets its own row, colored by its status, with its model, context gauge, elapsed time, and optionally its reasoning effort.</td>
 <td valign="top"><b>Fits the window.</b><br><code>VL_LAYOUT="auto"</code> wraps the bar over as many as <code>VL_MAX_LINES</code> rows as the terminal narrows.</td>
 </tr>
 <tr>
