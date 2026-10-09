@@ -10,7 +10,8 @@ Usage:
     python3 tools/render-screenshots.py
 
 Deps: pillow, fonttools, and a "MesloLG* Nerd Font Mono" installed.
-Outputs: assets/hero.png and assets/theme-<name>.png
+Outputs: assets/hero.png, assets/themes.png, assets/styles.png,
+         assets/theme-<name>.png and the feature demos (burn, wrap, panel)
 """
 
 import glob
@@ -27,17 +28,29 @@ from PIL import Image, ImageDraw, ImageFont
 
 REPO = Path(__file__).resolve().parent.parent
 ASSETS = REPO / "assets"
-FAKE_HOME = Path(tempfile.gettempdir()) / "vl-home"
+# resolve(): macOS's /var is a symlink to /private/var and statusline.sh sees the
+# resolved cwd, so an unresolved HOME would not prefix-match it and dir would
+# render the raw /var/…/coralline path instead of ~/dev/coralline.
+FAKE_HOME = Path(tempfile.gettempdir()).resolve() / "vl-home"
 DEMO = FAKE_HOME / "dev" / "coralline"
 
 THEMES = ["claude-coral", "catppuccin-mocha", "nord",
           "gruvbox-dark", "tokyo-night", "mono", "dracula",
           "lunar-pink", "reverie", "morning-haze"]
 
-# hero.png is a curated sampler frozen to the original six themes; new themes go
-# in the per-theme gallery (theme-<name>.png) only, so the banner doesn't grow.
-HERO_THEMES = ["claude-coral", "catppuccin-mocha", "nord",
-               "gruvbox-dark", "tokyo-night", "mono"]
+# One-line palette notes shown beside each name in the themes.png grid.
+THEME_NOTES = {
+    "claude-coral": "steel blue · mauve · coral (default)",
+    "catppuccin-mocha": "soft pastels on dark",
+    "nord": "arctic frost",
+    "gruvbox-dark": "warm retro",
+    "tokyo-night": "neon on deep navy",
+    "mono": "grayscale minimalism",
+    "dracula": "cyan · pink · purple",
+    "lunar-pink": "pink · cyan · yellow",
+    "reverie": "soft pastels, plum text",
+    "morning-haze": "periwinkle · sage · sandstone",
+}
 
 # ── Geometry (S = supersampling factor, downscaled at save time) ─────────────
 S = 2
@@ -45,7 +58,7 @@ FS = 26 * S
 CELL_H = 46 * S
 PAD = 40 * S
 TITLE_H = 62 * S
-LABEL_H = 30 * S
+LABEL_H = 34 * S
 ROW_GAP = 22 * S
 LINE_GAP = 6 * S
 
@@ -54,6 +67,17 @@ BORDER = (38, 43, 61)
 TITLE_FG = (150, 155, 175)
 LABEL_FG = (99, 106, 135)
 DEFAULT_FG = (220, 222, 228)
+# Theme notes sit one step dimmer than the label so the name stays the anchor.
+NOTE_FG = (78, 84, 108)
+# Gap between grid columns: wide enough that two pill rows never read as one bar.
+COL_GAP = 56 * S
+# Hero prompt box: a brighter border than the window frame so it reads as the
+# input field the statusline sits under; the coral caret ties it to the default
+# theme.
+PROMPT_BORDER = (72, 79, 104)
+PROMPT_CARET = (217, 119, 87)
+PROMPT_TEXT = (200, 204, 216)
+CURSOR_FG = (150, 156, 178)
 
 CAP_L, CAP_R, SEP = "", "", ""
 
@@ -71,7 +95,14 @@ FONT_PATH = find_font("Regular")
 FONT = ImageFont.truetype(FONT_PATH, FS)
 FONT_B = ImageFont.truetype(find_font("Bold"), FS)
 FONT_TITLE = ImageFont.truetype(FONT_PATH, 20 * S)
-FONT_LABEL = ImageFont.truetype(find_font("Bold"), 15 * S)
+# Scene labels explain each row (burn states, wrap caps); README shows these
+# images at roughly 0.6x, where 18 px is the smallest label still readable.
+FONT_LABEL = ImageFont.truetype(find_font("Bold"), 18 * S)
+# themes.png is shown at about half size in the README, so its labels need a
+# larger face than the full-size cards to stay readable there.
+FONT_GRID_LABEL = ImageFont.truetype(find_font("Bold"), 21 * S)
+FONT_GRID_NOTE = ImageFont.truetype(FONT_PATH, 21 * S)
+GRID_LABEL_H = 40 * S
 
 # Some symbols the script emits are absent from Meslo NF (terminals fall back
 # to other fonts; PIL cannot). Substitute with glyphs the font does have.
@@ -88,6 +119,7 @@ GLYPH_FIX = {
     "⬡": pick_glyph([0x2B22, 0x25C7], "#"),    # ⬡ → hexagon/diamond (ctx)
     "⬢": pick_glyph([0x2B22, 0x25CF], "#"),    # ⬢ → filled hexagon/circle (project)
     "⧖": pick_glyph([0xF252, 0xF017, 0x231B], "~"),  # ⧖ → hourglass/clock
+    "⛁": pick_glyph([0xF1C0, 0x26C1], "#"),    # ⛁ → nf-fa-database (cache)
 }
 
 # ── xterm-256 → RGB ──────────────────────────────────────────────────────────
@@ -191,17 +223,7 @@ def render_image(title, blocks, out_path):
         height += LABEL_H + len(rows) * CELL_H + (len(rows) - 1) * LINE_GAP + ROW_GAP
     height += PAD - ROW_GAP
 
-    img = Image.new("RGB", (width, height), WINDOW_BG)
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle([0, 0, width - 1, height - 1], radius=14 * S,
-                           outline=BORDER, width=S)
-    for idx, color in enumerate([(255, 95, 86), (255, 189, 46), (39, 201, 63)]):
-        cx = (28 + idx * 24) * S
-        r = 7 * S
-        draw.ellipse([cx - r, TITLE_H // 2 - r, cx + r, TITLE_H // 2 + r], fill=color)
-    draw.text((width / 2, TITLE_H / 2 + S), title,
-              font=FONT_TITLE, fill=TITLE_FG, anchor="mm")
-    draw.line([PAD // 2, TITLE_H, width - PAD // 2, TITLE_H], fill=BORDER, width=S)
+    img, draw = new_window(width, height, title)
 
     y = TITLE_H + PAD // 2
     for label, rows in blocks:
@@ -213,9 +235,83 @@ def render_image(title, blocks, out_path):
             y += CELL_H + LINE_GAP
         y += ROW_GAP - LINE_GAP
 
+    save_window(img, out_path)
+
+def new_window(width, height, title):
+    # Transparent outside the rounded frame, so the corners don't show as dark
+    # squares on GitHub's light theme.
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([0, 0, width - 1, height - 1], radius=14 * S,
+                           fill=WINDOW_BG, outline=BORDER, width=S)
+    for idx, color in enumerate([(255, 95, 86), (255, 189, 46), (39, 201, 63)]):
+        cx = (28 + idx * 24) * S
+        r = 7 * S
+        draw.ellipse([cx - r, TITLE_H // 2 - r, cx + r, TITLE_H // 2 + r], fill=color)
+    draw.text((width / 2, TITLE_H / 2 + S), title,
+              font=FONT_TITLE, fill=TITLE_FG, anchor="mm")
+    draw.line([PAD // 2, TITLE_H, width - PAD // 2, TITLE_H], fill=BORDER, width=S)
+    return img, draw
+
+def save_window(img, out_path):
+    width, height = img.size
     img = img.resize((width // S, height // S), Image.LANCZOS)
-    img.save(out_path)
+    img.save(out_path, optimize=True)
     print(f"wrote {out_path}  ({width // S}x{height // S})")
+
+def render_grid(title, cells, cols, out_path):
+    """cells: list of (label, note, rows), laid out left to right in `cols`
+    columns. Every cell gets the widest cell's width so the columns align."""
+    cell_w = max(draw_cells(None, c, 0, 0) for _, _, rows in cells for c in rows)
+    n_rows = max(len(rows) for _, _, rows in cells)
+    cell_h = GRID_LABEL_H + n_rows * CELL_H + (n_rows - 1) * LINE_GAP
+    grid_rows = -(-len(cells) // cols)
+    width = int(cols * cell_w + (cols - 1) * COL_GAP) + 2 * PAD
+    height = TITLE_H + PAD // 2 + grid_rows * (cell_h + ROW_GAP) - ROW_GAP + PAD
+
+    img, draw = new_window(width, height, title)
+    for i, (label, note, rows) in enumerate(cells):
+        x = PAD + (i % cols) * (cell_w + COL_GAP)
+        y = TITLE_H + PAD // 2 + (i // cols) * (cell_h + ROW_GAP)
+        draw.text((x, y + GRID_LABEL_H // 2), label,
+                  font=FONT_GRID_LABEL, fill=LABEL_FG, anchor="lm")
+        if note:
+            nx = x + FONT_GRID_LABEL.getlength(label) + 16 * S
+            draw.text((nx, y + GRID_LABEL_H // 2), note,
+                      font=FONT_GRID_NOTE, fill=NOTE_FG, anchor="lm")
+        y += GRID_LABEL_H
+        for c in rows:
+            draw_cells(draw, c, x, y)
+            y += CELL_H + LINE_GAP
+    save_window(img, out_path)
+
+def render_hero(title, prompt, rows, out_path):
+    """A Claude Code-style input box with the statusline rows underneath it,
+    which is where Claude Code draws the statusline."""
+    content_w = max(draw_cells(None, c, 0, 0) for c in rows)
+    width = int(content_w) + 2 * PAD
+    box_h = CELL_H + 22 * S
+    gap = 14 * S
+    height = (TITLE_H + PAD // 2 + box_h + gap
+              + len(rows) * CELL_H + (len(rows) - 1) * LINE_GAP + PAD)
+
+    img, draw = new_window(width, height, title)
+    y = TITLE_H + PAD // 2
+    draw.rounded_rectangle([PAD, y, width - PAD, y + box_h], radius=10 * S,
+                           outline=PROMPT_BORDER, width=S)
+    mid = y + box_h / 2 + S
+    x = PAD + 22 * S
+    draw.text((x, mid), ">", font=FONT_B, fill=PROMPT_CARET, anchor="lm")
+    x += FONT.getlength("> ")
+    draw.text((x, mid), prompt, font=FONT, fill=PROMPT_TEXT, anchor="lm")
+    x += FONT.getlength(prompt + " ")
+    draw.rectangle([x, mid - FS * 0.55, x + FONT.getlength(" ") - S, mid + FS * 0.5],
+                   fill=CURSOR_FG)
+    y += box_h + gap
+    for c in rows:
+        draw_cells(draw, c, PAD, y)
+        y += CELL_H + LINE_GAP
+    save_window(img, out_path)
 
 # ── Demo data ────────────────────────────────────────────────────────────────
 def setup_demo_repo():
@@ -325,12 +421,16 @@ def make_payload(**over):
 # within CORALLINE_BURN_WINDOW (600s). We seed a sample file so the live
 # statusline.sh produces a real recent-slope ETA — no faked output.
 def run_burn(theme, segments, climb, fh_pct, fh_reset_s,
-             wd_pct=40, wd_reset_s=6 * 86400):
+             wd_pct=40, wd_reset_s=6 * 86400, extra_conf=""):
     """climb: list of (seconds_ago, integer_pct) seeding the recent slope, or
     None for the cold-start 'warming' state. wd_pct=None omits the 7d limit
     entirely (so a no-samples render shows the true '↗ …', not a 7d fallback)."""
     now = int(time.time())
     burn_file = FAKE_HOME / "burn-demo.tsv"
+    # statusline.sh keeps a cached estimate (.est) and tick files beside the
+    # sample file; clear them so each scene is estimated from its own samples.
+    for side in FAKE_HOME.glob("burn-demo.tsv.*"):
+        side.unlink()
     burn_file.write_text(
         "".join(f"{now - ago}\t{pct}\t{now + fh_reset_s}\n" for ago, pct in climb)
         if climb else ""
@@ -338,7 +438,7 @@ def run_burn(theme, segments, climb, fh_pct, fh_reset_s,
     rl = {"five_hour": {"used_percentage": fh_pct, "resets_at": now + fh_reset_s}}
     if wd_pct is not None:
         rl["seven_day"] = {"used_percentage": wd_pct, "resets_at": now + wd_reset_s}
-    return run_bar(theme, segments, make_payload(rate_limits=rl),
+    return run_bar(theme, segments, make_payload(rate_limits=rl), extra_conf,
                    env_extra={"CORALLINE_BURN_FILE": str(burn_file),
                               "CORALLINE_BURN_WINDOW": "600"})
 
@@ -350,14 +450,15 @@ CLIMB_SLOW = [(560, 29), (500, 30)]
 # Crossings exist but all older than the 600s window → idle → dim ✓.
 CLIMB_IDLE = [(1400, 30), (1300, 31)]
 
-# The complete canonical layout, with burn in its documented slot (after
-# limit7d) — i.e. what a fully-configured coralline looks like in Claude Code.
-FULL = "dir git model effort ctx limit5h limit7d burn cost clock"
+# The canonical order with burn in its documented slot (after limit7d), minus
+# effort and ctx, over two fixed rows so the image stays readable at README width.
+FULL_ROW1 = "dir git model"
+FULL_ROW2 = 'VL_SEGMENTS2="limit5h limit7d burn cost clock"\n'
 
 def burn_blocks():
     return [
-        ("the full statusline, burn included",     run_burn("claude-coral",
-            FULL, CLIMB_MED, 31, 7800)),
+        ("burn in the statusline",                 run_burn("claude-coral",
+            FULL_ROW1, CLIMB_MED, 31, 7800, extra_conf=FULL_ROW2)),
         ("empties before the 5h window resets",    run_burn("claude-coral",
             "limit5h burn", CLIMB_MED, 31, 10800)),
         ("reset and empty are neck-and-neck",      run_burn("claude-coral",
@@ -383,31 +484,42 @@ def theme_blocks(theme):
         ("extras",             run_bar(theme, "effort lines style duration stash", HIGH)),
     ]
 
-def hero_blocks():
-    return [(theme, run_bar(theme, "dir git model clock", MID)
-                    + run_bar(theme, "ctx limit5h cost", MID))
-            for theme in HERO_THEMES]
+def with_cache(payload_json, ratio=0.9812, left_s=252):
+    """Add a warm prompt cache expiring `left_s` seconds from now."""
+    p = json.loads(payload_json)
+    p["prompt_cache"] = {"warm": True, "ttl": "5m", "hit_ratio": ratio,
+                         "expires_at": int(time.time()) + left_s}
+    return json.dumps(p)
 
-def lean_blocks():
-    lean = 'VL_STYLE="lean"\n'
-    return [
-        ("daily drive",       run_bar("claude-coral", "dir git model clock", LOW, lean)),
-        ("context & limits",  run_bar("claude-coral", "ctx limit5h limit7d cost", MID, lean)),
-        ("running hot",       run_bar("claude-coral", "ctx limit5h limit7d cost", HIGH, lean)),
-        ("extras",            run_bar("claude-coral", "effort lines style duration stash", HIGH, lean)),
-        ("same data, pill style", run_bar("claude-coral", "dir git model clock", LOW)),
-    ]
+# GitHub shows a README image at about 830 CSS px, so a scene's width decides its
+# text size there: rows are split to keep README images near 1100-1500 px wide,
+# where the 26 px cells land around 14-19 px instead of shrinking to 11.
+def hero_rows():
+    rows = ('VL_SEGMENTS2="ctx cache"\n'
+            'VL_SEGMENTS3="limit5h limit7d cost clock"\n')
+    return run_bar("claude-coral", "dir git model effort", with_cache(MID), rows)
 
-def classic_blocks():
-    # Classic is a look, not a palette: the stock claude-coral colours ride p10k's
-    # own dark bar (VL_STYLE="classic" → lean text on VL_BG_BAR + a trailing cap).
-    classic = 'VL_STYLE="classic"\n'
+def themes_cells():
+    # Two short rows per theme, so two columns stay legible at README width.
+    # 5h at 41% rather than 7d at 79%: some hot foregrounds (lunar-pink's dark
+    # red) are unreadable on their pill at half size; the cards show hot states.
+    return [(t, THEME_NOTES.get(t, ""),
+             run_bar(t, "dir git model", MID)
+             + run_bar(t, "limit5h cost clock", MID))
+            for t in THEMES]
+
+def styles_blocks():
+    # A style is a look, not a palette: the stock claude-coral colours ride every
+    # style (classic = lean text on VL_BG_BAR plus a trailing cap). No clock here:
+    # in lean and classic, claude-coral's clock text is its dark navy pill colour,
+    # which all but disappears on the dark window and bar.
+    look = lambda s: f'VL_STYLE="{s}"\n'
+    rows = lambda extra: (run_bar("claude-coral", "dir git model effort", MID, extra)
+                          + run_bar("claude-coral", "limit5h limit7d cost", MID, extra))
     return [
-        ("daily drive",       run_bar("claude-coral", "dir git model clock", LOW, classic)),
-        ("context & limits",  run_bar("claude-coral", "ctx limit5h limit7d cost", MID, classic)),
-        ("running hot",       run_bar("claude-coral", "ctx limit5h limit7d cost", HIGH, classic)),
-        ("extras",            run_bar("claude-coral", "effort lines style duration stash", HIGH, classic)),
-        ("same data, lean (no bar)", run_bar("claude-coral", "dir git model clock", LOW, 'VL_STYLE="lean"\n')),
+        ("pill (default)", rows("")),
+        ("lean",           rows(look("lean"))),
+        ("classic",        rows(look("classic"))),
     ]
 
 def run_panel(theme, tasks, extra_conf=""):
@@ -441,7 +553,8 @@ def panel_blocks():
     ]
     clock = 'VL_CLOCK="24h"\nVL_CLOCK_SECONDS=0\n'
     return [
-        ("main statusline", run_bar("claude-coral", "dir git model effort ctx", MID, clock)
+        ("main statusline", run_bar("claude-coral", "dir git model effort", MID, clock)
+                          + run_bar("claude-coral", "ctx", MID, clock)
                           + run_bar("claude-coral", "limit5h limit7d cost clock", MID, clock)),
         ("subagent panel rows", run_panel("claude-coral", tasks, 'VL_NAME_MAX=46\n')),
     ]
@@ -465,9 +578,12 @@ def main():
                      ASSETS / "burn-segment.png")
     if only == "burn":
         return
-    render_image("coralline — pick your vibe", hero_blocks(), ASSETS / "hero.png")
-    render_image("coralline · lean style", lean_blocks(), ASSETS / "style-lean.png")
-    render_image("coralline · classic style", classic_blocks(), ASSETS / "style-classic.png")
+    render_hero("claude · ~/dev/coralline", "make the burn ETA ignore idle gaps",
+                hero_rows(), ASSETS / "hero.png")
+    render_grid("coralline · ten bundled themes", themes_cells(), 2,
+                ASSETS / "themes.png")
+    render_image("coralline · three styles, same data", styles_blocks(),
+                 ASSETS / "styles.png")
     render_image("coralline · responsive wrap", wrap_blocks(), ASSETS / "wrap-demo.png")
     render_image("coralline · subagent panel", panel_blocks(), ASSETS / "subagent-panel.png")
     for theme in THEMES:
