@@ -237,6 +237,7 @@ Bash 讀取 `~/.claude/coralline.conf`，原生 renderer 也能讀同一個檔�
 | `VL_MAX_LINES` / `VL_WRAP_MARGIN` | `3` / `4` | `auto` 的行數上限與右側留白 |
 | `VL_SEGMENTS` | `dir git model ctx limit5h limit7d cost clock` | 第一列，亦是 `auto` 模式的完整清單 |
 | `VL_SEGMENTS2` / `VL_SEGMENTS3` | 空 | 選用的固定第二、三列 |
+| `VL_HEAD_SEGMENTS` | 空 | 在其他 segment 上方獨立成一行顯示的 segment，兩種 layout 都適用（例如 `"relay"`）；不計入 `VL_MAX_LINES`，全部隱藏時整行不印。僅 Bash renderer；請直接寫在 `coralline.conf`（wizard 不會保留） |
 | `VL_CLOCK` / `VL_CLOCK_SECONDS` | `12h` / `1` | `12h`、`24h` 或 `off`；秒數開關 |
 | `VL_BAR_WIDTH` | `5` | 量表寬度 |
 | `VL_BAR_FILL` / `VL_BAR_EMPTY` | `▰` / `▱` | 量表字符 |

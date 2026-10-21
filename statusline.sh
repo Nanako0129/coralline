@@ -46,6 +46,9 @@ VL_WRAP_MARGIN=4                # auto only — keep this many columns free on t
                                 # 4 covers Claude Code's full-width L/R padding (2 cols each)
 VL_SEGMENTS="dir git model ctx limit5h limit7d cost clock"
 VL_SEGMENTS2=""                 # fixed only — optional second line
+VL_HEAD_SEGMENTS=""             # either layout — segments drawn on a line of their own
+                                # above the rest (e.g. "relay"); not counted in
+                                # VL_MAX_LINES, and skipped when all of them hide
 VL_SEGMENTS3=""                 # fixed only — optional third line
 VL_BAR_WIDTH=5
 VL_BAR_FILL="▰"
@@ -1614,7 +1617,7 @@ push() {
 
 seg_project() {  # repo-root name in a repo; falls back to dir outside one (unless dir is already shown)
   if [ -z "$GIT_ROOT" ]; then
-    case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" dir "*) return 0 ;; esac
+    case " $VL_HEAD_SEGMENTS $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" dir "*) return 0 ;; esac
     seg_dir; return
   fi
   fg "$VL_FG_TEXT"; trunc "$GIT_ROOT" "$VL_NAME_MAX"
@@ -2524,7 +2527,7 @@ $_JSON_FIELDS
 JSON
 sid="${sid%$'\r'}"  # native Windows jq writes CRLF; the last field keeps the CR
 
-_SEG_SCAN=" $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 "
+_SEG_SCAN=" $VL_HEAD_SEGMENTS $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 "
 [ "$VL_FLOAT" = "1" ] && _SEG_SCAN="$_SEG_SCAN$VL_FLOAT_SEGMENTS "
 case "$_SEG_SCAN" in *" git "*|*" stash "*|*" project "*) read_git ;; esac
 case "$_SEG_SCAN" in (*" relay "*) relay_sample ;; esac
@@ -2591,6 +2594,11 @@ emit_float() {
 }
 
 [ "$VL_FLOAT" = "1" ] && emit_float
+
+if [ -n "$VL_HEAD_SEGMENTS" ]; then
+  build_segments "$VL_HEAD_SEGMENTS"
+  [ "${#SEG_BGS[@]}" -gt 0 ] && print_range 0 $(( ${#SEG_BGS[@]} - 1 ))
+fi
 
 if [ "$VL_LAYOUT" = "auto" ]; then
   build_segments "$VL_SEGMENTS"

@@ -237,6 +237,7 @@ Bash reads `~/.claude/coralline.conf`; the native renderer can read the same fil
 | `VL_MAX_LINES` / `VL_WRAP_MARGIN` | `3` / `4` | line cap and right margin for `auto` |
 | `VL_SEGMENTS` | `dir git model ctx limit5h limit7d cost clock` | first row, and the complete list in `auto` |
 | `VL_SEGMENTS2` / `VL_SEGMENTS3` | empty | optional fixed second and third rows |
+| `VL_HEAD_SEGMENTS` | empty | segments drawn on a line of their own above the rest, in either layout (for example `"relay"`); not counted in `VL_MAX_LINES`, skipped when they all hide. Bash renderer only; set it in `coralline.conf` (the wizard does not keep it) |
 | `VL_CLOCK` / `VL_CLOCK_SECONDS` | `12h` / `1` | `12h`, `24h`, or `off`; seconds toggle |
 | `VL_BAR_WIDTH` | `5` | gauge width |
 | `VL_BAR_FILL` / `VL_BAR_EMPTY` | `▰` / `▱` | gauge glyphs |
