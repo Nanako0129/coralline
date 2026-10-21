@@ -241,7 +241,9 @@ Ask concise questions. If the user says "you decide", choose the defaults.
    Write the chosen segments to `VL_SEGMENTS` in this canonical order (keep only the
    ones the user wants): `dir project git node python model relay effort ctx cache
    toks ttft limit5h limit7d burn lines cost style duration stash clock`. So opting in
-   `effort` lands it right after `model`.
+   `effort` lands it after `model`, with `relay` between them when both are chosen;
+   a user who wants `relay` on a line of its own sets `VL_HEAD_SEGMENTS="relay"`
+   instead of listing it here.
    `cache` (prompt-cache hit ratio plus the countdown to the cache expiring) reads
    `prompt_cache` from the payload, which Claude Code only sends on v2.1.263 and newer;
    on an older build it stays hidden with no other effect.
