@@ -15,7 +15,7 @@ P10K_FILE="${P10K_CONFIG:-$HOME/.p10k.zsh}"
 
 # Fallback list, used only when the runtime statusline cannot be scanned.
 # The live list is derived from statusline.sh's seg_* functions by load_segment_choices.
-SEGMENT_CHOICES="dir project git node python model effort ctx cache toks ttft limit5h limit7d burn lines cost style duration stash clock"
+SEGMENT_CHOICES="dir project git node python model relay effort ctx cache toks ttft limit5h limit7d burn lines cost style duration stash clock"
 DEFAULT_SEGMENTS="dir git model ctx limit5h limit7d cost clock"
 THEME_CHOICES=""
 theme_choices_loaded=0
@@ -660,6 +660,9 @@ render_preview() {
   # the preview so they render the real interpreter version; the saved config is
   # untouched and keeps the fork-free default.
   printf 'VL_RUNTIME_PROBE=1\n' >> "$tmp"
+  # relay reads the status file model-relay writes for the session, and the
+  # sample payload's session has none; give the preview a provider to show.
+  printf 'VL_RELAY_PREVIEW=glm\n' >> "$tmp"
   cache=$(preview_cache_path "$tmp" "$cols")
   printf '\nPreview (%s cols):\n' "$cols"
   if [ ! -f "$cache" ]; then

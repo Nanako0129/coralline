@@ -143,6 +143,7 @@ The default bar is `dir git model ctx limit5h limit7d cost clock`; every other s
 | `node` | no | active Node version from a pin file, or `PATH` with `VL_RUNTIME_PROBE=1`; hidden when undetected |
 | `python` | no | active virtualenv, conda, or pinned Python version, or `PATH` with `VL_RUNTIME_PROBE=1`; hidden when undetected |
 | `model` | yes | active Claude model |
+| `relay` | no | which model this session talks to through [model-relay](https://github.com/cablate/model-relay): `↪ claude`, the model a `/provider` pin or a failover chose (`↪ glm-5.3`, `· failover`), `↪ claude · limit` when Claude's limit is reached with no failover, `↪ offline`, or `↪ claude · direct` when the relay is down. Reads the status file model-relay writes per session (`model-relay-status/<session_id>`, model-relay with status files); hidden without it. Bash renderer only; no extra fork |
 | `effort` | no | reasoning effort: `low`, `med`, `high`, `xhigh`, or `max` |
 | `ctx` | yes | context gauge and input, output, and cache token counts |
 | `cache` | no | prompt-cache hit ratio, and the countdown to the cache expiring or `cold` once it has |
@@ -236,6 +237,7 @@ Bash reads `~/.claude/coralline.conf`; the native renderer can read the same fil
 | `VL_MAX_LINES` / `VL_WRAP_MARGIN` | `3` / `4` | line cap and right margin for `auto` |
 | `VL_SEGMENTS` | `dir git model ctx limit5h limit7d cost clock` | first row, and the complete list in `auto` |
 | `VL_SEGMENTS2` / `VL_SEGMENTS3` | empty | optional fixed second and third rows |
+| `VL_HEAD_SEGMENTS` | empty | segments drawn on a line of their own above the rest, in either layout (for example `"relay"`); not counted in `VL_MAX_LINES`, skipped when they all hide. Bash renderer only; set it in `coralline.conf` (the wizard does not keep it) |
 | `VL_CLOCK` / `VL_CLOCK_SECONDS` | `12h` / `1` | `12h`, `24h`, or `off`; seconds toggle |
 | `VL_BAR_WIDTH` | `5` | gauge width |
 | `VL_BAR_FILL` / `VL_BAR_EMPTY` | `▰` / `▱` | gauge glyphs |

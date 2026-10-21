@@ -143,6 +143,7 @@ Installer 可以從 `~/.p10k.zsh` 匯入選定的風格、色彩與時鐘設定�
 | `node` | 否 | pin 檔指定的 Node 版本，或以 `VL_RUNTIME_PROBE=1` 偵測 `PATH`；偵測不到時隱藏 |
 | `python` | 否 | 目前 virtualenv、conda 或 pin 檔指定的 Python 版本，或以 `VL_RUNTIME_PROBE=1` 偵測 `PATH`；偵測不到時隱藏 |
 | `model` | 是 | 目前使用的 Claude model |
+| `relay` | 否 | 這個 session 經由 [model-relay](https://github.com/cablate/model-relay) 實際使用的模型：`↪ claude`、`/provider` 固定或 failover 選中的模型（`↪ glm-5.3`、`· failover`）、Claude 額度用完又沒有備援時的 `↪ claude · limit`、`↪ offline`，或轉發站停止時的 `↪ claude · direct`。讀取 model-relay 為每個 session 寫的狀態檔（`model-relay-status/<session_id>`，需要會寫狀態檔的 model-relay 版本）；沒有時隱藏。僅 Bash renderer；不增加 fork |
 | `effort` | 否 | 推理強度：`low`、`med`、`high`、`xhigh` 或 `max` |
 | `ctx` | 是 | context 用量條與輸入、輸出、快取 token 數 |
 | `cache` | 否 | prompt cache 命中率，以及快取失效的倒數；失效後顯示 `cold` |
@@ -236,6 +237,7 @@ Bash 讀取 `~/.claude/coralline.conf`，原生 renderer 也能讀同一個檔�
 | `VL_MAX_LINES` / `VL_WRAP_MARGIN` | `3` / `4` | `auto` 的行數上限與右側留白 |
 | `VL_SEGMENTS` | `dir git model ctx limit5h limit7d cost clock` | 第一列，亦是 `auto` 模式的完整清單 |
 | `VL_SEGMENTS2` / `VL_SEGMENTS3` | 空 | 選用的固定第二、三列 |
+| `VL_HEAD_SEGMENTS` | 空 | 在其他 segment 上方獨立成一行顯示的 segment，兩種 layout 都適用（例如 `"relay"`）；不計入 `VL_MAX_LINES`，全部隱藏時整行不印。僅 Bash renderer；請直接寫在 `coralline.conf`（wizard 不會保留） |
 | `VL_CLOCK` / `VL_CLOCK_SECONDS` | `12h` / `1` | `12h`、`24h` 或 `off`；秒數開關 |
 | `VL_BAR_WIDTH` | `5` | 量表寬度 |
 | `VL_BAR_FILL` / `VL_BAR_EMPTY` | `▰` / `▱` | 量表字符 |

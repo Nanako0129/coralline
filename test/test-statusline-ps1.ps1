@@ -560,7 +560,10 @@ esac
     $actualRegistry = @([regex]::Matches($builderBlock, '(?m)^    ([A-Za-z0-9]+) =') | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
     Check 'closed PowerShell registry equals WIN-02 inventory' (($actualRegistry -join ' ') -eq (($expectedRegistry | Sort-Object) -join ' '))
     $bashSegments = @([regex]::Matches($bashSource, '(?m)^seg_([A-Za-z0-9_]+)\(\)') | ForEach-Object { $_.Groups[1].Value } | Where-Object { $_ -notmatch '_' -and $_ -ne 'len' -and $_ -ne 'limit' } | Sort-Object -Unique)
-    Check 'Bash public registry equals WIN-02 inventory' (($bashSegments -join ' ') -eq (($expectedRegistry | Sort-Object) -join ' '))
+    # Bash-only segments, listed so the two registries cannot drift silently: relay
+    # (model-relay routing) has no statusline.ps1 builder yet.
+    $bashOnlySegments = @('relay')
+    Check 'Bash public registry equals WIN-02 inventory plus Bash-only segments' (($bashSegments -join ' ') -eq ((@($expectedRegistry) + $bashOnlySegments | Sort-Object) -join ' '))
 
     $script:BashExe = $env:CORALLINE_TEST_BASH
     if ([string]::IsNullOrEmpty($script:BashExe)) { $script:BashExe = 'C:\Program Files\Git\bin\bash.exe' }
