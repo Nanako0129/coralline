@@ -135,12 +135,16 @@ theme_count() {
 # statusline.sh shows up here automatically — mirrors the theme auto-scan above.
 # NOTE: segment_names() below mirrors this seg_* discovery pattern for the upgrade
 # report; keep the two in sync if the discovery regex changes.
+# The exclusions are the old names of helpers that are no longer seg_* (seg_len,
+# seg_limit, seg_limit_elapsed, now text_width, limit_pill, limit_elapsed_ok);
+# an installed copy predating the rename is read by the upgrade report, so they
+# stay listed.
 load_segment_choices() {
   local statusline discovered s ordered=""
   statusline=$(runtime_statusline)
   [ -f "$statusline" ] || return 0
   discovered=" $(grep -oE '^seg_[A-Za-z0-9_]+' "$statusline" \
-    | sed 's/^seg_//' | grep -Ev '^(len|limit)$' | tr '\n' ' ') "
+    | sed 's/^seg_//' | grep -Ev '^(len|limit|limit_elapsed)$' | tr '\n' ' ') "
   [ "$discovered" = "  " ] && return 0
   # Show segments in the canonical SEGMENT_CHOICES order (keeping only the ones
   # that still exist), then append any newly added segments not listed there, so
@@ -156,7 +160,7 @@ load_segment_choices() {
 # load_segment_choices' discovery so detection and the wizard agree on "segment".
 segment_names() {  # $1=statusline file
   grep -oE '^seg_[A-Za-z0-9_]+' "$1" 2>/dev/null \
-    | sed 's/^seg_//' | grep -Ev '^(len|limit)$' | sort -u | tr '\n' ' '
+    | sed 's/^seg_//' | grep -Ev '^(len|limit|limit_elapsed)$' | sort -u | tr '\n' ' '
 }
 
 # Space-separated, sorted-unique BOOLEAN opt-in knob names: VL_/CORALLINE_
