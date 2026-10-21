@@ -3,3 +3,4 @@ __pycache__/
 .DS_Store
 .claude/worktrees/
 docs/superpowers/
+burn-5h.tsv*
