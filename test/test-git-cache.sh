@@ -4,9 +4,12 @@
 # (hit); a hit must not spawn git; an expired or unwritable cache must degrade
 # silently to a normal render.
 #
+# Entries live in CORALLINE_DIR/git (CLAUDE_CONFIG_DIR/coralline/git here).
+#
 #   bash test/test-git-cache.sh
 #
-# Exits non-zero if any case fails. Needs bash, jq and git.
+# Renders run under the bash running this file, so `/bin/bash test/...` checks
+# bash 3.2. Exits non-zero if any case fails. Needs bash, jq and git.
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -15,14 +18,14 @@ SCRIPT="$HERE/../statusline.sh"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-REPO="$TMP/repo"; mkdir -p "$REPO" "$TMP/shim" "$TMP/cache"
+REPO="$TMP/repo"; mkdir -p "$REPO" "$TMP/shim"
 git -C "$REPO" init -q -b main
 git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 : > "$REPO/untracked"                                  # → "?" mark
 
 # git shim: log every invocation, then run the real git
 REAL_GIT=$(command -v git)
-printf '#!/bin/bash\necho x >> "%s/calls"\n[ -n "$T_GITFAIL" ] && exit 1\nexec "%s" "$@"\n' "$TMP" "$REAL_GIT" > "$TMP/shim/git"
+printf '#!/bin/bash\necho x >> "%s/calls"\n[ -n "$T_GITFAIL" ] && exit 1\n[ -n "$T_GITPARTIAL" ] && { "%s" "$@" | head -2; exit 1; }\nexec "%s" "$@"\n' "$TMP" "$REAL_GIT" "$REAL_GIT" > "$TMP/shim/git"
 chmod +x "$TMP/shim/git"
 
 cat > "$TMP/conf" <<'CONF'
@@ -31,9 +34,9 @@ VL_SEGMENTS="dir git model"
 VL_GIT_CACHE_TTL=${T_TTL:-0}
 CONF
 
-render() {  # $1=cwd ; env T_TTL / XDG_CACHE_HOME steer the cache
+render() {  # $1=cwd ; env T_TTL / CLAUDE_CONFIG_DIR steer the cache
   printf '{"cwd":"%s","model":{"display_name":"M"}}' "$1" |
-    CORALLINE_CONFIG="$TMP/conf" COLUMNS=200 PATH="$TMP/shim:$PATH" bash "$SCRIPT"
+    CORALLINE_CONFIG="$TMP/conf" COLUMNS=200 PATH="$TMP/shim:$PATH" "$BASH" "$SCRIPT"
 }
 calls() { [ -f "$TMP/calls" ] && wc -l < "$TMP/calls" | tr -d ' ' || printf 0; }
 
@@ -46,8 +49,10 @@ check() {  # $1=expected  $2=label  $3=actual
   fi
 }
 
-export XDG_CACHE_HOME="$TMP/cache"
-CFILE=$(printf '%s/coralline/git/%s' "$TMP/cache" "$(printf '%s' "$REPO" | sed 's#[^A-Za-z0-9._-]#_#g')")
+export CLAUDE_CONFIG_DIR="$TMP/cfg"
+GDIR="$TMP/cfg/coralline/git"
+key() { printf '%s/%s' "$GDIR" "$(printf '%s' "$1" | sed 's#[^A-Za-z0-9._-]#_#g')"; }
+CFILE=$(key "$REPO")
 
 BASE=$(T_TTL=0 render "$REPO")
 case "$BASE" in *main*) ;; *) echo "FAIL  baseline lacks git segment"; fail=1 ;; esac
@@ -57,11 +62,12 @@ case "$BASE" in *main*) ;; *) echo "FAIL  baseline lacks git segment"; fail=1 ;;
 check "$BASE" "ttl=5 cold output"  "$(T_TTL=5 render "$REPO")"
 check "1"     "cold run spawned git" "$(calls)"
 [ -f "$CFILE" ] && echo "ok    cache file written" || { echo "FAIL  no cache file"; fail=1; }
-check "drwx------" "cache dir is 0700" "$(ls -ld "$TMP/cache/coralline/git" | cut -c1-10)"
+check "drwx------" "cache dir is 0700" "$(ls -ld "$GDIR" | cut -c1-10)"
 check "$BASE" "ttl=5 warm output"  "$(T_TTL=5 render "$REPO")"
 check "1"     "warm run skipped git" "$(calls)"
+grep -q untracked "$CFILE" && { echo "FAIL  entry holds a file name"; fail=1; } || echo "ok    entry holds no file names"
 
-# a hit serves the cached text even after the tree changes; ttl=0 sees the change
+# a hit serves the cached state even after the tree changes; ttl=0 sees the change
 git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m two
 echo x > "$REPO/staged"; git -C "$REPO" add staged
 check "$BASE" "warm output is the cached state" "$(T_TTL=5 render "$REPO")"
@@ -72,65 +78,101 @@ FRESH=$(T_TTL=0 render "$REPO")
 sed -i.bak '1s/^[0-9]*/1/' "$CFILE"; rm -f "$CFILE.bak"
 check "$FRESH" "expired entry refreshes" "$(T_TTL=5 render "$REPO")"
 
+# a stamp in the future (clock stepped back) is a miss, not a hit until it passes
+US=$(printf '\037')
+printf '%s%s%s%sstale%s%s\n' "$(( $(date +%s) + 600 ))" "$US" "$REPO" "$US" "$US" "$US" >| "$CFILE"
+check "$FRESH" "future stamp is a miss" "$(T_TTL=5 render "$REPO")"
+
 # header cwd mismatch (filename collision) → miss
-sed -i.bak "1s#.*#$(date +%s) /elsewhere#" "$CFILE"; rm -f "$CFILE.bak"
+printf '%s%s/elsewhere%smain%s%s\n' "$(date +%s)" "$US" "$US" "$US" "$US" >| "$CFILE"
+: > "$TMP/calls"
 check "$FRESH" "cwd mismatch is a miss" "$(T_TTL=5 render "$REPO")"
+check "1"      "cwd mismatch spawned git" "$(calls)"
 
-# unwritable cache dir → still renders normally
-check "$FRESH" "unwritable cache dir" "$(XDG_CACHE_HOME=/dev/null/x T_TTL=5 render "$REPO")"
+# a line caught mid-write (no newline yet) is a miss
+printf '%s%s%s%smain%s' "$(date +%s)" "$US" "$REPO" "$US" "$US" >| "$CFILE"
+: > "$TMP/calls"
+check "$FRESH" "torn entry is a miss" "$(T_TTL=5 render "$REPO")"
+check "1"      "torn entry spawned git" "$(calls)"
 
-# non-repo cwd renders identically with and without the cache
+# unwritable config dir → still renders normally
+check "$FRESH" "unwritable cache dir" "$(CLAUDE_CONFIG_DIR=/dev/null/x T_TTL=5 render "$REPO")"
+
+# non-repo cwd renders identically with and without the cache, and is not cached
 NOREPO="$TMP/plain"; mkdir -p "$NOREPO"
 A=$(T_TTL=0 render "$NOREPO"); B=$(T_TTL=5 render "$NOREPO"); C=$(T_TTL=5 render "$NOREPO")
 check "$A" "non-repo cold" "$B"
 check "$A" "non-repo warm" "$C"
-NCFILE=$(printf '%s/coralline/git/%s' "$TMP/cache" "$(printf '%s' "$NOREPO" | sed 's#[^A-Za-z0-9._-]#_#g')")
-[ ! -e "$NCFILE" ] && echo "ok    non-repo writes no cache" || { echo "FAIL  non-repo wrote a cache"; fail=1; }
+[ ! -e "$(key "$NOREPO")" ] && echo "ok    non-repo writes no cache" || { echo "FAIL  non-repo wrote a cache"; fail=1; }
 
 # a failing git is not cached; the next successful render writes the entry
 rm -f "$CFILE"
 T_GITFAIL=1 T_TTL=5 render "$REPO" >/dev/null
 [ ! -e "$CFILE" ] && echo "ok    failing git not cached" || { echo "FAIL  failing git was cached"; fail=1; }
+T_GITPARTIAL=1 T_TTL=5 render "$REPO" >/dev/null
+[ ! -e "$CFILE" ] && echo "ok    headers-then-failure not cached" || { echo "FAIL  partial status was cached"; fail=1; }
 T_TTL=5 render "$REPO" >/dev/null
 [ -f "$CFILE" ] && echo "ok    next good render cached" || { echo "FAIL  good render not cached"; fail=1; }
 
-# pre-existing permissive dir: tightened once, marked, then trusted on warm hits
-PCACHE="$TMP/pcache"; PDIR="$PCACHE/coralline/git"
-mkdir -p "$PDIR"; chmod 755 "$PDIR"
-PFILE=$(printf '%s/%s' "$PDIR" "$(printf '%s' "$REPO" | sed 's#[^A-Za-z0-9._-]#_#g')")
+# a symlink under the entry name is never read or written through
+rm -f "$CFILE"; echo keep > "$TMP/victim"; ln -s "$TMP/victim" "$CFILE"
 : > "$TMP/calls"
-check "$FRESH" "pre-existing cold output" "$(XDG_CACHE_HOME="$PCACHE" T_TTL=5 render "$REPO")"
-check "1"      "pre-existing cold spawned git" "$(calls)"
-check "drwx------" "pre-existing dir tightened" "$(ls -ld "$PDIR" | cut -c1-10)"
-[ -f "$PDIR/.private" ] && echo "ok    marker written" || { echo "FAIL  no marker"; fail=1; }
-[ -f "$PFILE" ] && echo "ok    pre-existing entry written" || { echo "FAIL  no pre-existing entry"; fail=1; }
-check "$FRESH" "pre-existing warm output" "$(XDG_CACHE_HOME="$PCACHE" T_TTL=5 render "$REPO")"
-check "1"      "pre-existing warm skipped git" "$(calls)"
-
-# unmarked dir: an existing entry is not served, git is spawned
-rm -f "$PDIR/.private"
-check "$FRESH" "unmarked output" "$(XDG_CACHE_HOME="$PCACHE" T_TTL=5 render "$REPO")"
-check "2"      "unmarked entry not served" "$(calls)"
-
-# symlinked marker planted in a shared-writable dir: never trusted, never written through
-LCACHE="$TMP/lcache"; LDIR="$LCACHE/coralline/git"
-mkdir -p "$LDIR"; chmod 777 "$LDIR"
-echo keep > "$TMP/victim"; ln -s "$TMP/victim" "$LDIR/.private"
-LFILE=$(printf '%s/%s' "$LDIR" "$(printf '%s' "$REPO" | sed 's#[^A-Za-z0-9._-]#_#g')")
-: > "$TMP/calls"
-check "$FRESH" "symlink marker cold output" "$(XDG_CACHE_HOME="$LCACHE" T_TTL=5 render "$REPO")"
-check "1"      "symlink marker cold spawned git" "$(calls)"
+check "$FRESH" "symlink entry output" "$(T_TTL=5 render "$REPO")"
+check "1"      "symlink entry spawned git" "$(calls)"
 check "keep"   "symlink target untouched" "$(cat "$TMP/victim")"
-[ ! -e "$LFILE" ] && echo "ok    symlink marker writes no entry" || { echo "FAIL  symlink marker wrote an entry"; fail=1; }
-check "$FRESH" "symlink marker warm output" "$(XDG_CACHE_HOME="$LCACHE" T_TTL=5 render "$REPO")"
-check "2"      "symlink marker warm spawned git" "$(calls)"
+rm -f "$CFILE"
 
-# read side: a valid entry whose marker became a symlink is not served
-RCACHE="$TMP/rcache"; RDIR="$RCACHE/coralline/git"
-XDG_CACHE_HOME="$RCACHE" T_TTL=5 render "$REPO" >/dev/null
-rm -f "$RDIR/.private"; ln -s "$TMP/victim" "$RDIR/.private"
+# the store holds TOKS_KEEP (32) entries: the 32nd evicts nothing, the 33rd the oldest
+rm -f "$GDIR"/*; for i in $(seq 1 31); do : > "$GDIR/old$i"; done
+touch -t 202001010000 "$GDIR/old1"
+T_TTL=5 render "$REPO" >/dev/null
+[ -e "$GDIR/old1" ] && echo "ok    32nd entry evicts nothing" || { echo "FAIL  32nd entry evicted"; fail=1; }
+check "32" "store holds 32" "$(ls "$GDIR" | wc -l | tr -d ' ')"
+rm -f "$CFILE"; : > "$GDIR/old32"
+touch -t 202001010000 "$GDIR/old1"
+T_TTL=5 render "$REPO" >/dev/null
+[ ! -e "$GDIR/old1" ] && echo "ok    oldest entry evicted" || { echo "FAIL  oldest entry kept"; fail=1; }
+[ -f "$CFILE" ] && echo "ok    new entry written" || { echo "FAIL  new entry missing"; fail=1; }
+
+# CORALLINE_NO_SAMPLE (wizard preview) reads but never writes or evicts
+NCFG="$TMP/ncfg"
+CORALLINE_NO_SAMPLE=1 CLAUDE_CONFIG_DIR="$NCFG" T_TTL=5 render "$REPO" >/dev/null
+[ ! -e "$NCFG/coralline/git" ] && echo "ok    no-sample writes nothing" || { echo "FAIL  no-sample wrote"; fail=1; }
+
+# an entry with an empty branch is a miss
+printf '%s%s%s%s%s%s\n' "$(date +%s)" "$US" "$REPO" "$US" "$US" "$US" >| "$CFILE"
 : > "$TMP/calls"
-check "$FRESH" "symlink marker read output" "$(XDG_CACHE_HOME="$RCACHE" T_TTL=5 render "$REPO")"
-check "1"      "symlink marker read spawned git" "$(calls)"
+check "$FRESH" "empty branch is a miss" "$(T_TTL=5 render "$REPO")"
+check "1"      "empty branch spawned git" "$(calls)"
+
+# a read-only dir holding 32 entries stays as it is when a new cwd misses
+ROC="$TMP/rocfg/coralline/git"; mkdir -p "$ROC"; for i in $(seq 1 32); do : > "$ROC/e$i"; done
+touch -t 202001010000 "$ROC/e1"; chmod 500 "$ROC"
+OTHER="$TMP/other"; mkdir -p "$OTHER"; git -C "$OTHER" init -q -b main
+CLAUDE_CONFIG_DIR="$TMP/rocfg" T_TTL=5 render "$OTHER" >/dev/null
+check "dr-x------" "read-only dir left read-only" "$(ls -ld "$ROC" | cut -c1-10)"
+chmod 700 "$ROC"
+[ -e "$ROC/e1" ] && echo "ok    read-only dir evicts nothing" || { echo "FAIL  read-only dir evicted e1"; fail=1; }
+check "32" "read-only dir gains no entry" "$(ls "$ROC" | wc -l | tr -d ' ')"
+
+# a non-ASCII cwd gets an ASCII entry name on every bash (3.2 ranges follow collation)
+UC="$TMP/caf\303\251"; UC=$(printf "$UC"); mkdir -p "$UC"; git -C "$UC" init -q -b main
+LC_ALL=en_US.UTF-8 T_TTL=5 render "$UC" >/dev/null
+check "0" "entry names are ASCII" "$(ls "$GDIR" | LC_ALL=C grep -c '[^ -~]')"
+ls "$GDIR" | grep -q 'caf__*$' && echo "ok    non-ASCII cwd cached" || { echo "FAIL  non-ASCII cwd not cached"; fail=1; }
+
+# a cwd whose entry name passes NAME_MAX is never cached and never evicts
+LONG="$TMP/$(printf 'd%.0s' $(seq 1 250))"; mkdir -p "$LONG"; git -C "$LONG" init -q -b main
+N0=$(ls "$GDIR" | wc -l | tr -d ' ')
+check "$(T_TTL=0 render "$LONG")" "long cwd output" "$(T_TTL=5 render "$LONG")"
+check "$N0" "long cwd evicts nothing" "$(ls "$GDIR" | wc -l | tr -d ' ')"
+
+# a symlinked cache dir is never used, and nothing is written through it
+SCFG="$TMP/scfg"; mkdir -p "$SCFG/coralline" "$TMP/elsewhere"; ln -s "$TMP/elsewhere" "$SCFG/coralline/git"
+: > "$TMP/calls"
+check "$FRESH" "symlinked dir output" "$(CLAUDE_CONFIG_DIR="$SCFG" T_TTL=5 render "$REPO")"
+check "$FRESH" "symlinked dir warm output" "$(CLAUDE_CONFIG_DIR="$SCFG" T_TTL=5 render "$REPO")"
+check "2"      "symlinked dir spawned git" "$(calls)"
+check "0"      "nothing written through it" "$(ls "$TMP/elsewhere" | wc -l | tr -d ' ')"
 
 exit "$fail"

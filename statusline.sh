@@ -171,8 +171,8 @@ printf -v VL_TTFT_GLYPH '\xef\x89\x91'   # U+F251 Nerd Font hourglass-start (wor
 VL_RUNTIME_PROBE=0              # node/python: 1 = also detect via `node`/`python3`
                                # on PATH when no pin file (forks per render; off by default)
 VL_GIT_CACHE_TTL=0              # seconds to reuse `git status` per cwd (0 = off: one git fork
-                               # per render). Cached under $XDG_CACHE_HOME/coralline/; marks
-                               # lag the working tree by up to this many seconds.
+                               # per render). Cached in CORALLINE_DIR/git/; marks lag the
+                               # working tree by up to this many seconds.
 
 VL_FG_TEXT=231
 VL_FG_DIM=245
@@ -212,7 +212,7 @@ knob_validate_all() {
   knob_bounded "$VL_WARN_PCT"           3 0   100   50 VL_WARN_PCT
   knob_bounded "$VL_HOT_PCT"            3 0   100   75 VL_HOT_PCT
   knob_bounded "$VL_MAX_LINES"          2 1   64    3 VL_MAX_LINES
-  knob_bounded "${VL_GIT_CACHE_TTL:-0}"      4 0   3600  0 VL_GIT_CACHE_TTL
+  knob_bounded "$VL_GIT_CACHE_TTL"      4 0   3600  0 VL_GIT_CACHE_TTL
   knob_bounded "$VL_WRAP_MARGIN"        5 0   32767 4 VL_WRAP_MARGIN
   knob_bounded "$CORALLINE_BURN_WINDOW" 5 60  86400 600  CORALLINE_BURN_WINDOW
   knob_bounded "$BURN_TRIM"             4 1   3000  1500 BURN_TRIM
@@ -1436,68 +1436,79 @@ model_short() {
 export GIT_OPTIONAL_LOCKS=0
 GIT_BRANCH="" GIT_MARKS="" GIT_AB="" GIT_DIRTY=0 GIT_ROOT=""
 read_git() {
-  local line oid="" head="" a="" b="" staged=0 unstaged=0 untracked=0 out="" hit=0
+  local line oid="" head="" a="" b="" staged=0 unstaged=0 untracked=0 hit=0 out=""
+  local gdir="$CORALLINE_DIR/git" gname gfile="" gstamp gcwd gbr gmarks gab
   [ -n "$cwd" ] || return
-  # Optional TTL cache of the raw porcelain text. File = "<epoch> <cwd>" line +
-  # the output; the cwd in the header makes filename collisions harmless. A hit
-  # is read with builtins only; any cache failure silently falls back to git.
-  local gcdir="${XDG_CACHE_HOME:-$HOME/.cache}/coralline/git" cfile="" all="" stamp
+  # Optional TTL cache (VL_GIT_CACHE_TTL) of the parsed result: one file per cwd,
+  # named after it, in CORALLINE_DIR/git, created 0700 because the names are
+  # repo paths. A linked directory and link or non-file entries are never used. One
+  # line of \x1f-separated fields (a non-whitespace IFS keeps empty ones): stamp,
+  # cwd, branch, marks, ahead/behind; no working-tree file names. The cwd field
+  # turns a sanitized-name collision into a miss, and read fails on a line
+  # without its newline (one caught mid-write), so writes use plain >| and no
+  # temp file + mv. Two sessions writing one entry at once both carry the same
+  # cwd and a status taken at the same moment, so an interleaved line is still
+  # that state. A hit reads with builtins only. A name past NAME_MAX is never
+  # attempted. The class is spelled out: bash 3.2 matches A-Z by collation.
   if [ "$VL_GIT_CACHE_TTL" -gt 0 ]; then
-    cfile="$gcdir/${cwd//[!A-Za-z0-9._-]/_}"
-    if [ -r "$cfile" ] && [ -O "$cfile" ] && [ -O "$gcdir/.private" ] && [ ! -L "$gcdir/.private" ]; then
-      read -r -d '' all < "$cfile"
-      stamp="${all%% *}"
-      case "$stamp" in ''|*[!0123456789]*) ;; *)
-        if [ "$NOW" -ge "$stamp" ] && [ $((NOW - 10#$stamp)) -lt "$VL_GIT_CACHE_TTL" ] \
-           && [ "${all%%$'\n'*}" = "$stamp $cwd" ]; then
-          out="${all#*$'\n'}"; out="${out%$'\n'}"; hit=1
+    gname="${cwd//[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]/_}"
+    if [ "${#gname}" -le 255 ] && [ ! -L "$gdir" ]; then
+      gfile="$gdir/$gname"
+    fi
+    if [ -z "$gfile" ]; then :
+    elif [ -L "$gfile" ] || { [ -e "$gfile" ] && [ ! -f "$gfile" ]; }; then gfile=""
+    elif IFS=$'\x1f' read -r gstamp gcwd gbr gmarks gab 2>/dev/null < "$gfile" \
+         && [ "$gcwd" = "$cwd" ] && [ -n "$gbr" ] && [ "${#gstamp}" -le 12 ]; then
+      case "$gstamp" in (''|*[!0123456789]*) ;; (*)
+        gstamp=$(( 10#$gstamp ))
+        if [ "$gstamp" -le "$NOW" ] && [ $(( NOW - gstamp )) -lt "$VL_GIT_CACHE_TTL" ]; then
+          GIT_BRANCH=$gbr GIT_MARKS=$gmarks GIT_AB=$gab hit=1
         fi ;;
       esac
     fi
   fi
-  if [ "$hit" -eq 0 ]; then
-    # Only a successful status is cached, so a transient failure cannot pin an
-    # empty result for the TTL (non-repo cwds exit 128 and are not cached).
-    # Entries hold repo paths and branch names, so the directory must be ours and
-    # 0700. The .private marker records that: a new dir gets it on creation, a
-    # pre-existing owned dir is tightened once. Reads require the marker too.
-    # Publish is rename-only; the mv is paid once per TTL window per cwd.
-    if out=$(git -C "$cwd" status --porcelain=v2 --branch 2>/dev/null) && [ -n "$cfile" ]; then
-      [ -d "$gcdir" ] || { mkdir -p "${gcdir%/*}" && mkdir -m 700 "$gcdir" && : > "$gcdir/.private"; } 2>/dev/null
-      if [ -d "$gcdir" ] && [ -O "$gcdir" ] && [ ! -L "$gcdir" ]; then
-        # The marker must be an owned regular file, not a symlink. Tighten the
-        # dir first so nobody can plant a marker later, then create it only if
-        # nothing (file or symlink) is there. Later misses skip this block.
-        if [ ! -O "$gcdir/.private" ] || [ -L "$gcdir/.private" ]; then
-          chmod 700 "$gcdir" 2>/dev/null && [ ! -L "$gcdir/.private" ] && [ ! -e "$gcdir/.private" ] \
-            && : > "$gcdir/.private" 2>/dev/null
-        fi
-        if [ -O "$gcdir/.private" ] && [ ! -L "$gcdir/.private" ]; then
-          { printf '%s %s\n%s\n' "$NOW" "$cwd" "$out" > "$cfile.$$" && mv -f "$cfile.$$" "$cfile"; } 2>/dev/null \
-            || rm -f "$cfile.$$" 2>/dev/null
-        fi
-      fi
-    fi
-  fi
-  while IFS= read -r line; do
-    case "$line" in
-      "# branch.oid "*)      oid="${line#\# branch.oid }" ;;
-      "# branch.head "*)     head="${line#\# branch.head }" ;;
-      "# branch.ab "*)       set -- ${line#\# branch.ab }; a="${1#+}"; b="${2#-}" ;;
-      "? "*)                 untracked=1 ;;
-      [12]" "*)              line="${line#? }"
-                             case "${line:0:1}" in [!.]) staged=1 ;; esac
-                             case "${line:1:1}" in [!.]) unstaged=1 ;; esac ;;
-      "u "*)                 unstaged=1 ;;
-    esac
-  done <<GIT
+  if [ "$hit" = 0 ]; then
+    # Only a status that exits 0 is cached: one that printed its headers and then
+    # failed would otherwise pin incomplete marks for the whole TTL.
+    out=$(git -C "$cwd" status --porcelain=v2 --branch 2>/dev/null) || gfile=""
+    while IFS= read -r line; do
+      case "$line" in
+        "# branch.oid "*)      oid="${line#\# branch.oid }" ;;
+        "# branch.head "*)     head="${line#\# branch.head }" ;;
+        "# branch.ab "*)       set -- ${line#\# branch.ab }; a="${1#+}"; b="${2#-}" ;;
+        "? "*)                 untracked=1 ;;
+        [12]" "*)              line="${line#? }"
+                               case "${line:0:1}" in [!.]) staged=1 ;; esac
+                               case "${line:1:1}" in [!.]) unstaged=1 ;; esac ;;
+        "u "*)                 unstaged=1 ;;
+      esac
+    done <<GIT
 $out
 GIT
-  [ -z "$oid" ] && return                     # not a repo
-  if [ "$head" = "(detached)" ] || [ -z "$head" ]; then
-    GIT_BRANCH="${oid:0:7}"
-  else
-    GIT_BRANCH="$head"
+    [ -z "$oid" ] && return                   # not a repo
+    if [ "$head" = "(detached)" ] || [ -z "$head" ]; then
+      GIT_BRANCH="${oid:0:7}"
+    else
+      GIT_BRANCH="$head"
+    fi
+    [ "$staged"    -eq 1 ] && GIT_MARKS="${GIT_MARKS}+"
+    [ "$unstaged"  -eq 1 ] && GIT_MARKS="${GIT_MARKS}!"
+    [ "$untracked" -eq 1 ] && GIT_MARKS="${GIT_MARKS}?"
+    [ "${a:-0}" -gt 0 ] 2>/dev/null && GIT_AB="${GIT_AB}⇡${a}"
+    [ "${b:-0}" -gt 0 ] 2>/dev/null && GIT_AB="${GIT_AB}⇣${b}"
+    # Writes follow the toks store: none under CORALLINE_NO_SAMPLE, and a new
+    # entry first evicts, so the cache holds about TOKS_KEEP cwds (concurrent
+    # creations can each add one past it, as in the toks store). The dir is
+    # made by the first entry (one mkdir, on a miss that already forked git); an
+    # uncreatable one retries it on each miss.
+    if [ -n "$gfile" ] && [ "${CORALLINE_NO_SAMPLE:-0}" != 1 ]; then
+      if [ ! -e "$gfile" ]; then
+        { [ -d "$gdir" ] || mkdir -p -m 700 "$gdir"; } 2>/dev/null
+        toks_evict git/
+      fi
+      printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\n' "$NOW" "$cwd" "$GIT_BRANCH" "$GIT_MARKS" "$GIT_AB" \
+        2>/dev/null >| "$gfile"
+    fi
   fi
   # Stable project name (seg_project): basename of the MAIN repo root, which is
   # shared by every linked worktree — so it stays constant whichever worktree
@@ -1512,11 +1523,6 @@ GIT
       GIT_ROOT="${cdir##*/}"
     fi ;;
   esac
-  [ "$staged"    -eq 1 ] && GIT_MARKS="${GIT_MARKS}+"
-  [ "$unstaged"  -eq 1 ] && GIT_MARKS="${GIT_MARKS}!"
-  [ "$untracked" -eq 1 ] && GIT_MARKS="${GIT_MARKS}?"
-  [ "${a:-0}" -gt 0 ] 2>/dev/null && GIT_AB="${GIT_AB}⇡${a}"
-  [ "${b:-0}" -gt 0 ] 2>/dev/null && GIT_AB="${GIT_AB}⇣${b}"
   [ -n "$GIT_MARKS" ] && GIT_DIRTY=1
 }
 # ── Segments ─────────────────────────────────────────────────────────────────
@@ -1690,7 +1696,7 @@ seg_cache() {  # prompt-cache hit ratio, and the countdown to the cache expiring
 # the last transcript resolution; tries counts lookups that found nothing since it.
 # The sid must be lowercase hex and dashes (a Claude Code session UUID); the
 # classes are spelled out because bash 3.2 matches [a-f] by locale collation.
-TOKS_KEEP=32                    # internal: max per-session files kept in CORALLINE_DIR
+TOKS_KEEP=32                    # internal: toks-* files kept in CORALLINE_DIR (and git/ cache entries)
 TOKS_TAIL=1048576               # internal: transcript bytes read to find a response
 TOKS_TRIES=3                    # internal: lookups per response before it is given up
 toks_sample() {  # once per render → _TOKS_OK, _TOKS_RATE, _TOKS_DEC, _TOKS_TTFT ("" = none)
@@ -1800,10 +1806,12 @@ toks_transcript() {  # $1=in $2=out → _TT: "decode ttft_ms" (ttft may be -) | 
 # Runs only when a session creates its file (its first render, or after being
 # evicted), so the steady state stays fork-free. Each creation removes at most
 # the single least-recently-written file once TOKS_KEEP is reached, which keeps
-# the store bounded. Evicting a live but idle session costs it one re-anchor.
-toks_evict() {
+# the store near TOKS_KEEP (concurrent creations can each add one past it). Evicting a live but idle session costs it one re-anchor.
+# read_git bounds its per-cwd git cache the same way with $1=git/, so
+# TOKS_KEEP is also that cache's bound.
+toks_evict() {  # $1=path prefix under CORALLINE_DIR (default toks-)
   local f oldest="" n=0
-  for f in "$CORALLINE_DIR"/toks-*; do
+  for f in "$CORALLINE_DIR/${1:-toks-}"*; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
     n=$(( n + 1 ))
     [ -z "$oldest" ] || [ "$f" -ot "$oldest" ] && oldest="$f"
