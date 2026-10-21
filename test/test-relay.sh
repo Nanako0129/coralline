@@ -57,6 +57,8 @@ check "relay down, talking to Claude directly" "↪ claude · direct"         "$
 
 status s1 'pinned\tgem\033[31mini\n'
 check "escape sequence in the label dropped"   "↪ gem31mini"               "$(render s1)"
+status s1 'failover\t\344\270\255\n'
+check "label with nothing ASCII still shows its kind" "↪ provider · failover" "$(render s1)"
 status s1 'surprise\tsomething\n'
 check "unknown kind hidden"                    ""                          "$(render s1)"
 status s1 'pinned\tgemini'

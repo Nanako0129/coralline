@@ -46,10 +46,10 @@ VL_WRAP_MARGIN=4                # auto only — keep this many columns free on t
                                 # 4 covers Claude Code's full-width L/R padding (2 cols each)
 VL_SEGMENTS="dir git model ctx limit5h limit7d cost clock"
 VL_SEGMENTS2=""                 # fixed only — optional second line
+VL_SEGMENTS3=""                 # fixed only — optional third line
 VL_HEAD_SEGMENTS=""             # either layout — segments drawn on a line of their own
                                 # above the rest (e.g. "relay"); not counted in
                                 # VL_MAX_LINES, and skipped when all of them hide
-VL_SEGMENTS3=""                 # fixed only — optional third line
 VL_BAR_WIDTH=5
 VL_BAR_FILL="▰"
 VL_BAR_EMPTY="▱"
@@ -150,8 +150,8 @@ VL_BG_DIR="81,166,199"
 VL_BG_PROJECT=""               # optional; falls back to VL_BG_DIR when empty
 VL_BG_GIT_OK=65
 VL_BG_STASH=""                 # optional; falls back to VL_BG_GIT_OK when empty
-VL_BG_RELAY=30                 # deep teal; empty falls back to VL_BG_MODEL, but
-                               # relay sits right after model, so keep them apart
+VL_BG_RELAY=""                 # optional; falls back to VL_BG_STYLE when empty (not
+                               # VL_BG_MODEL or VL_BG_EFFORT: relay sits between them)
 VL_RELAY_PREVIEW=""            # internal: provider the wizard preview shows for relay
 VL_BG_GIT_DIRTY=130
 VL_BG_MODEL=173
@@ -1617,7 +1617,7 @@ push() {
 
 seg_project() {  # repo-root name in a repo; falls back to dir outside one (unless dir is already shown)
   if [ -z "$GIT_ROOT" ]; then
-    case " $VL_HEAD_SEGMENTS $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" dir "*) return 0 ;; esac
+    case "$_SEG_ROWS" in *" dir "*) return 0 ;; esac
     seg_dir; return
   fi
   fg "$VL_FG_TEXT"; trunc "$GIT_ROOT" "$VL_NAME_MAX"
@@ -2096,6 +2096,7 @@ relay_sample() {  # → relay_kind, relay ("" = none)
   # provider config) is dropped. The class is spelled out: bash 3.2 ranges follow
   # the locale's collation.
   relay="${relay//[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:\/@+ -]/}"
+  [ -n "$relay" ] || relay=provider        # a name with nothing left still shows its kind
 }
 
 seg_relay() {  # model-relay: which model this session talks to (claude, a pinned provider, offline)
@@ -2108,7 +2109,7 @@ seg_relay() {  # model-relay: which model this session talks to (claude, a pinne
   esac
   trunc "$p" "$VL_NAME_MAX"
   fg "$VL_FG_TEXT"
-  push "${VL_BG_RELAY:-$VL_BG_MODEL}" "${_FG} ↪ ${_TR}${note} "
+  push "${VL_BG_RELAY:-$VL_BG_STYLE}" "${_FG} ↪ ${_TR}${note} "
 }
 
 seg_stash() {  # git stash count
@@ -2527,7 +2528,9 @@ $_JSON_FIELDS
 JSON
 sid="${sid%$'\r'}"  # native Windows jq writes CRLF; the last field keeps the CR
 
-_SEG_SCAN=" $VL_HEAD_SEGMENTS $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 "
+# Every segment drawn in a row (seg_project reads it too); _SEG_SCAN adds float's.
+_SEG_ROWS=" $VL_HEAD_SEGMENTS $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 "
+_SEG_SCAN="$_SEG_ROWS"
 [ "$VL_FLOAT" = "1" ] && _SEG_SCAN="$_SEG_SCAN$VL_FLOAT_SEGMENTS "
 case "$_SEG_SCAN" in *" git "*|*" stash "*|*" project "*) read_git ;; esac
 case "$_SEG_SCAN" in (*" relay "*) relay_sample ;; esac

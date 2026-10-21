@@ -143,7 +143,7 @@ The default bar is `dir git model ctx limit5h limit7d cost clock`; every other s
 | `node` | no | active Node version from a pin file, or `PATH` with `VL_RUNTIME_PROBE=1`; hidden when undetected |
 | `python` | no | active virtualenv, conda, or pinned Python version, or `PATH` with `VL_RUNTIME_PROBE=1`; hidden when undetected |
 | `model` | yes | active Claude model |
-| `relay` | no | which model this session talks to through [model-relay](https://github.com/Nanako0129/model-relay): `↪ claude`, the model a `/provider` pin or a failover chose (`↪ glm-5.3`, `· failover`), `↪ claude · limit` when Claude's limit is reached with no failover, `↪ offline`, or `↪ claude · direct` when the relay is down. Reads the status file model-relay writes per session (`model-relay-status/<session_id>`, model-relay with status files); hidden without it. Bash renderer only; no extra fork |
+| `relay` | no | which model this session talks to through [model-relay](https://github.com/cablate/model-relay): `↪ claude`, the model a `/provider` pin or a failover chose (`↪ glm-5.3`, `· failover`), `↪ claude · limit` when Claude's limit is reached with no failover, `↪ offline`, or `↪ claude · direct` when the relay is down. Reads the status file model-relay writes per session (`model-relay-status/<session_id>`, model-relay with status files); hidden without it. Bash renderer only; no extra fork |
 | `effort` | no | reasoning effort: `low`, `med`, `high`, `xhigh`, or `max` |
 | `ctx` | yes | context gauge and input, output, and cache token counts |
 | `cache` | no | prompt-cache hit ratio, and the countdown to the cache expiring or `cold` once it has |

@@ -660,8 +660,8 @@ render_preview() {
   # the preview so they render the real interpreter version; the saved config is
   # untouched and keeps the fork-free default.
   printf 'VL_RUNTIME_PROBE=1\n' >> "$tmp"
-  # relay shows only for a session model-relay has pinned, which the sample
-  # payload's session never is; give the preview a provider to show instead.
+  # relay reads the status file model-relay writes for the session, and the
+  # sample payload's session has none; give the preview a provider to show.
   printf 'VL_RELAY_PREVIEW=glm\n' >> "$tmp"
   cache=$(preview_cache_path "$tmp" "$cols")
   printf '\nPreview (%s cols):\n' "$cols"
