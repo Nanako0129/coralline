@@ -1444,7 +1444,7 @@ read_git() {
   local gcdir="${XDG_CACHE_HOME:-$HOME/.cache}/coralline/git" cfile="" all="" stamp
   if [ "$VL_GIT_CACHE_TTL" -gt 0 ]; then
     cfile="$gcdir/${cwd//[!A-Za-z0-9._-]/_}"
-    if [ -r "$cfile" ] && [ -O "$cfile" ]; then
+    if [ -r "$cfile" ] && [ -O "$cfile" ] && [ -O "$gcdir/.private" ]; then
       read -r -d '' all < "$cfile"
       stamp="${all%% *}"
       case "$stamp" in ''|*[!0123456789]*) ;; *)
@@ -1458,15 +1458,21 @@ read_git() {
   if [ "$hit" -eq 0 ]; then
     # Only a successful status is cached, so a transient failure cannot pin an
     # empty result for the TTL (non-repo cwds exit 128 and are not cached).
-    # Entries hold repo paths, branch and file names: the directory is created
-    # 0700 once and used only when it is ours and not a symlink, so file modes
-    # inside it do not matter. Publish is rename-only; the mv is paid once per
-    # TTL window per cwd and replaces a git fork on every render in between.
+    # Entries hold repo paths and branch names, so the directory must be ours and
+    # 0700. The .private marker records that: a new dir gets it on creation, a
+    # pre-existing owned dir is tightened once. Reads require the marker too.
+    # Publish is rename-only; the mv is paid once per TTL window per cwd.
     if out=$(git -C "$cwd" status --porcelain=v2 --branch 2>/dev/null) && [ -n "$cfile" ]; then
-      [ -d "$gcdir" ] || { mkdir -p "${gcdir%/*}" && mkdir -m 700 "$gcdir"; } 2>/dev/null
+      [ -d "$gcdir" ] || { mkdir -p "${gcdir%/*}" && mkdir -m 700 "$gcdir" && : > "$gcdir/.private"; } 2>/dev/null
       if [ -d "$gcdir" ] && [ -O "$gcdir" ] && [ ! -L "$gcdir" ]; then
-        { printf '%s %s\n%s\n' "$NOW" "$cwd" "$out" > "$cfile.$$" && mv -f "$cfile.$$" "$cfile"; } 2>/dev/null \
-          || rm -f "$cfile.$$" 2>/dev/null
+        # A directory that predates the marker may be permissive: tighten it
+        # once and mark it. Only the owner can loosen an owned 0700 directory,
+        # so later misses trust the marker and need no chmod or stat.
+        [ -O "$gcdir/.private" ] || { chmod 700 "$gcdir" && : > "$gcdir/.private"; } 2>/dev/null
+        if [ -O "$gcdir/.private" ]; then
+          { printf '%s %s\n%s\n' "$NOW" "$cwd" "$out" > "$cfile.$$" && mv -f "$cfile.$$" "$cfile"; } 2>/dev/null \
+            || rm -f "$cfile.$$" 2>/dev/null
+        fi
       fi
     fi
   fi

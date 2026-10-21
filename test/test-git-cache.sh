@@ -94,4 +94,22 @@ T_GITFAIL=1 T_TTL=5 render "$REPO" >/dev/null
 T_TTL=5 render "$REPO" >/dev/null
 [ -f "$CFILE" ] && echo "ok    next good render cached" || { echo "FAIL  good render not cached"; fail=1; }
 
+# pre-existing permissive dir: tightened once, marked, then trusted on warm hits
+PCACHE="$TMP/pcache"; PDIR="$PCACHE/coralline/git"
+mkdir -p "$PDIR"; chmod 755 "$PDIR"
+PFILE=$(printf '%s/%s' "$PDIR" "$(printf '%s' "$REPO" | sed 's#[^A-Za-z0-9._-]#_#g')")
+: > "$TMP/calls"
+check "$FRESH" "pre-existing cold output" "$(XDG_CACHE_HOME="$PCACHE" T_TTL=5 render "$REPO")"
+check "1"      "pre-existing cold spawned git" "$(calls)"
+check "drwx------" "pre-existing dir tightened" "$(ls -ld "$PDIR" | cut -c1-10)"
+[ -f "$PDIR/.private" ] && echo "ok    marker written" || { echo "FAIL  no marker"; fail=1; }
+[ -f "$PFILE" ] && echo "ok    pre-existing entry written" || { echo "FAIL  no pre-existing entry"; fail=1; }
+check "$FRESH" "pre-existing warm output" "$(XDG_CACHE_HOME="$PCACHE" T_TTL=5 render "$REPO")"
+check "1"      "pre-existing warm skipped git" "$(calls)"
+
+# unmarked dir: an existing entry is not served, git is spawned
+rm -f "$PDIR/.private"
+check "$FRESH" "unmarked output" "$(XDG_CACHE_HOME="$PCACHE" T_TTL=5 render "$REPO")"
+check "2"      "unmarked entry not served" "$(calls)"
+
 exit "$fail"
