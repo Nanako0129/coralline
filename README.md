@@ -242,6 +242,7 @@ Bash reads `~/.claude/coralline.conf`; the native renderer can read the same fil
 | `VL_WARN_PCT` / `VL_HOT_PCT` | `50` / `75` | gauge color thresholds |
 | `VL_ASCII` | `0` | disable Nerd Font glyphs when `1` |
 | `VL_RUNTIME_PROBE` | `0` | let `node` and `python` probe `PATH` when no pin exists; adds forks per render |
+| `VL_GIT_CACHE_TTL` | `0` | seconds to reuse `git status` per directory (Bash renderer only; `0` = off); git marks may lag the working tree by up to this long |
 | `VL_BG_*` / `VL_FG_*` | theme | 256-color index or `"R,G,B"` |
 
 ## Install options

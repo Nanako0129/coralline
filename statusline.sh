@@ -170,6 +170,9 @@ printf -v VL_TOKS_GLYPH '\xef\x83\xa4'   # U+F0E4 Nerd Font tachometer (dropped 
 printf -v VL_TTFT_GLYPH '\xef\x89\x91'   # U+F251 Nerd Font hourglass-start (word in VL_ASCII)
 VL_RUNTIME_PROBE=0              # node/python: 1 = also detect via `node`/`python3`
                                # on PATH when no pin file (forks per render; off by default)
+VL_GIT_CACHE_TTL=0              # seconds to reuse `git status` per cwd (0 = off: one git fork
+                               # per render). Cached under $XDG_CACHE_HOME/coralline/; marks
+                               # lag the working tree by up to this many seconds.
 
 VL_FG_TEXT=231
 VL_FG_DIM=245
@@ -209,6 +212,7 @@ knob_validate_all() {
   knob_bounded "$VL_WARN_PCT"           3 0   100   50 VL_WARN_PCT
   knob_bounded "$VL_HOT_PCT"            3 0   100   75 VL_HOT_PCT
   knob_bounded "$VL_MAX_LINES"          2 1   64    3 VL_MAX_LINES
+  knob_bounded "${VL_GIT_CACHE_TTL:-0}"      4 0   3600  0 VL_GIT_CACHE_TTL
   knob_bounded "$VL_WRAP_MARGIN"        5 0   32767 4 VL_WRAP_MARGIN
   knob_bounded "$CORALLINE_BURN_WINDOW" 5 60  86400 600  CORALLINE_BURN_WINDOW
   knob_bounded "$BURN_TRIM"             4 1   3000  1500 BURN_TRIM
@@ -1432,8 +1436,33 @@ model_short() {
 export GIT_OPTIONAL_LOCKS=0
 GIT_BRANCH="" GIT_MARKS="" GIT_AB="" GIT_DIRTY=0 GIT_ROOT=""
 read_git() {
-  local line oid="" head="" a="" b="" staged=0 unstaged=0 untracked=0
+  local line oid="" head="" a="" b="" staged=0 unstaged=0 untracked=0 out="" hit=0
   [ -n "$cwd" ] || return
+  # Optional TTL cache of the raw porcelain text. File = "<epoch> <cwd>" line +
+  # the output; the cwd in the header makes filename collisions harmless. A hit
+  # is read with builtins only; any cache failure silently falls back to git.
+  local gcdir="${XDG_CACHE_HOME:-$HOME/.cache}/coralline" cfile="" all="" stamp
+  if [ "$VL_GIT_CACHE_TTL" -gt 0 ]; then
+    cfile="$gcdir/git-${cwd//[!A-Za-z0-9._-]/_}"
+    if [ -r "$cfile" ]; then
+      read -r -d '' all < "$cfile"
+      stamp="${all%% *}"
+      case "$stamp" in ''|*[!0123456789]*) ;; *)
+        if [ "$NOW" -ge "$stamp" ] && [ $((NOW - 10#$stamp)) -lt "$VL_GIT_CACHE_TTL" ] \
+           && [ "${all%%$'\n'*}" = "$stamp $cwd" ]; then
+          out="${all#*$'\n'}"; out="${out%$'\n'}"; hit=1
+        fi ;;
+      esac
+    fi
+  fi
+  if [ "$hit" -eq 0 ]; then
+    out=$(git -C "$cwd" status --porcelain=v2 --branch 2>/dev/null)
+    if [ -n "$cfile" ]; then
+      { [ -d "$gcdir" ] || mkdir -p "$gcdir"; } 2>/dev/null
+      { printf '%s %s\n%s\n' "$NOW" "$cwd" "$out" > "$cfile.$$" && mv "$cfile.$$" "$cfile"; } 2>/dev/null \
+        || rm -f "$cfile.$$" 2>/dev/null
+    fi
+  fi
   while IFS= read -r line; do
     case "$line" in
       "# branch.oid "*)      oid="${line#\# branch.oid }" ;;
@@ -1446,7 +1475,7 @@ read_git() {
       "u "*)                 unstaged=1 ;;
     esac
   done <<GIT
-$(git -C "$cwd" status --porcelain=v2 --branch 2>/dev/null)
+$out
 GIT
   [ -z "$oid" ] && return                     # not a repo
   if [ "$head" = "(detached)" ] || [ -z "$head" ]; then
