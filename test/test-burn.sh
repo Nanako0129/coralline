@@ -1162,6 +1162,7 @@ knob_row VL_COST_DECIMALS      1 0  9     2
 knob_row VL_WARN_PCT           3 0  100   50
 knob_row VL_HOT_PCT            3 0  100   75
 knob_row VL_MAX_LINES          2 1  64    3
+knob_row VL_GIT_CACHE_TTL      4 0  3600  0
 knob_row VL_WRAP_MARGIN        5 0  32767 4
 knob_row CORALLINE_BURN_WINDOW 5 60 86400 600
 knob_row BURN_TRIM             4 1  3000  1500
@@ -1170,9 +1171,9 @@ knob_row BURN_SLACK            4 0  1000  500
 # HOT<WARN reset: knob_validate_all resets BOTH to their defaults, mirroring
 # PS1 (statusline.ps1, right after its Get-BoundedInt calls). A kept (non-
 # inverted) pair, including the equal case, is left alone. knob_validate_all
-# touches every knob, so give the other ten a valid value first (set -u).
+# touches every knob, so give the others a valid value first (set -u).
 VL_BAR_WIDTH=5; VL_PATH_DEPTH=4; VL_NAME_MAX=0; VL_COST_DECIMALS=2
-VL_MAX_LINES=3; VL_WRAP_MARGIN=4
+VL_MAX_LINES=3; VL_GIT_CACHE_TTL=0; VL_WRAP_MARGIN=4
 CORALLINE_BURN_WINDOW=600; BURN_TRIM=1500; BURN_SLACK=500
 VL_WARN_PCT=60; VL_HOT_PCT=40; knob_validate_all
 eq 'HOT<WARN resets WARN to default' "$VL_WARN_PCT" 50
