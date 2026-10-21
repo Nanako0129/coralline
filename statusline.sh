@@ -1441,10 +1441,10 @@ read_git() {
   # Optional TTL cache of the raw porcelain text. File = "<epoch> <cwd>" line +
   # the output; the cwd in the header makes filename collisions harmless. A hit
   # is read with builtins only; any cache failure silently falls back to git.
-  local gcdir="${XDG_CACHE_HOME:-$HOME/.cache}/coralline" cfile="" all="" stamp
+  local gcdir="${XDG_CACHE_HOME:-$HOME/.cache}/coralline/git" cfile="" all="" stamp
   if [ "$VL_GIT_CACHE_TTL" -gt 0 ]; then
-    cfile="$gcdir/git-${cwd//[!A-Za-z0-9._-]/_}"
-    if [ -r "$cfile" ]; then
+    cfile="$gcdir/${cwd//[!A-Za-z0-9._-]/_}"
+    if [ -r "$cfile" ] && [ -O "$cfile" ]; then
       read -r -d '' all < "$cfile"
       stamp="${all%% *}"
       case "$stamp" in ''|*[!0123456789]*) ;; *)
@@ -1456,11 +1456,18 @@ read_git() {
     fi
   fi
   if [ "$hit" -eq 0 ]; then
-    out=$(git -C "$cwd" status --porcelain=v2 --branch 2>/dev/null)
-    if [ -n "$cfile" ]; then
-      { [ -d "$gcdir" ] || mkdir -p "$gcdir"; } 2>/dev/null
-      { printf '%s %s\n%s\n' "$NOW" "$cwd" "$out" > "$cfile.$$" && mv "$cfile.$$" "$cfile"; } 2>/dev/null \
-        || rm -f "$cfile.$$" 2>/dev/null
+    # Only a successful status is cached, so a transient failure cannot pin an
+    # empty result for the TTL (non-repo cwds exit 128 and are not cached).
+    # Entries hold repo paths, branch and file names: the directory is created
+    # 0700 once and used only when it is ours and not a symlink, so file modes
+    # inside it do not matter. Publish is rename-only; the mv is paid once per
+    # TTL window per cwd and replaces a git fork on every render in between.
+    if out=$(git -C "$cwd" status --porcelain=v2 --branch 2>/dev/null) && [ -n "$cfile" ]; then
+      [ -d "$gcdir" ] || { mkdir -p "${gcdir%/*}" && mkdir -m 700 "$gcdir"; } 2>/dev/null
+      if [ -d "$gcdir" ] && [ -O "$gcdir" ] && [ ! -L "$gcdir" ]; then
+        { printf '%s %s\n%s\n' "$NOW" "$cwd" "$out" > "$cfile.$$" && mv -f "$cfile.$$" "$cfile"; } 2>/dev/null \
+          || rm -f "$cfile.$$" 2>/dev/null
+      fi
     fi
   fi
   while IFS= read -r line; do

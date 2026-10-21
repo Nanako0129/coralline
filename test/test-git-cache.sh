@@ -22,7 +22,7 @@ git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 
 # git shim: log every invocation, then run the real git
 REAL_GIT=$(command -v git)
-printf '#!/bin/bash\necho x >> "%s/calls"\nexec "%s" "$@"\n' "$TMP" "$REAL_GIT" > "$TMP/shim/git"
+printf '#!/bin/bash\necho x >> "%s/calls"\n[ -n "$T_GITFAIL" ] && exit 1\nexec "%s" "$@"\n' "$TMP" "$REAL_GIT" > "$TMP/shim/git"
 chmod +x "$TMP/shim/git"
 
 cat > "$TMP/conf" <<'CONF'
@@ -47,7 +47,7 @@ check() {  # $1=expected  $2=label  $3=actual
 }
 
 export XDG_CACHE_HOME="$TMP/cache"
-CFILE=$(printf '%s/coralline/git-%s' "$TMP/cache" "$(printf '%s' "$REPO" | sed 's#[^A-Za-z0-9._-]#_#g')")
+CFILE=$(printf '%s/coralline/git/%s' "$TMP/cache" "$(printf '%s' "$REPO" | sed 's#[^A-Za-z0-9._-]#_#g')")
 
 BASE=$(T_TTL=0 render "$REPO")
 case "$BASE" in *main*) ;; *) echo "FAIL  baseline lacks git segment"; fail=1 ;; esac
@@ -57,6 +57,7 @@ case "$BASE" in *main*) ;; *) echo "FAIL  baseline lacks git segment"; fail=1 ;;
 check "$BASE" "ttl=5 cold output"  "$(T_TTL=5 render "$REPO")"
 check "1"     "cold run spawned git" "$(calls)"
 [ -f "$CFILE" ] && echo "ok    cache file written" || { echo "FAIL  no cache file"; fail=1; }
+check "drwx------" "cache dir is 0700" "$(ls -ld "$TMP/cache/coralline/git" | cut -c1-10)"
 check "$BASE" "ttl=5 warm output"  "$(T_TTL=5 render "$REPO")"
 check "1"     "warm run skipped git" "$(calls)"
 
@@ -83,5 +84,14 @@ NOREPO="$TMP/plain"; mkdir -p "$NOREPO"
 A=$(T_TTL=0 render "$NOREPO"); B=$(T_TTL=5 render "$NOREPO"); C=$(T_TTL=5 render "$NOREPO")
 check "$A" "non-repo cold" "$B"
 check "$A" "non-repo warm" "$C"
+NCFILE=$(printf '%s/coralline/git/%s' "$TMP/cache" "$(printf '%s' "$NOREPO" | sed 's#[^A-Za-z0-9._-]#_#g')")
+[ ! -e "$NCFILE" ] && echo "ok    non-repo writes no cache" || { echo "FAIL  non-repo wrote a cache"; fail=1; }
+
+# a failing git is not cached; the next successful render writes the entry
+rm -f "$CFILE"
+T_GITFAIL=1 T_TTL=5 render "$REPO" >/dev/null
+[ ! -e "$CFILE" ] && echo "ok    failing git not cached" || { echo "FAIL  failing git was cached"; fail=1; }
+T_TTL=5 render "$REPO" >/dev/null
+[ -f "$CFILE" ] && echo "ok    next good render cached" || { echo "FAIL  good render not cached"; fail=1; }
 
 exit "$fail"
