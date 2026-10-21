@@ -147,6 +147,9 @@ VL_BG_DIR="81,166,199"
 VL_BG_PROJECT=""               # optional; falls back to VL_BG_DIR when empty
 VL_BG_GIT_OK=65
 VL_BG_STASH=""                 # optional; falls back to VL_BG_GIT_OK when empty
+VL_BG_RELAY=30                 # deep teal; empty falls back to VL_BG_MODEL, but
+                               # relay sits right after model, so keep them apart
+VL_RELAY_PREVIEW=""            # internal: provider the wizard preview shows for relay
 VL_BG_GIT_DIRTY=130
 VL_BG_MODEL=173
 VL_BG_CTX=238
@@ -2071,6 +2074,40 @@ seg_effort() {  # reasoning effort level (low/medium/high/xhigh/max); glyph ψ i
   push "$VL_BG_EFFORT" "${_FG} ψ ${label} "
 }
 
+# model-relay's state for this session, from the status file its hook writes on
+# every change: <config dir>/model-relay-status/<session_id>, one line
+# "kind<TAB>label" (kind: claude, pinned, failover, limit, offline, direct). The read
+# builtin takes it, so the segment adds no fork. A missing file (model-relay not
+# installed, or not yet written) or a line without its newline reads as nothing.
+relay_sample() {  # → relay_kind, relay ("" = none)
+  relay_kind="" relay=""
+  # a plain file name only: the id comes from the payload and becomes a path
+  case "$sid" in (''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) return 0 ;; esac
+  local f="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/model-relay-status/$sid"
+  [ -f "$f" ] || return 0                   # -f: a FIFO here must not block
+  { IFS=$'\t' read -r relay_kind relay < "$f"; } 2>/dev/null || { relay_kind="" relay=""; }
+  case "$relay_kind" in (claude|pinned|failover|limit|offline|direct) ;; (*) relay_kind="" relay=""; return 0 ;; esac
+  relay="${relay%$'\r'}"
+  relay="${relay%\[*\]}"                   # a [1m]-style context hint is not part of the name
+  # A model id is plain ASCII; anything else (an escape sequence planted in the
+  # provider config) is dropped. The class is spelled out: bash 3.2 ranges follow
+  # the locale's collation.
+  relay="${relay//[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:\/@+ -]/}"
+}
+
+seg_relay() {  # model-relay: which model this session talks to (claude, a pinned provider, offline)
+  local p="${relay:-$VL_RELAY_PREVIEW}" note=""
+  [ -n "$p" ] || return 0
+  case "$relay_kind" in
+    (failover) note=" · failover" ;;
+    (limit)    note=" · limit" ;;
+    (direct)   note=" · direct" ;;
+  esac
+  trunc "$p" "$VL_NAME_MAX"
+  fg "$VL_FG_TEXT"
+  push "${VL_BG_RELAY:-$VL_BG_MODEL}" "${_FG} ↪ ${_TR}${note} "
+}
+
 seg_stash() {  # git stash count
   [ -n "$GIT_BRANCH" ] || return 0
   local n
@@ -2490,6 +2527,7 @@ sid="${sid%$'\r'}"  # native Windows jq writes CRLF; the last field keeps the CR
 _SEG_SCAN=" $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 "
 [ "$VL_FLOAT" = "1" ] && _SEG_SCAN="$_SEG_SCAN$VL_FLOAT_SEGMENTS "
 case "$_SEG_SCAN" in *" git "*|*" stash "*|*" project "*) read_git ;; esac
+case "$_SEG_SCAN" in (*" relay "*) relay_sample ;; esac
 
 # The disabled/default path performs no state work. Enabled paths canonicalize
 # values and namespaces once, then use the released TSV/compact-directory flow.

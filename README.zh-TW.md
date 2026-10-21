@@ -143,6 +143,7 @@ Installer 可以從 `~/.p10k.zsh` 匯入選定的風格、色彩與時鐘設定�
 | `node` | 否 | pin 檔指定的 Node 版本，或以 `VL_RUNTIME_PROBE=1` 偵測 `PATH`；偵測不到時隱藏 |
 | `python` | 否 | 目前 virtualenv、conda 或 pin 檔指定的 Python 版本，或以 `VL_RUNTIME_PROBE=1` 偵測 `PATH`；偵測不到時隱藏 |
 | `model` | 是 | 目前使用的 Claude model |
+| `relay` | 否 | 這個 session 經由 [model-relay](https://github.com/Nanako0129/model-relay) 實際使用的模型：`↪ claude`、`/provider` 固定或 failover 選中的模型（`↪ glm-5.3`、`· failover`）、Claude 額度用完又沒有備援時的 `↪ claude · limit`、`↪ offline`，或轉發站停止時的 `↪ claude · direct`。讀取 model-relay 為每個 session 寫的狀態檔（`model-relay-status/<session_id>`，需要會寫狀態檔的 model-relay 版本）；沒有時隱藏。僅 Bash renderer；不增加 fork |
 | `effort` | 否 | 推理強度：`low`、`med`、`high`、`xhigh` 或 `max` |
 | `ctx` | 是 | context 用量條與輸入、輸出、快取 token 數 |
 | `cache` | 否 | prompt cache 命中率，以及快取失效的倒數；失效後顯示 `cold` |
