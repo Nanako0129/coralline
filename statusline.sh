@@ -37,6 +37,8 @@ VL_LEAN_CAP_R=""                # lean only — trailing cap glyph drawn in the 
 VL_LEAN_CAP_L=""                # lean only — leading cap glyph: the left-facing
                                 # mirror of VL_LEAN_CAP_R at the bar's start; needs
                                 # VL_LEAN_BG, empty = flat (stock p10k classic: flat)
+VL_LEAN_FG=""                   # lean only — one text colour for the row; empty = each
+                                # segment's accent
 VL_LAYOUT="fixed"               # fixed: one line per VL_SEGMENTS* var
                                 # auto:  single line, wraps when the window is narrow
 VL_MAX_LINES=3                  # auto only — wrap into at most this many lines
@@ -1484,7 +1486,7 @@ ESC=$'\033'
 # char as 3, inflating every segment so the auto-layout wrap fires far too early.
 # Wide CJK / kana / Hangul / fullwidth / emoji code points count as 2 columns,
 # combining and zero-width marks as 0, everything else as 1. Pure bash, no subprocess.
-seg_len() {
+text_width() {
   local s="$1" plain="" LC_ALL=C n i b cp c2 c3 c4 w=0
   while [ "${s#*$ESC}" != "$s" ]; do          # strip CSI "...m" color escapes
     plain+="${s%%$ESC*}"
@@ -1533,7 +1535,7 @@ seg_len() {
 push() {
   # SEG_LEN[] is read only by the auto-layout wrap; fixed-layout print_range never
   # touches it, so skip the per-char width scan entirely outside auto layout.
-  if [ "$VL_LAYOUT" = "auto" ]; then seg_len "$2" ; else SEG_LEN_R=0 ; fi
+  if [ "$VL_LAYOUT" = "auto" ]; then text_width "$2" ; else SEG_LEN_R=0 ; fi
   SEG_BGS[${#SEG_BGS[@]}]="$1"
   SEG_TXT[${#SEG_TXT[@]}]="$2"
   SEG_LEN[${#SEG_LEN[@]}]="$SEG_LEN_R"
@@ -1805,7 +1807,7 @@ seg_ttft() {  # time to first token of the last response that opened with thinki
   push "$bg" "${_FG} ${g}${v}${fgd}${unit} "
 }
 
-seg_limit() {  # $1=label $2=pct $3=resets_at $4=bg $5=canonical pct_milli(optional)
+limit_pill() {  # $1=label $2=pct $3=resets_at $4=bg $5=canonical pct_milli(optional)
   [ -n "$2" ] || return 0
   local v fgc rst=""
   if [ -n "${5:-}" ]; then state_round_even "$5" 1000; v=$_RE
@@ -1829,7 +1831,7 @@ seg_limit() {  # $1=label $2=pct $3=resets_at $4=bg $5=canonical pct_milli(optio
 # missing or malformed reset leaves _CUR*_RST at 0 and must NOT render, or the
 # bar would claim an elapsed window that was never observed; a reset beyond the
 # window ceiling is the corrupt/sentinel snapshot rejected in #32 and must not
-# render a countdown days or years out. seg_limit shows an elapsed reset as
+# render a countdown days or years out. limit_pill shows an elapsed reset as
 # "now", which is what v0.11 displayed here.
 # The fallback is for a window that JUST elapsed, so it is bounded by the same
 # ceiling that validates a future reset. Claude Code keeps replaying the last
@@ -1838,7 +1840,7 @@ seg_limit() {  # $1=label $2=pct $3=resets_at $4=bg $5=canonical pct_milli(optio
 # closed three days earlier. Rendering those as the current window is worse than
 # rendering nothing, and past the bound the segment falls through to the store,
 # which by construction only holds windows that are still open.
-seg_limit_elapsed() {  # $1=canonical pct $2=parsed reset $3=max elapsed age; sets _SLE_OK
+limit_elapsed_ok() {  # $1=canonical pct $2=parsed reset $3=max elapsed age; sets _SLE_OK
   _SLE_OK=0
   [ -n "$1" ] || return 0
   [ "$2" -gt 0 ] && [ "$2" -le "$NOW" ] && [ $(( NOW - $2 )) -le "$3" ] && _SLE_OK=1
@@ -1865,24 +1867,24 @@ seg_limit_elapsed() {  # $1=canonical pct $2=parsed reset $3=max elapsed age; se
 seg_limit5h() {  # 5h rate-limit gauge with reset countdown
   local p="$fh_pct" r="$fh_rst" m=""
   if [ "$VL_LIMIT_SYNC" = 1 ]; then
-    seg_limit_elapsed "${_CUR5_CANON:-}" "${_CUR5_RST:-0}" "$RL_MAX_5H"
+    limit_elapsed_ok "${_CUR5_CANON:-}" "${_CUR5_RST:-0}" "$RL_MAX_5H"
     if [ "${_STATE_RL5_VALID:-0}" = 1 ]; then m=$_STATE_RL5_PCT; r=$_STATE_RL5_RST
     elif [ "$_SLE_OK" = 1 ]; then m=$_CUR5_PCT; r=$_CUR5_RST
     else return 0; fi
     printf -v p '%d.%03d' $(( m / 1000 )) $(( m % 1000 ))
   fi
-  seg_limit "5h" "$p" "$r" "$VL_BG_5H" "$m"
+  limit_pill "5h" "$p" "$r" "$VL_BG_5H" "$m"
 }
 seg_limit7d() {  # 7d rate-limit gauge with reset countdown
   local p="$wd_pct" r="$wd_rst" m=""
   if [ "$VL_LIMIT_SYNC" = 1 ]; then
-    seg_limit_elapsed "${_CUR7_CANON:-}" "${_CUR7_RST:-0}" "$RL_MAX_7D"
+    limit_elapsed_ok "${_CUR7_CANON:-}" "${_CUR7_RST:-0}" "$RL_MAX_7D"
     if [ "${_STATE_RL7_VALID:-0}" = 1 ]; then m=$_STATE_RL7_PCT; r=$_STATE_RL7_RST
     elif [ "$_SLE_OK" = 1 ]; then m=$_CUR7_PCT; r=$_CUR7_RST
     else return 0; fi
     printf -v p '%d.%03d' $(( m / 1000 )) $(( m % 1000 ))
   fi
-  seg_limit "7d" "$p" "$r" "$VL_BG_7D" "$m"
+  limit_pill "7d" "$p" "$r" "$VL_BG_7D" "$m"
 }
 
 seg_cost() {  # session cost in USD
@@ -2011,7 +2013,7 @@ seg_stash() {  # git stash count
 # ── Runtime detection (node / python segments) ───────────────────────────────
 # Each sets the global _RT to a label for directory $1 (empty when nothing is
 # detected), so the seg_* callers read a global instead of a $() subshell — the
-# fork-free convention used by fg/_FG, trunc/_TR, seg_len/SEG_LEN_R.
+# fork-free convention used by fg/_FG, trunc/_TR, text_width/SEG_LEN_R.
 #
 # The pin-file path (.nvmrc / .python-version, walking up ancestors) is always
 # tried first and never forks. The interpreter probe DOES fork, so it is gated

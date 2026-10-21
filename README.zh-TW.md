@@ -228,6 +228,10 @@ Bash 讀取 `~/.claude/coralline.conf`，原生 renderer 也能讀同一個檔�
 | 變數 | Runtime 預設值 | 說明 |
 |---|---|---|
 | `VL_STYLE` | `pill` | `pill`、`lean` 或 `classic` |
+| `VL_LEAN_SEP` | 空 | 僅 `lean`/`classic`：segment 之間的文字，例如 `"·"` |
+| `VL_LEAN_BG` | 空（`classic`：`VL_BG_BAR`，否則 `238`） | 僅 `lean`/`classic`：整列共用的一個背景色 |
+| `VL_LEAN_CAP_L` / `VL_LEAN_CAP_R` | 空（`classic`：右端 cap 為 `VL_SEP`，`VL_ASCII=1` 時無） | 僅 `lean`/`classic`：以 `VL_LEAN_BG` 顏色繪製的開頭與結尾 cap 字符；需搭配 `VL_LEAN_BG` |
+| `VL_LEAN_FG` | 空 | 僅 `lean`/`classic`：整列統一的文字顏色；空 = 各 segment 自己的強調色 |
 | `VL_LAYOUT` | `fixed` | 每個 `VL_SEGMENTS*` 固定一列；`auto` 會響應式折行單一清單 |
 | `VL_MAX_LINES` / `VL_WRAP_MARGIN` | `3` / `4` | `auto` 的行數上限與右側留白 |
 | `VL_SEGMENTS` | `dir git model ctx limit5h limit7d cost clock` | 第一列，亦是 `auto` 模式的完整清單 |

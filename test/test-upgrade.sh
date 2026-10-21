@@ -51,6 +51,11 @@ NEW
 segs=" $(segment_names "$tmp/new.sh") "
 case "$segs" in *" burn "*)   check "segment_names finds burn"   1 ;; *) check "segment_names finds burn"   0 ;; esac
 case "$segs" in *" effort "*) check "segment_names finds effort" 1 ;; *) check "segment_names finds effort" 0 ;; esac
+# an installed copy from before the helper rename still names its helpers seg_*;
+# none of them may surface as a segment
+printf 'seg_len() {\n}\nseg_limit() {  # $1=label\n}\nseg_limit_elapsed() {  # $1=pct\n}\nseg_git() {  # git\n}\n' > "$tmp/legacy.sh"
+legacy=" $(segment_names "$tmp/legacy.sh") "
+check "segment_names skips legacy seg_ helpers" "$([ "$legacy" = " git  " ] && echo 1 || echo 0)"
 
 knobs=" $(knob_names "$tmp/new.sh") "
 case "$knobs" in *" VL_FLOAT "*)      check "knob_names finds VL_FLOAT"      1 ;; *) check "knob_names finds VL_FLOAT"      0 ;; esac

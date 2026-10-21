@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit test for seg_len() — the display-width measurement that drives auto-layout
+# Unit test for text_width() — the display-width measurement that drives auto-layout
 # wrapping. Extracts the live function from statusline.sh so this test can never
 # drift from the implementation it checks.
 #
@@ -12,12 +12,12 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SCRIPT="$HERE/../statusline.sh"
 ESC=$'\033'
 
-# Pull just the seg_len function body out of the real script and define it here.
-eval "$(sed -n '/^seg_len() {/,/^}/p' "$SCRIPT")"
+# Pull just the text_width function body out of the real script and define it here.
+eval "$(sed -n '/^text_width() {/,/^}/p' "$SCRIPT")"
 
 fail=0
 check() {  # $1=expected width  $2=label  $3=text
-  seg_len "$3"
+  text_width "$3"
   if [ "$SEG_LEN_R" = "$1" ]; then
     printf 'ok    %-22s width=%s\n' "$2" "$SEG_LEN_R"
   else

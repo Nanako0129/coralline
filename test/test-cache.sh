@@ -97,7 +97,7 @@ check "<hot> C 0% <dim>cold "   "0% hit is hot"     "$(render '0' '')"
 # jq hands over hit_ratio * 100, which routinely arrives with float noise.
 check "<ok> C 98% <dim>cold " "98.4 rounds down"  "$(render '98.4' '')"
 check "<ok> C 99% <dim>cold " "98.6 rounds up"    "$(render '98.6' '')"
-# printf %.0f is IEEE round-half-to-even, the same rule seg_ctx and seg_limit
+# printf %.0f is IEEE round-half-to-even, the same rule seg_ctx and limit_pill
 # already display under. Both ties land on 98, not on 98 and 99.
 check "<ok> C 98% <dim>cold " "98.5 ties to even" "$(render '98.5' '')"
 check "<ok> C 98% <dim>cold " "97.5 ties to even" "$(render '97.5' '')"
