@@ -242,6 +242,7 @@ Bash 讀取 `~/.claude/coralline.conf`，原生 renderer 也能讀同一個檔�
 | `VL_WARN_PCT` / `VL_HOT_PCT` | `50` / `75` | 量表變色門檻 |
 | `VL_ASCII` | `0` | 設為 `1` 停用 Nerd Font 字符 |
 | `VL_RUNTIME_PROBE` | `0` | 無 pin 時讓 `node` 與 `python` 偵測 `PATH`；每次 render 會增加 fork |
+| `VL_GIT_CACHE_TTL` | `0` | 每個目錄重用 `git status` 結果的秒數（僅 Bash renderer；`0` = 關閉）；git 標記最多可能落後工作樹這麼久。`stash` 與 `project` 仍會在每次 render 呼叫 git |
 | `VL_BG_*` / `VL_FG_*` | 依主題 | 256 色編號或 `"R,G,B"` |
 
 ## 安裝選項
