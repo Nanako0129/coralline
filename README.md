@@ -231,7 +231,7 @@ Bash reads `~/.claude/coralline.conf`; the native renderer can read the same fil
 | `VL_LEAN_SEP` | empty | `lean`/`classic` only: text between segments, e.g. `"·"` |
 | `VL_LEAN_BG` | empty (`classic`: `VL_BG_BAR`, else `238`) | `lean`/`classic` only: one background behind the whole row |
 | `VL_LEAN_CAP_L` / `VL_LEAN_CAP_R` | empty (`classic`: right cap is `VL_SEP`, none under `VL_ASCII=1`) | `lean`/`classic` only: leading and trailing cap glyphs drawn in `VL_LEAN_BG`; need `VL_LEAN_BG` |
-| `VL_LEAN_FG` | empty | `lean`/`classic` only: one text color for the row; empty = each segment's accent |
+| `VL_LEAN_FG` | empty | `lean`/`classic` only: replaces the plain text color (`VL_FG_TEXT`); gauge and status colors (`ctx`, `cache`, limits, `burn`, `lines`, `toks`, `ttft`) keep theirs; empty = each segment's accent |
 | `VL_LAYOUT` | `fixed` | one row per `VL_SEGMENTS*`; `auto` wraps one list responsively |
 | `VL_MAX_LINES` / `VL_WRAP_MARGIN` | `3` / `4` | line cap and right margin for `auto` |
 | `VL_SEGMENTS` | `dir git model ctx limit5h limit7d cost clock` | first row, and the complete list in `auto` |

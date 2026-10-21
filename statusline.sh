@@ -37,8 +37,8 @@ VL_LEAN_CAP_R=""                # lean only — trailing cap glyph drawn in the 
 VL_LEAN_CAP_L=""                # lean only — leading cap glyph: the left-facing
                                 # mirror of VL_LEAN_CAP_R at the bar's start; needs
                                 # VL_LEAN_BG, empty = flat (stock p10k classic: flat)
-VL_LEAN_FG=""                   # lean only — one text colour for the row; empty = each
-                                # segment's accent
+VL_LEAN_FG=""                   # lean only — replaces VL_FG_TEXT (gauge/status inks keep
+                                # theirs); empty = each segment's accent
 VL_LAYOUT="fixed"               # fixed: one line per VL_SEGMENTS* var
                                 # auto:  single line, wraps when the window is narrow
 VL_MAX_LINES=3                  # auto only — wrap into at most this many lines
