@@ -1444,7 +1444,7 @@ read_git() {
   local gcdir="${XDG_CACHE_HOME:-$HOME/.cache}/coralline/git" cfile="" all="" stamp
   if [ "$VL_GIT_CACHE_TTL" -gt 0 ]; then
     cfile="$gcdir/${cwd//[!A-Za-z0-9._-]/_}"
-    if [ -r "$cfile" ] && [ -O "$cfile" ] && [ -O "$gcdir/.private" ]; then
+    if [ -r "$cfile" ] && [ -O "$cfile" ] && [ -O "$gcdir/.private" ] && [ ! -L "$gcdir/.private" ]; then
       read -r -d '' all < "$cfile"
       stamp="${all%% *}"
       case "$stamp" in ''|*[!0123456789]*) ;; *)
@@ -1465,11 +1465,14 @@ read_git() {
     if out=$(git -C "$cwd" status --porcelain=v2 --branch 2>/dev/null) && [ -n "$cfile" ]; then
       [ -d "$gcdir" ] || { mkdir -p "${gcdir%/*}" && mkdir -m 700 "$gcdir" && : > "$gcdir/.private"; } 2>/dev/null
       if [ -d "$gcdir" ] && [ -O "$gcdir" ] && [ ! -L "$gcdir" ]; then
-        # A directory that predates the marker may be permissive: tighten it
-        # once and mark it. Only the owner can loosen an owned 0700 directory,
-        # so later misses trust the marker and need no chmod or stat.
-        [ -O "$gcdir/.private" ] || { chmod 700 "$gcdir" && : > "$gcdir/.private"; } 2>/dev/null
-        if [ -O "$gcdir/.private" ]; then
+        # The marker must be an owned regular file, not a symlink. Tighten the
+        # dir first so nobody can plant a marker later, then create it only if
+        # nothing (file or symlink) is there. Later misses skip this block.
+        if [ ! -O "$gcdir/.private" ] || [ -L "$gcdir/.private" ]; then
+          chmod 700 "$gcdir" 2>/dev/null && [ ! -L "$gcdir/.private" ] && [ ! -e "$gcdir/.private" ] \
+            && : > "$gcdir/.private" 2>/dev/null
+        fi
+        if [ -O "$gcdir/.private" ] && [ ! -L "$gcdir/.private" ]; then
           { printf '%s %s\n%s\n' "$NOW" "$cwd" "$out" > "$cfile.$$" && mv -f "$cfile.$$" "$cfile"; } 2>/dev/null \
             || rm -f "$cfile.$$" 2>/dev/null
         fi

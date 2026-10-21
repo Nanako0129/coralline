@@ -112,4 +112,25 @@ rm -f "$PDIR/.private"
 check "$FRESH" "unmarked output" "$(XDG_CACHE_HOME="$PCACHE" T_TTL=5 render "$REPO")"
 check "2"      "unmarked entry not served" "$(calls)"
 
+# symlinked marker planted in a shared-writable dir: never trusted, never written through
+LCACHE="$TMP/lcache"; LDIR="$LCACHE/coralline/git"
+mkdir -p "$LDIR"; chmod 777 "$LDIR"
+echo keep > "$TMP/victim"; ln -s "$TMP/victim" "$LDIR/.private"
+LFILE=$(printf '%s/%s' "$LDIR" "$(printf '%s' "$REPO" | sed 's#[^A-Za-z0-9._-]#_#g')")
+: > "$TMP/calls"
+check "$FRESH" "symlink marker cold output" "$(XDG_CACHE_HOME="$LCACHE" T_TTL=5 render "$REPO")"
+check "1"      "symlink marker cold spawned git" "$(calls)"
+check "keep"   "symlink target untouched" "$(cat "$TMP/victim")"
+[ ! -e "$LFILE" ] && echo "ok    symlink marker writes no entry" || { echo "FAIL  symlink marker wrote an entry"; fail=1; }
+check "$FRESH" "symlink marker warm output" "$(XDG_CACHE_HOME="$LCACHE" T_TTL=5 render "$REPO")"
+check "2"      "symlink marker warm spawned git" "$(calls)"
+
+# read side: a valid entry whose marker became a symlink is not served
+RCACHE="$TMP/rcache"; RDIR="$RCACHE/coralline/git"
+XDG_CACHE_HOME="$RCACHE" T_TTL=5 render "$REPO" >/dev/null
+rm -f "$RDIR/.private"; ln -s "$TMP/victim" "$RDIR/.private"
+: > "$TMP/calls"
+check "$FRESH" "symlink marker read output" "$(XDG_CACHE_HOME="$RCACHE" T_TTL=5 render "$REPO")"
+check "1"      "symlink marker read spawned git" "$(calls)"
+
 exit "$fail"
