@@ -1444,11 +1444,11 @@ read_git() {
   # repo paths. A linked directory and link or non-file entries are never used. One
   # line of \x1f-separated fields (a non-whitespace IFS keeps empty ones): stamp,
   # cwd, branch, marks, ahead/behind; no working-tree file names. The cwd field
-  # turns a sanitized-name collision into a miss, and read fails on a line
-  # without its newline (one caught mid-write), so writes use plain >| and no
-  # temp file + mv. Two sessions writing one entry at once both carry the same
-  # cwd and a status taken at the same moment, so an interleaved line is still
-  # that state. A hit reads with builtins only. A name past NAME_MAX is never
+  # turns a sanitized-name collision into a miss. Entries are published by temp
+  # file + mv (one fork per miss, beside the git one it already pays): measured,
+  # two sessions rewriting one entry with plain >| let a reader see a complete,
+  # newline-terminated line spliced from both once the line reaches ~1000 bytes.
+  # A hit reads with builtins only. A name past NAME_MAX is never
   # attempted. The class is spelled out: bash 3.2 matches A-Z by collation.
   if [ "$VL_GIT_CACHE_TTL" -gt 0 ]; then
     gname="${cwd//[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]/_}"
@@ -1506,8 +1506,13 @@ GIT
         { [ -d "$gdir" ] || mkdir -p -m 700 "$gdir"; } 2>/dev/null
         toks_evict git/
       fi
-      printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\n' "$NOW" "$cwd" "$GIT_BRANCH" "$GIT_MARKS" "$GIT_AB" \
-        2>/dev/null >| "$gfile"
+      # The temp name is short and dot-led: it cannot overflow NAME_MAX, match an
+      # entry (those start with _), or count toward eviction's git/* glob.
+      # ponytail: a render killed between printf and mv leaves one .tmp.<pid>;
+      # nothing sweeps them, add one if they are ever seen piling up.
+      { printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\n' "$NOW" "$cwd" "$GIT_BRANCH" "$GIT_MARKS" "$GIT_AB" \
+          >| "$gdir/.tmp.$$" && mv -f "$gdir/.tmp.$$" "$gfile"; } 2>/dev/null \
+        || { [ -e "$gdir/.tmp.$$" ] && rm -f "$gdir/.tmp.$$" 2>/dev/null; }
     fi
   fi
   # Stable project name (seg_project): basename of the MAIN repo root, which is

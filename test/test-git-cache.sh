@@ -50,6 +50,7 @@ check() {  # $1=expected  $2=label  $3=actual
 }
 
 export CLAUDE_CONFIG_DIR="$TMP/cfg"
+export GIT_CEILING_DIRECTORIES="$TMP"   # a non-repo fixture must not find a parent worktree
 GDIR="$TMP/cfg/coralline/git"
 key() { printf '%s/%s' "$GDIR" "$(printf '%s' "$1" | sed 's#[^A-Za-z0-9._-]#_#g')"; }
 CFILE=$(key "$REPO")
@@ -160,6 +161,14 @@ UC="$TMP/caf\303\251"; UC=$(printf "$UC"); mkdir -p "$UC"; git -C "$UC" init -q 
 LC_ALL=en_US.UTF-8 T_TTL=5 render "$UC" >/dev/null
 check "0" "entry names are ASCII" "$(ls "$GDIR" | LC_ALL=C grep -c '[^ -~]')"
 ls "$GDIR" | grep -q 'caf__*$' && echo "ok    non-ASCII cwd cached" || { echo "FAIL  non-ASCII cwd not cached"; fail=1; }
+
+# a cwd whose entry name is just under NAME_MAX is still cached (the temp name
+# must not inherit its length)
+NEAR="$TMP/n"; while [ "${#NEAR}" -lt 254 ]; do NEAR="${NEAR}n"; done
+mkdir -p "$NEAR"; git -C "$NEAR" init -q -b main
+T_TTL=5 render "$NEAR" >/dev/null
+[ -f "$(key "$NEAR")" ] && echo "ok    near-NAME_MAX cwd cached" || { echo "FAIL  near-NAME_MAX cwd not cached"; fail=1; }
+check "0" "no temp file left" "$(ls -A "$GDIR" | grep -c '^\.tmp')"
 
 # a cwd whose entry name passes NAME_MAX is never cached and never evicts
 LONG="$TMP/$(printf 'd%.0s' $(seq 1 250))"; mkdir -p "$LONG"; git -C "$LONG" init -q -b main
