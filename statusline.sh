@@ -1436,7 +1436,7 @@ model_short() {
 export GIT_OPTIONAL_LOCKS=0
 GIT_BRANCH="" GIT_MARKS="" GIT_AB="" GIT_DIRTY=0 GIT_ROOT=""
 read_git() {
-  local line oid="" head="" a="" b="" staged=0 unstaged=0 untracked=0 hit=0 out=""
+  local line oid="" head="" a="" b="" staged=0 unstaged=0 untracked=0 hit=0 out="" had_c=0
   local gdir="$CORALLINE_DIR/git" gname gfile="" gstamp gcwd gbr gmarks gab
   [ -n "$cwd" ] || return
   # Optional TTL cache (VL_GIT_CACHE_TTL) of the parsed result: one file per cwd,
@@ -1508,11 +1508,23 @@ GIT
       fi
       # The temp name is short and dot-led: it cannot overflow NAME_MAX, match an
       # entry (those start with _), or count toward eviction's git/* glob.
+      # Anything already at that name (a stale temp or a planted link) is removed
+      # and this render publishes nothing, so it is never opened: noclobber alone
+      # refuses only a regular file and would open a link to a FIFO and block.
+      # noclobber (O_EXCL, as in state_burn_lead) still covers a regular file
+      # appearing between that test and the open. All builtins until the mv.
       # ponytail: a render killed between printf and mv leaves one .tmp.<pid>;
       # nothing sweeps them, add one if they are ever seen piling up.
-      { printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\n' "$NOW" "$cwd" "$GIT_BRANCH" "$GIT_MARKS" "$GIT_AB" \
-          >| "$gdir/.tmp.$$" && mv -f "$gdir/.tmp.$$" "$gfile"; } 2>/dev/null \
-        || { [ -e "$gdir/.tmp.$$" ] && rm -f "$gdir/.tmp.$$" 2>/dev/null; }
+      if [ -e "$gdir/.tmp.$$" ] || [ -L "$gdir/.tmp.$$" ]; then
+        rm -f "$gdir/.tmp.$$" 2>/dev/null
+      else
+        case $- in *C*) had_c=1 ;; esac
+        set -C
+        { printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\n' "$NOW" "$cwd" "$GIT_BRANCH" "$GIT_MARKS" "$GIT_AB" \
+            > "$gdir/.tmp.$$" && mv -f "$gdir/.tmp.$$" "$gfile"; } 2>/dev/null \
+          || { { [ -e "$gdir/.tmp.$$" ] || [ -L "$gdir/.tmp.$$" ]; } && rm -f "$gdir/.tmp.$$" 2>/dev/null; }
+        [ "$had_c" = 1 ] || set +C
+      fi
     fi
   fi
   # Stable project name (seg_project): basename of the MAIN repo root, which is

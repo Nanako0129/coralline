@@ -27,6 +27,9 @@ git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 REAL_GIT=$(command -v git)
 printf '#!/bin/bash\necho x >> "%s/calls"\n[ -n "$T_GITFAIL" ] && exit 1\n[ -n "$T_GITPARTIAL" ] && { "%s" "$@" | head -2; exit 1; }\nexec "%s" "$@"\n' "$TMP" "$REAL_GIT" "$REAL_GIT" > "$TMP/shim/git"
 chmod +x "$TMP/shim/git"
+# rm shim: log only, then run the real one (a successful publish must fork none)
+printf '#!/bin/bash\necho x >> "%s/rmcalls"\nexec "%s" "$@"\n' "$TMP" "$(command -v rm)" > "$TMP/shim/rm"
+chmod +x "$TMP/shim/rm"
 
 cat > "$TMP/conf" <<'CONF'
 VL_CLOCK=off
@@ -62,6 +65,7 @@ case "$BASE" in *main*) ;; *) echo "FAIL  baseline lacks git segment"; fail=1 ;;
 : > "$TMP/calls"
 check "$BASE" "ttl=5 cold output"  "$(T_TTL=5 render "$REPO")"
 check "1"     "cold run spawned git" "$(calls)"
+[ ! -e "$TMP/rmcalls" ] && echo "ok    successful publish forks no rm" || { echo "FAIL  successful publish forked rm"; fail=1; }
 [ -f "$CFILE" ] && echo "ok    cache file written" || { echo "FAIL  no cache file"; fail=1; }
 check "drwx------" "cache dir is 0700" "$(ls -ld "$GDIR" | cut -c1-10)"
 check "$BASE" "ttl=5 warm output"  "$(T_TTL=5 render "$REPO")"
@@ -122,6 +126,33 @@ check "$FRESH" "symlink entry output" "$(T_TTL=5 render "$REPO")"
 check "1"      "symlink entry spawned git" "$(calls)"
 check "keep"   "symlink target untouched" "$(cat "$TMP/victim")"
 rm -f "$CFILE"
+
+# a symlink planted at this process's temp name is never written through; the
+# render falls back to git, and the link is cleared so a later miss can publish
+# (a link to a regular file is also refused by noclobber; the FIFO case below is
+# the one only the up-front test catches)
+VDIR="$TMP/vcfg/coralline/git"; mkdir -p "$VDIR"; echo keep > "$TMP/victim2"
+VS='ln -s "$1" "$2/.tmp.$$"; exec "$3" "$4"'
+check "$FRESH" "planted temp link output" \
+  "$(printf '{"cwd":"%s","model":{"display_name":"M"}}' "$REPO" | CLAUDE_CONFIG_DIR="$TMP/vcfg" T_TTL=5 \
+     CORALLINE_CONFIG="$TMP/conf" COLUMNS=200 PATH="$TMP/shim:$PATH" "$BASH" -c "$VS" _ "$TMP/victim2" "$VDIR" "$BASH" "$SCRIPT")"
+check "keep" "planted temp link target untouched" "$(cat "$TMP/victim2")"
+check "0" "planted temp link removed" "$(ls -A "$VDIR" | grep -c '^\.tmp')"
+# a link to a FIFO with no reader must not block the render (noclobber would open it)
+# (a blocked writer is released by opening the FIFO, so a regression fails here
+# instead of hanging the suite; an alarm did not end the blocked render here)
+mkfifo "$TMP/fifo"
+printf '{"cwd":"%s","model":{"display_name":"M"}}' "$REPO" | CLAUDE_CONFIG_DIR="$TMP/vcfg" T_TTL=5 \
+  CORALLINE_CONFIG="$TMP/conf" COLUMNS=200 PATH="$TMP/shim:$PATH" \
+  "$BASH" -c "$VS" _ "$TMP/fifo" "$VDIR" "$BASH" "$SCRIPT" > "$TMP/fout" &
+fp=$!; i=0
+while kill -0 "$fp" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+if kill -0 "$fp" 2>/dev/null; then
+  : <> "$TMP/fifo"; wait "$fp"   # O_RDWR never blocks, whether or not a writer waits
+  echo "FAIL  planted FIFO link blocked the render"; fail=1
+else
+  wait "$fp"; check "$FRESH" "planted FIFO link does not block" "$(cat "$TMP/fout")"
+fi
 
 # the store holds TOKS_KEEP (32) entries: the 32nd evicts nothing, the 33rd the oldest
 rm -f "$GDIR"/*; for i in $(seq 1 31); do : > "$GDIR/old$i"; done
