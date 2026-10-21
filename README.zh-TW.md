@@ -56,7 +56,7 @@ Claude 會依環境選擇路徑、在更改偏好前詢問，並使用對應 ins
 curl -fsSL https://raw.githubusercontent.com/Nanako0129/coralline/main/install.sh | bash
 ```
 
-它會建議最新 release tag，也能選擇可變的 `main`。使用 `--ref v0.19.0` 或其他 ref 可略過詢問。若一行安裝無法執行，使用 [`INSTALL.md` 的 manual fallback](./INSTALL.md#manual-fallback)。
+它會建議最新 release tag，也能選擇可變的 `main`。使用 `--ref v0.20.0` 或其他 ref 可略過詢問。若一行安裝無法執行，使用 [`INSTALL.md` 的 manual fallback](./INSTALL.md#manual-fallback)。
 
 安裝完成後會出現設定選單：直接套用預設值、從 `~/.p10k.zsh` 匯入，或開啟視覺化 wizard，先預覽主題、風格與區段再寫入設定。之後隨時可以重新開啟 wizard：
 
