@@ -503,6 +503,14 @@ run_runtime_cwd "$CASE" "$BASH_BIN" "$CASE/conf" "$CASE/blank" "$CASE/blank.out"
 if LC_ALL=C grep -q '20%' "$CASE/blank.out"; then ok 'no own reading falls back to the store'; else bad 'no own reading falls back to the store' "output=$(LC_ALL=C tr '\n' ' ' < "$CASE/blank.out")"; fi
 if LC_ALL=C grep -q '99%' "$CASE/blank.out"; then bad 'store fallback never shows a malformed entry' "output=$(LC_ALL=C tr '\n' ' ' < "$CASE/blank.out")"; else ok 'store fallback never shows a malformed entry'; fi
 eq 'no own reading keeps stderr empty' "$(file_bytes "$CASE/blank.err")" 0
+# A live 7d reading with no five_hour field means the account has no 5h limit
+# (e.g. Ultra): the stored 5h window must not be borrowed, while 7d still renders.
+make_payload "$CASE/no5h.tmp" '' '' 30 "$_r7"
+jq 'del(.rate_limits.five_hour)' "$CASE/no5h.tmp" > "$CASE/no5h"
+{ cat "$CASE/conf"; printf '%s\n' 'VL_SEGMENTS="limit5h limit7d"'; } > "$CASE/conf57"
+run_runtime_cwd "$CASE" "$BASH_BIN" "$CASE/conf57" "$CASE/no5h" "$CASE/no5h.out" "$CASE/no5h.err" 0
+if LC_ALL=C grep -q '5h ' "$CASE/no5h.out"; then bad 'no five_hour with live 7d skips the stored 5h' "output=$(LC_ALL=C tr '\n' ' ' < "$CASE/no5h.out")"; else ok 'no five_hour with live 7d skips the stored 5h'; fi
+if LC_ALL=C grep -q '7d ' "$CASE/no5h.out"; then ok 'no five_hour still renders 7d'; else bad 'no five_hour still renders 7d' "output=$(LC_ALL=C tr '\n' ' ' < "$CASE/no5h.out")"; fi
 unit_gate "$CASE/state" "$_now" 15 "$_winner" 30 "$_later" 1
 rl_latest "$_SL5_BASE" "$RL_MAX_5H" 0
 eq 'malformed names do not displace canonical winner' "$_LL_PCT" '020.000'

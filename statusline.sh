@@ -973,6 +973,13 @@ rl_choose() {  # $1=5|7; this session's window beats the store; a newer stored w
   local which="$1" valid="$_LL_VALID" rst="${_LL_RST:-0}" pct="$_LL_PCT_MILLI" crst cpct cvalid
   if [ "$which" = 5 ]; then cvalid=$_CUR5_VALID; crst=$_CUR5_RST; cpct=$_CUR5_PCT
   else cvalid=$_CUR7_VALID; crst=$_CUR7_RST; cpct=$_CUR7_PCT; fi
+  # A payload that carries a live 7d window but no five_hour has already received
+  # an API response, so it is not a session waiting for its first one: the account
+  # has no 5h window (reported 2026-11 for the Ultra plan; on this host every
+  # session stopped writing 5h readings at once). Borrowing the store's 5h entry,
+  # written while the account still had one, kept a stale gauge on screen until
+  # that entry's reset passed, up to five hours later.
+  [ "$which" = 5 ] && [ -z "${fh_pct:-}" ] && [ "${_CUR7_VALID:-0}" = 1 ] && valid=0
   if [ "$cvalid" = 1 ] && { [ "$valid" = 0 ] || [ "$crst" -ge "$rst" ]; }; then
     valid=1; rst=$crst; pct=$cpct
   fi
