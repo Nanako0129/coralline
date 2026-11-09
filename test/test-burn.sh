@@ -938,22 +938,25 @@ M5T=0
 burn_estimate
 eq 'store-only 5h projection on a closed window is dropped' "$_B5_STATE" warming
 eq 'dropped 5h projection leaves burn warming' "$_BURN_STATE" warming
-# The gate reads the synced state alone, whatever rl_choose put there: any stored
-# window other than the projection's drops it.
+# With a valid reading of our own, rl_choose puts our own window in the synced
+# state, so the projection on that window is kept.
 _CUR5_VALID=1; _CUR5_RST=$(( NOW + 1000 )); _STATE_RL5_RST=$(( NOW + 1000 ))
 M5T=1000
 burn_estimate
 eq 'own 5h window matching the store keeps its projection' "$_BURN_STATE" active
-M5T=1000; _STATE_RL5_RST=$(( NOW + 9000 ))
-burn_estimate
-eq 'newer stored window drops a projection still on the older one' "$_B5_STATE" warming
-M5T=9000
-burn_estimate
-eq 'projection rebound to the newer stored window survives' "$_BURN_STATE" active
 _STATE_RL5_VALID=0
 M5T=1000
 burn_estimate
 eq 'no synced state leaves the projection alone' "$_BURN_STATE" active
+# An account with no 5h window (rl_choose set _RL5_NONE) projects no 5h ETA from
+# the history it left behind; burn falls through to 7d when 7d is active.
+_CUR5_VALID=0; _RL5_NONE=1
+burn_estimate
+eq 'no-5h account drops the 5h projection' "$_B5_STATE" warming
+M7E=7200 M7R=0 M7T=86400
+burn_estimate
+eq 'no-5h account binds burn to 7d' "$_BURN_LABEL" 7d
+M7E=inf M7R=0 M7T=0; _RL5_NONE=
 VL_LIMIT_SYNC=$_VLS_SAVE2; _STATE_RL5_VALID=0; _CUR5_VALID=0
 M5S=active M5E=21600 M5R=0 M5T=15000 M7E=7200 M7R=0 M7T=86400
 SEG_BGS=(); SEG_TXT=(); SEG_LEN=(); _BURN_STATE=active; _BURN_LABEL=5h; _BURN_ETA=1000; _BURN_RATE=0; _BURN_TTR=900
@@ -1078,14 +1081,6 @@ wd_pct=30; wd_rst=1; _CUR7_CANON='030.000'; _CUR7_PCT=30000
 _CUR7_RST=$(( NOW - RL_MAX_7D - 1 )); _CUR7_VALID=0; _STATE_RL7_VALID=0
 seg_limit7d
 eq '7d elapsed past the ceiling renders nothing' "${#SEG_TXT[@]}" 0
-
-# seg_limit5h draws whatever rl_choose put in the synced state, even beside an
-# own reading of another window.
-SEG_BGS=(); SEG_TXT=(); SEG_LEN=()
-fh_pct=41.2; fh_rst=1015900; _CUR5_VALID=1; _CUR5_CANON='041.200'; _CUR5_PCT=41200; _CUR5_RST=1015900
-_STATE_RL5_VALID=1; _STATE_RL5_PCT=7000; _STATE_RL5_RST=1016900
-seg_limit5h
-case "${SEG_TXT[0]}" in (*'5h '*' 7% '*) ok 'seg draws the synced window' ;; (*) bad 'seg draws the synced window' "${SEG_TXT[0]}" ;; esac
 
 # Default store base follows CLAUDE_CONFIG_DIR (two Claude config dirs must not
 # share one 5h/7d store). Asserted on where a real render puts the files, with no

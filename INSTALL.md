@@ -257,10 +257,10 @@ Ask concise questions. If the user says "you decide", choose the defaults.
    fixed two lines, or fixed three lines.
 5. **Details**: clock `12h` default, `24h`, or `off`; Nerd Font yes/no; if they use git
    worktrees, suggest enabling `project`. If the user runs many concurrent Claude sessions
-   and is bothered by `limit5h` / `limit7d` showing different percentages per session,
-   mention `VL_LIMIT_SYNC=1`: a session holding a valid but older window follows a stored
-   reading for a newer one (in a `limit-5h.d` / `limit-7d.d` store). Off by default. Your
-   own reading always wins your own window; the store is the source a session falls back
+   and is bothered by `limit5h` / `limit7d` going blank in sessions that have not talked
+   to the API yet, mention `VL_LIMIT_SYNC=1` (a `limit-5h.d` / `limit-7d.d` store). Off by
+   default. A session's own valid reading always wins, even over a newer stored window
+   (that is usually another account's); the store is the source a session falls back
    to when it has no reading of its own, which is every session before its first API
    response of the run, so the gauge shows the account's open window instead of nothing.
 6. **Subagent panel rows** (optional, needs Claude Code v2.1.205+ for the per-task

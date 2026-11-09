@@ -985,8 +985,16 @@ rl_choose() {  # $1=5|7; this session's valid reading wins; the store fills in o
   # has no 5h window (reported 2026-11 for the Ultra plan; on this host every
   # session stopped writing 5h readings at once). Borrowing the store's 5h entry,
   # written while the account still had one, kept a stale gauge on screen until
-  # that entry's reset passed, up to five hours later.
-  [ "$which" = 5 ] && [ -z "${fh_pct:-}" ] && [ "${_CUR7_VALID:-0}" = 1 ] && valid=0
+  # that entry's reset passed, up to five hours later. Mixed accounts in one config
+  # dir make it persistent: another account keeps re-publishing a live 5h window.
+  # Claude Code drops a window from the payload once its reset passes (Qt/Ve in the
+  # 2.1.319 builder), so a session idle past its own 5h reset looks the same and
+  # shows no 5h gauge until its next response, as before #64; accepted, since
+  # that session cannot tell the store's window is its own account's.
+  # _RL5_NONE tells burn_estimate to drop its 5h projection too.
+  if [ "$which" = 5 ] && [ -z "${fh_pct:-}" ] && [ "${_CUR7_VALID:-0}" = 1 ]; then
+    valid=0; _RL5_NONE=1
+  fi
   if [ "$cvalid" = 1 ]; then
     valid=1; rst=$crst; pct=$cpct
   fi
@@ -1307,8 +1315,11 @@ burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
   # beside a gauge for another, so gate on the stored state alone. burn_eta_5h
   # reports the window it used as NOW + _B5_TTR; falling back to warming when it does
   # not match is honest, no samples for that window have been observed yet.
-  if [ "$VL_LIMIT_SYNC" = 1 ] && [ "${_STATE_RL5_VALID:-0}" = 1 ] \
-     && [ $(( NOW + _B5_TTR )) -ne "${_STATE_RL5_RST:-0}" ]; then
+  # An account rl_choose judged to have no 5h window gets no 5h projection either:
+  # the shared history still holds the window recorded before, and a 5h ETA beside
+  # a hidden 5h gauge would describe a limit the account no longer has.
+  if [ "$VL_LIMIT_SYNC" = 1 ] && { [ "${_RL5_NONE:-0}" = 1 ] || { [ "${_STATE_RL5_VALID:-0}" = 1 ] \
+     && [ $(( NOW + _B5_TTR )) -ne "${_STATE_RL5_RST:-0}" ]; }; }; then
     _B5_STATE=warming; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0
   fi
   # The ownership rule covers the projection too, not just the gauge, and it has
