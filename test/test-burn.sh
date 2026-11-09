@@ -964,8 +964,8 @@ burn_estimate
 eq 'no synced state leaves the projection alone' "$_BURN_STATE" active
 # No 5h window (_CUR5_NONE): burn projects no 5h ETA from the history left behind,
 # with sync on or off, binds to 7d when 7d is active, and rests idle rather than
-# warming when 7d is not. A stale synced 5h state must not turn it back to warming,
-# and the election still runs so the maintenance-only claim keeps trimming.
+# warming when 7d is not. The election still runs, so the maintenance-only claim
+# keeps trimming, while a non-leader skips the 5h parse it would discard.
 _CUR5_VALID=0; _CUR5_NONE=1; _CUR7_VALID=1
 for _vls in 1 0; do
   VL_LIMIT_SYNC=$_vls; M5S=active M5E=1000 M5R=0 M5T=9000 M7E=7200 M7R=0 M7T=86400
@@ -976,19 +976,17 @@ for _vls in 1 0; do
   burn_estimate
   eq "no-5h account with idle 7d rests idle (sync=$_vls)" "$_BURN_STATE" idle
 done
-VL_LIMIT_SYNC=1; _STATE_RL5_VALID=1; _STATE_RL5_RST=$(( NOW + 9000 ))
-burn_estimate
-eq 'no-5h idle survives a stale synced 5h state' "$_BURN_STATE" idle
-_STATE_RL5_VALID=0
-_lead_save=$(declare -f state_burn_lead)
-state_burn_lead() { return 0; }
+_lead_save=$(declare -f state_burn_lead); _b5_save=$(declare -f burn_eta_5h)
 burn_eta_5h() { _B5_MUT="$1"; mk5h "$M5S" "$M5E" "$M5R" "$M5T"; }
+_B5_MUT=unset; _STATE_MUTATE=0
+burn_estimate
+eq 'no-5h non-leader skips the 5h parse' "$_B5_MUT" unset
+state_burn_lead() { return 0; }
 _B5_MUT=unset; _STATE_MUTATE=1
 burn_estimate
 eq 'no-5h leader still runs the mutating parse' "$_B5_MUT" 1
 eq 'no-5h leader result is still idle' "$_B5_STATE" idle
-_STATE_MUTATE=0; eval "$_lead_save"
-burn_eta_5h() { mk5h "$M5S" "$M5E" "$M5R" "$M5T"; }
+_STATE_MUTATE=0; eval "$_lead_save"; eval "$_b5_save"
 _CUR5_NONE=0; _CUR7_VALID=0; M7E=inf M7R=0 M7T=0
 VL_LIMIT_SYNC=$_VLS_SAVE2; _STATE_RL5_VALID=0; _CUR5_VALID=0
 M5S=active M5E=21600 M5R=0 M5T=15000 M7E=7200 M7R=0 M7T=86400

@@ -700,7 +700,8 @@ state_gate() {  # canonicalize one render's values and state namespaces
       [ "$_CUR7_RST" -gt "$NOW" ] && [ "$_CUR7_RST" -le $(( NOW + RL_MAX_7D )) ] && _CUR7_VALID=1
     fi
   fi
-  # A live 7d window with no five_hour field: no 5h window (see rl_choose). The
+  # A live 7d window with an empty five_hour reading: no 5h window (see rl_choose).
+  # Claude Code's builder emits five_hour only for a live window, always numeric. The
   # gauge (rl_choose) and the projection (burn_estimate) both read this one flag.
   [ -z "${fh_pct:-}" ] && [ "$_CUR7_VALID" = 1 ] && _CUR5_NONE=1
   if [ "$_CUR5_VALID" = 1 ] && state_epoch "$NOW" 12; then
@@ -1304,6 +1305,8 @@ burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
     burn_est_publish
   elif [ "${_BURN_LOST:-0}" = 1 ] && [ "${_CUR_BURN_VALID:-0}" = 1 ] && burn_est_adopt; then
     :
+  elif [ "${_CUR5_NONE:-0}" = 1 ]; then
+    :  # the 5h result is overridden below; skip the read-only parse and its fork
   else
     burn_eta_5h 0
   fi

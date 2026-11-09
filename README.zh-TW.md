@@ -208,7 +208,7 @@ Bash install-only 與一般更新不會自行新增或刪除 `subagentStatusLine
 
 ![burn 區段在狀態列中的樣子，以及它的各種狀態：重置前耗盡、勢均力敵、餘裕充足、永遠用不完、閒置、暖機中](./assets/burn-segment.png)
 
-把 `burn` 加入 `VL_SEGMENTS`，即可顯示綁定中的 5h 或 7d 額度到達 100% 的預估時間。它預設關閉；列在清單中時會把樣本寫入 `~/.claude/coralline/burn-5h.tsv`，移除後停止寫入。`CORALLINE_BURN_WINDOW` 預設為 600 秒。動機與 estimator 契約見 [issue #17](https://github.com/Nanako0129/coralline/issues/17)。
+把 `burn` 加入 `VL_SEGMENTS`，即可顯示綁定中的 5h 或 7d 額度到達 100% 的預估時間。它預設關閉；列在清單中時會把樣本寫入 `~/.claude/coralline/burn-5h.tsv`，移除後停止寫入。`CORALLINE_BURN_WINDOW` 預設為 600 秒。payload 有 7d 視窗卻沒有 5h 視窗時（方案沒有 5h 限制，或 session 閒置超過自己的 5h reset），不論有沒有開 `VL_LIMIT_SYNC` 都不做 5h 預估：burn 改綁 7d，或顯示 idle。動機與 estimator 契約見 [issue #17](https://github.com/Nanako0129/coralline/issues/17)。
 
 ### 跨 session 額度同步（選用）
 

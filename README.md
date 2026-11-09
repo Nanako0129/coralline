@@ -208,7 +208,7 @@ Per-task model and context fields require Claude Code v2.1.205+. On v2.1.211, co
 
 ![The burn segment in a statusline, and each of its states: empties before reset, neck-and-neck, room to spare, never runs dry, idle, and warming up](./assets/burn-segment.png)
 
-Add `burn` to `VL_SEGMENTS` to show the projected time until the binding 5h or 7d limit reaches 100%. It is off by default; while listed, it samples to `~/.claude/coralline/burn-5h.tsv`, and removing it stops writes. `CORALLINE_BURN_WINDOW` defaults to 600 seconds. The motivation and estimator contract are in [issue #17](https://github.com/Nanako0129/coralline/issues/17).
+Add `burn` to `VL_SEGMENTS` to show the projected time until the binding 5h or 7d limit reaches 100%. It is off by default; while listed, it samples to `~/.claude/coralline/burn-5h.tsv`, and removing it stops writes. `CORALLINE_BURN_WINDOW` defaults to 600 seconds. A payload with a 7d window but no 5h one (a plan without a 5h limit, or a session idle past its own 5h reset) gets no 5h projection, with or without `VL_LIMIT_SYNC`: burn binds to 7d, or shows idle. The motivation and estimator contract are in [issue #17](https://github.com/Nanako0129/coralline/issues/17).
 
 ### Cross-session limit sync (optional)
 
