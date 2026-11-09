@@ -260,18 +260,20 @@ eq 'own reading keeps its own reset' "$_STATE_RL5_RST" 1015900
 rl_latest "$_SL5_BASE" "$RL_MAX_5H" 1
 entry_count "$_SL5_ROOT"; eq 'limit mutable GC keeps winner' "$_COUNT" 1
 
-# A drop inside one window is followed, and the store still wins when it holds a
-# newer window than this session has caught up to.
+# A drop inside one window is followed.
 rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001015900_090.000"
 _CUR5_VALID=1; _CUR5_RST=1015900; _CUR5_PCT=5000
 rl_latest "$_SL5_BASE" "$RL_MAX_5H" 0; rl_choose 5
 eq 'pct drop inside one window is followed' "$_STATE_RL5_PCT" 5000
 
-rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001016900_007.000"
-_CUR5_VALID=1; _CUR5_RST=1015900; _CUR5_PCT=90000
+# A newer stored reset while our own is still open is another account's window
+# (relay fallback account or /login switch in one CLAUDE_CONFIG_DIR), never ours:
+# a team-1 window at 61% rendered team-2's 0% this way (2026-11-10).
+rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001016900_000.000"
+_CUR5_VALID=1; _CUR5_RST=1015900; _CUR5_PCT=61000
 rl_latest "$_SL5_BASE" "$RL_MAX_5H" 0; rl_choose 5
-eq 'newer stored window beats an older own reading' "$_STATE_RL5_PCT" 7000
-eq 'newer stored window carries its reset' "$_STATE_RL5_RST" 1016900
+eq 'newer stored window does not beat an own reading' "$_STATE_RL5_PCT" 61000
+eq 'own reading keeps its reset over a newer stored one' "$_STATE_RL5_RST" 1015900
 
 rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001015900_042.000"
 _CUR5_VALID=0; _CUR5_RST=0; _CUR5_PCT=0
@@ -872,9 +874,8 @@ _rowsA=$(awk -F '\t' -v r="$_rA" '$3 == r' "$CASE/state/burn.tsv" 2>/dev/null | 
 _rowsB=$(awk -F '\t' -v r="$_rB" '$3 == r' "$CASE/state/burn.tsv" 2>/dev/null | wc -l | tr -d ' ')
 true_case 'two-window: older-window rows persisted' test "$_rowsA" -ge 2
 true_case 'two-window: newer-window rows persisted' test "$_rowsB" -ge 2
-# Once the newer reset lands, rl_choose makes every session render (and thus
-# republish) that window, so the store legitimately converges on B's entries;
-# the non-suppression proof is that entries exist at all and include B's reset.
+# rl_latest's GC keeps only the latest reset, so the store converges on B's
+# entries; the non-suppression proof is that entries exist and include B's reset.
 entry_count "$CASE/state/limit5.d"; _ENTRIES=$_COUNT
 true_case 'two-window: limit store received entries' test "$_ENTRIES" -ge 1
 _LIM_B=0; for _e in "$CASE/state/limit5.d/${_rB}"_*; do [ -e "$_e" ] && _LIM_B=1; done
@@ -937,9 +938,8 @@ M5T=0
 burn_estimate
 eq 'store-only 5h projection on a closed window is dropped' "$_B5_STATE" warming
 eq 'dropped 5h projection leaves burn warming' "$_BURN_STATE" warming
-# A valid reading of our own does not exempt the projection. rl_choose lets a
-# strictly newer stored window beat it, and the session that published that window
-# need not run burn at all, so the shared history can hold only the older one.
+# The gate reads the synced state alone, whatever rl_choose put there: any stored
+# window other than the projection's drops it.
 _CUR5_VALID=1; _CUR5_RST=$(( NOW + 1000 )); _STATE_RL5_RST=$(( NOW + 1000 ))
 M5T=1000
 burn_estimate
@@ -1079,13 +1079,13 @@ _CUR7_RST=$(( NOW - RL_MAX_7D - 1 )); _CUR7_VALID=0; _STATE_RL7_VALID=0
 seg_limit7d
 eq '7d elapsed past the ceiling renders nothing' "${#SEG_TXT[@]}" 0
 
-# The roll-over catch-up survives: this session holds a valid but older window and
-# the store holds a strictly newer one, which is the case rl_choose lets win.
+# seg_limit5h draws whatever rl_choose put in the synced state, even beside an
+# own reading of another window.
 SEG_BGS=(); SEG_TXT=(); SEG_LEN=()
 fh_pct=41.2; fh_rst=1015900; _CUR5_VALID=1; _CUR5_CANON='041.200'; _CUR5_PCT=41200; _CUR5_RST=1015900
 _STATE_RL5_VALID=1; _STATE_RL5_PCT=7000; _STATE_RL5_RST=1016900
 seg_limit5h
-case "${SEG_TXT[0]}" in (*'5h '*' 7% '*) ok 'roll-over catch-up still renders the newer window' ;; (*) bad 'roll-over catch-up still renders the newer window' "${SEG_TXT[0]}" ;; esac
+case "${SEG_TXT[0]}" in (*'5h '*' 7% '*) ok 'seg draws the synced window' ;; (*) bad 'seg draws the synced window' "${SEG_TXT[0]}" ;; esac
 
 # Default store base follows CLAUDE_CONFIG_DIR (two Claude config dirs must not
 # share one 5h/7d store). Asserted on where a real render puts the files, with no
