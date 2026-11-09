@@ -260,23 +260,39 @@ eq 'own reading keeps its own reset' "$_STATE_RL5_RST" 1015900
 rl_latest "$_SL5_BASE" "$RL_MAX_5H" 1
 entry_count "$_SL5_ROOT"; eq 'limit mutable GC keeps winner' "$_COUNT" 1
 
-# A drop inside one window is followed, and the store still wins when it holds a
-# newer window than this session has caught up to.
+# A drop inside one window is followed.
 rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001015900_090.000"
 _CUR5_VALID=1; _CUR5_RST=1015900; _CUR5_PCT=5000
 rl_latest "$_SL5_BASE" "$RL_MAX_5H" 0; rl_choose 5
 eq 'pct drop inside one window is followed' "$_STATE_RL5_PCT" 5000
 
-rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001016900_007.000"
-_CUR5_VALID=1; _CUR5_RST=1015900; _CUR5_PCT=90000
+# A newer stored reset while our own is still open is another account's window
+# (relay fallback account or /login switch in one CLAUDE_CONFIG_DIR), never ours:
+# a team-1 window at 61% rendered team-2's 0% this way (2026-11-10).
+rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001016900_000.000"
+_CUR5_VALID=1; _CUR5_RST=1015900; _CUR5_PCT=61000
 rl_latest "$_SL5_BASE" "$RL_MAX_5H" 0; rl_choose 5
-eq 'newer stored window beats an older own reading' "$_STATE_RL5_PCT" 7000
-eq 'newer stored window carries its reset' "$_STATE_RL5_RST" 1016900
+eq 'newer stored window does not beat an own reading' "$_STATE_RL5_PCT" 61000
+eq 'own reading keeps its reset over a newer stored one' "$_STATE_RL5_RST" 1015900
 
 rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001015900_042.000"
 _CUR5_VALID=0; _CUR5_RST=0; _CUR5_PCT=0
 rl_latest "$_SL5_BASE" "$RL_MAX_5H" 0; rl_choose 5
 eq 'store is the sole source without an own reading' "$_STATE_RL5_PCT" 42000
+_CUR5_VALID=1; _CUR5_RST=1015900; _CUR5_PCT=15000
+
+# state_gate flags a payload with a live 7d window and no five_hour, and rl_choose
+# then refuses the stored 5h window; one flag, so gauge and burn cannot disagree.
+CASE="$TMPD/no5h-flag"; mkdir -p "$CASE"
+unit_gate "$CASE" 1000000 '' '' 30 1345600 0
+eq 'no five_hour with live 7d sets _CUR5_NONE' "$_CUR5_NONE" 1
+mkdir -p "$_SL5_ROOT/0001015900_042.000"
+rl_latest "$_SL5_BASE" "$RL_MAX_5H" 0; rl_choose 5
+eq 'no-5h payload refuses the stored 5h window' "$_STATE_RL5_VALID" 0
+unit_gate "$CASE" 1000000 '' '' '' '' 0
+eq 'no rate_limits at all leaves _CUR5_NONE clear' "$_CUR5_NONE" 0
+unit_gate "$CASE" 1000000 41.2 1015900 30 1345600 0
+eq 'a five_hour reading leaves _CUR5_NONE clear' "$_CUR5_NONE" 0
 _CUR5_VALID=1; _CUR5_RST=1015900; _CUR5_PCT=15000
 
 rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001015900_041.200"
@@ -503,6 +519,14 @@ run_runtime_cwd "$CASE" "$BASH_BIN" "$CASE/conf" "$CASE/blank" "$CASE/blank.out"
 if LC_ALL=C grep -q '20%' "$CASE/blank.out"; then ok 'no own reading falls back to the store'; else bad 'no own reading falls back to the store' "output=$(LC_ALL=C tr '\n' ' ' < "$CASE/blank.out")"; fi
 if LC_ALL=C grep -q '99%' "$CASE/blank.out"; then bad 'store fallback never shows a malformed entry' "output=$(LC_ALL=C tr '\n' ' ' < "$CASE/blank.out")"; else ok 'store fallback never shows a malformed entry'; fi
 eq 'no own reading keeps stderr empty' "$(file_bytes "$CASE/blank.err")" 0
+# A live 7d reading with no five_hour field means the account has no 5h limit
+# (e.g. Ultra): the stored 5h window must not be borrowed, while 7d still renders.
+make_payload "$CASE/no5h.tmp" '' '' 30 "$_r7"
+jq 'del(.rate_limits.five_hour)' "$CASE/no5h.tmp" > "$CASE/no5h"
+{ cat "$CASE/conf"; printf '%s\n' 'VL_SEGMENTS="limit5h limit7d"'; } > "$CASE/conf57"
+run_runtime_cwd "$CASE" "$BASH_BIN" "$CASE/conf57" "$CASE/no5h" "$CASE/no5h.out" "$CASE/no5h.err" 0
+if LC_ALL=C grep -q '5h ' "$CASE/no5h.out"; then bad 'no five_hour with live 7d skips the stored 5h' "output=$(LC_ALL=C tr '\n' ' ' < "$CASE/no5h.out")"; else ok 'no five_hour with live 7d skips the stored 5h'; fi
+if LC_ALL=C grep -q '7d ' "$CASE/no5h.out"; then ok 'no five_hour still renders 7d'; else bad 'no five_hour still renders 7d' "output=$(LC_ALL=C tr '\n' ' ' < "$CASE/no5h.out")"; fi
 unit_gate "$CASE/state" "$_now" 15 "$_winner" 30 "$_later" 1
 rl_latest "$_SL5_BASE" "$RL_MAX_5H" 0
 eq 'malformed names do not displace canonical winner' "$_LL_PCT" '020.000'
@@ -864,9 +888,8 @@ _rowsA=$(awk -F '\t' -v r="$_rA" '$3 == r' "$CASE/state/burn.tsv" 2>/dev/null | 
 _rowsB=$(awk -F '\t' -v r="$_rB" '$3 == r' "$CASE/state/burn.tsv" 2>/dev/null | wc -l | tr -d ' ')
 true_case 'two-window: older-window rows persisted' test "$_rowsA" -ge 2
 true_case 'two-window: newer-window rows persisted' test "$_rowsB" -ge 2
-# Once the newer reset lands, rl_choose makes every session render (and thus
-# republish) that window, so the store legitimately converges on B's entries;
-# the non-suppression proof is that entries exist at all and include B's reset.
+# rl_latest's GC keeps only the latest reset, so the store converges on B's
+# entries; the non-suppression proof is that entries exist and include B's reset.
 entry_count "$CASE/state/limit5.d"; _ENTRIES=$_COUNT
 true_case 'two-window: limit store received entries' test "$_ENTRIES" -ge 1
 _LIM_B=0; for _e in "$CASE/state/limit5.d/${_rB}"_*; do [ -e "$_e" ] && _LIM_B=1; done
@@ -929,23 +952,42 @@ M5T=0
 burn_estimate
 eq 'store-only 5h projection on a closed window is dropped' "$_B5_STATE" warming
 eq 'dropped 5h projection leaves burn warming' "$_BURN_STATE" warming
-# A valid reading of our own does not exempt the projection. rl_choose lets a
-# strictly newer stored window beat it, and the session that published that window
-# need not run burn at all, so the shared history can hold only the older one.
+# With a valid reading of our own, rl_choose puts our own window in the synced
+# state, so the projection on that window is kept.
 _CUR5_VALID=1; _CUR5_RST=$(( NOW + 1000 )); _STATE_RL5_RST=$(( NOW + 1000 ))
 M5T=1000
 burn_estimate
 eq 'own 5h window matching the store keeps its projection' "$_BURN_STATE" active
-M5T=1000; _STATE_RL5_RST=$(( NOW + 9000 ))
-burn_estimate
-eq 'newer stored window drops a projection still on the older one' "$_B5_STATE" warming
-M5T=9000
-burn_estimate
-eq 'projection rebound to the newer stored window survives' "$_BURN_STATE" active
 _STATE_RL5_VALID=0
 M5T=1000
 burn_estimate
 eq 'no synced state leaves the projection alone' "$_BURN_STATE" active
+# No 5h window (_CUR5_NONE): burn projects no 5h ETA from the history left behind,
+# with sync on or off, binds to 7d when 7d is active, and rests idle rather than
+# warming when 7d is not. The election still runs, so the maintenance-only claim
+# keeps trimming, while a non-leader skips the 5h parse it would discard.
+_CUR5_VALID=0; _CUR5_NONE=1; _CUR7_VALID=1
+for _vls in 1 0; do
+  VL_LIMIT_SYNC=$_vls; M5S=active M5E=1000 M5R=0 M5T=9000 M7E=7200 M7R=0 M7T=86400
+  burn_estimate
+  eq "no-5h account projects no 5h (sync=$_vls)" "$_B5_STATE" idle
+  eq "no-5h account binds burn to 7d (sync=$_vls)" "$_BURN_LABEL" 7d
+  M7E=inf M7R=0 M7T=0
+  burn_estimate
+  eq "no-5h account with idle 7d rests idle (sync=$_vls)" "$_BURN_STATE" idle
+done
+_lead_save=$(declare -f state_burn_lead); _b5_save=$(declare -f burn_eta_5h)
+burn_eta_5h() { _B5_MUT="$1"; mk5h "$M5S" "$M5E" "$M5R" "$M5T"; }
+_B5_MUT=unset; _STATE_MUTATE=0
+burn_estimate
+eq 'no-5h non-leader skips the 5h parse' "$_B5_MUT" unset
+state_burn_lead() { return 0; }
+_B5_MUT=unset; _STATE_MUTATE=1
+burn_estimate
+eq 'no-5h leader still runs the mutating parse' "$_B5_MUT" 1
+eq 'no-5h leader result is still idle' "$_B5_STATE" idle
+_STATE_MUTATE=0; eval "$_lead_save"; eval "$_b5_save"
+_CUR5_NONE=0; _CUR7_VALID=0; M7E=inf M7R=0 M7T=0
 VL_LIMIT_SYNC=$_VLS_SAVE2; _STATE_RL5_VALID=0; _CUR5_VALID=0
 M5S=active M5E=21600 M5R=0 M5T=15000 M7E=7200 M7R=0 M7T=86400
 SEG_BGS=(); SEG_TXT=(); SEG_LEN=(); _BURN_STATE=active; _BURN_LABEL=5h; _BURN_ETA=1000; _BURN_RATE=0; _BURN_TTR=900
@@ -1070,14 +1112,6 @@ wd_pct=30; wd_rst=1; _CUR7_CANON='030.000'; _CUR7_PCT=30000
 _CUR7_RST=$(( NOW - RL_MAX_7D - 1 )); _CUR7_VALID=0; _STATE_RL7_VALID=0
 seg_limit7d
 eq '7d elapsed past the ceiling renders nothing' "${#SEG_TXT[@]}" 0
-
-# The roll-over catch-up survives: this session holds a valid but older window and
-# the store holds a strictly newer one, which is the case rl_choose lets win.
-SEG_BGS=(); SEG_TXT=(); SEG_LEN=()
-fh_pct=41.2; fh_rst=1015900; _CUR5_VALID=1; _CUR5_CANON='041.200'; _CUR5_PCT=41200; _CUR5_RST=1015900
-_STATE_RL5_VALID=1; _STATE_RL5_PCT=7000; _STATE_RL5_RST=1016900
-seg_limit5h
-case "${SEG_TXT[0]}" in (*'5h '*' 7% '*) ok 'roll-over catch-up still renders the newer window' ;; (*) bad 'roll-over catch-up still renders the newer window' "${SEG_TXT[0]}" ;; esac
 
 # Default store base follows CLAUDE_CONFIG_DIR (two Claude config dirs must not
 # share one 5h/7d store). Asserted on where a real render puts the files, with no

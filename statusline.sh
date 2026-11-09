@@ -680,7 +680,7 @@ state_gate() {  # canonicalize one render's values and state namespaces
   # CORALLINE_BURN_WINDOW / BURN_TRIM / BURN_SLACK are validated once, right
   # after the config loads (see knob_bounded above), not here.
 
-  _CUR5_VALID=0; _CUR7_VALID=0; _CUR_BURN_VALID=0
+  _CUR5_VALID=0; _CUR7_VALID=0; _CUR_BURN_VALID=0; _CUR5_NONE=0
   _CUR5_PCT=0; _CUR5_CANON=""; _CUR5_TSV=""; _CUR5_RST=0
   _CUR7_PCT=0; _CUR7_CANON=""; _CUR7_TSV=""; _CUR7_RST=0
   _CUR_BURN_SAMP=0; _CUR_BURN_PCT=0; _CUR_BURN_TSV=""; _CUR_BURN_RST=0
@@ -700,6 +700,10 @@ state_gate() {  # canonicalize one render's values and state namespaces
       [ "$_CUR7_RST" -gt "$NOW" ] && [ "$_CUR7_RST" -le $(( NOW + RL_MAX_7D )) ] && _CUR7_VALID=1
     fi
   fi
+  # A live 7d window with an empty five_hour reading: no 5h window (see rl_choose).
+  # Claude Code's builder emits five_hour only for a live window, always numeric. The
+  # gauge (rl_choose) and the projection (burn_estimate) both read this one flag.
+  [ -z "${fh_pct:-}" ] && [ "$_CUR7_VALID" = 1 ] && _CUR5_NONE=1
   if [ "$_CUR5_VALID" = 1 ] && state_epoch "$NOW" 12; then
     _CUR_BURN_SAMP=$_SE_VALUE; _CUR_BURN_RST=$_CUR5_RST
     _CUR_BURN_PCT=$_CUR5_PCT; _CUR_BURN_TSV=$_CUR5_TSV; _CUR_BURN_VALID=1
@@ -966,14 +970,34 @@ rl_latest() {  # $1=canonical base $2=max secs ahead $3=mutate → _LL_*
 # Nothing in the payload timestamps an observation, so a stale high reading is
 # indistinguishable from a current one and cannot be aged out; the only reliable
 # evidence for this session's own window is this session's own snapshot.
-# The store keeps its purpose where it still has better information: it wins when
-# it holds a NEWER reset (another session already rolled into the next window),
-# and it is the sole source whenever this session has no valid reading at all.
-rl_choose() {  # $1=5|7; this session's window beats the store; a newer stored window beats it
+# The store is the sole source only when this session has no valid reading at all.
+# It used to win with a NEWER reset too, on the theory that another session had
+# already rolled into the next window. One account cannot do that while this
+# session's own reset is still ahead (windows do not overlap; a roll-over makes the
+# own reading invalid first), so a newer stored reset almost always meant ANOTHER
+# account: windows of one CLAUDE_CONFIG_DIR served by a relay's fallback account,
+# or a /login switch. Measured 2026-11-10: a team-1 window whose payload said 5h 61%
+# / 7d 10% rendered 0% / 0%, the team-2 windows another session had stored with
+# later resets. Cost: after an upstream early reset, an idle session keeps its
+# pre-reset reading until its next response or its old reset passes.
+rl_choose() {  # $1=5|7; this session's valid reading wins; the store fills in only without one
   local which="$1" valid="$_LL_VALID" rst="${_LL_RST:-0}" pct="$_LL_PCT_MILLI" crst cpct cvalid
   if [ "$which" = 5 ]; then cvalid=$_CUR5_VALID; crst=$_CUR5_RST; cpct=$_CUR5_PCT
   else cvalid=$_CUR7_VALID; crst=$_CUR7_RST; cpct=$_CUR7_PCT; fi
-  if [ "$cvalid" = 1 ] && { [ "$valid" = 0 ] || [ "$crst" -ge "$rst" ]; }; then
+  # A payload that carries a live 7d window but no five_hour has already received
+  # an API response, so it is not a session waiting for its first one: the account
+  # has no 5h window (reported 2026-11 for the Ultra plan; on this host every
+  # session stopped writing 5h readings at once). Borrowing the store's 5h entry,
+  # written while the account still had one, kept a stale gauge on screen until
+  # that entry's reset passed, up to five hours later. Mixed accounts in one config
+  # dir make it persistent: another account keeps re-publishing a live 5h window.
+  # Claude Code drops a window from the payload once its reset passes (Qt/Ve in the
+  # 2.1.319 builder), so a session idle past its own 5h reset looks the same and
+  # shows no 5h gauge until its next response, as before #64; accepted, since
+  # that session cannot tell the store's window is its own account's.
+  # The test is _CUR5_NONE (state_gate), which burn_estimate reads too.
+  [ "$which" = 5 ] && [ "${_CUR5_NONE:-0}" = 1 ] && valid=0
+  if [ "$cvalid" = 1 ]; then
     valid=1; rst=$crst; pct=$cpct
   fi
   if [ "$which" = 5 ]; then _STATE_RL5_VALID=$valid; _STATE_RL5_RST=$rst; _STATE_RL5_PCT=$pct
@@ -1281,21 +1305,31 @@ burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
     burn_est_publish
   elif [ "${_BURN_LOST:-0}" = 1 ] && [ "${_CUR_BURN_VALID:-0}" = 1 ] && burn_est_adopt; then
     :
+  elif [ "${_CUR5_NONE:-0}" = 1 ]; then
+    :  # the 5h result is overridden below; skip the read-only parse and its fork
   else
     burn_eta_5h 0
   fi
   # The 5h projection needs the same rebinding the 7d one gets: whenever the synced
   # state is what the gauge draws, the ETA has to be projected from that same window.
-  # Two ways they diverge. With no reading of our own the history can still sit on
-  # the window that just closed, since an expired reset stays plausible to the reader
-  # and its TTR clamps to zero. With a valid reading of our own that rl_choose lets a
-  # NEWER stored window beat, the history holds only our older window, and the
-  # session that published the newer one need not have burn enabled to contribute
-  # samples for it. Both put an active ETA for one window beside a gauge for another,
-  # so gate on the stored state alone, not on whether we have a reading. burn_eta_5h
+  # With no reading of our own the history can still sit on the window that just
+  # closed, since an expired reset stays plausible to the reader and its TTR clamps
+  # to zero, and the session that published the stored window need not have burn
+  # enabled to contribute samples for it. That puts an active ETA for one window
+  # beside a gauge for another, so gate on the stored state alone. burn_eta_5h
   # reports the window it used as NOW + _B5_TTR; falling back to warming when it does
   # not match is honest, no samples for that window have been observed yet.
-  if [ "$VL_LIMIT_SYNC" = 1 ] && [ "${_STATE_RL5_VALID:-0}" = 1 ] \
+  # A payload with no 5h window (_CUR5_NONE) gets no 5h projection, with sync on or
+  # off: the shared history still holds the window recorded before, or another
+  # account's. The election above still runs, so this session keeps doing the
+  # maintenance-only claim (trim, heal, sweep); it never publishes, since that
+  # needs _CUR_BURN_VALID. idle, not warming: for a plan without a 5h limit nothing
+  # is pending, and warming would leave burn on "unknown" for good whenever 7d is
+  # not projecting. The cost is a session idle past its own 5h reset (the payload
+  # drops the expired window) resting on 7d alone, as its hidden gauge does.
+  if [ "${_CUR5_NONE:-0}" = 1 ]; then
+    _B5_STATE=idle; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0
+  elif [ "$VL_LIMIT_SYNC" = 1 ] && [ "${_STATE_RL5_VALID:-0}" = 1 ] \
      && [ $(( NOW + _B5_TTR )) -ne "${_STATE_RL5_RST:-0}" ]; then
     _B5_STATE=warming; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0
   fi
@@ -1922,8 +1956,8 @@ limit_elapsed_ok() {  # $1=canonical pct $2=parsed reset $3=max elapsed age; set
   [ "$2" -gt 0 ] && [ "$2" -le "$NOW" ] && [ $(( NOW - $2 )) -le "$3" ] && _SLE_OK=1
   return 0
 }
-# Ownership is decided once, in rl_choose: this session's own reading always wins
-# its own window, and the store wins only with a strictly newer reset. Requiring
+# Ownership is decided once, in rl_choose: this session's own valid reading always
+# wins, and the store fills in only when there is none. Requiring
 # _CUR*_VALID again HERE did not add protection, it removed the store's documented
 # last job — "the sole source whenever this session has no valid reading at all".
 # The payload carries rate_limits only once the session has received an API
