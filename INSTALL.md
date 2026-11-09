@@ -263,6 +263,8 @@ Ask concise questions. If the user says "you decide", choose the defaults.
    (that is usually another account's); the store is the source a session falls back
    to when it has no reading of its own, which is every session before its first API
    response of the run, so the gauge shows the account's open window instead of nothing.
+   Exception: a payload with 7d but no 5h (no 5h limit on the plan, or idle past the 5h
+   reset) leaves `limit5h` blank with or without sync.
 6. **Subagent panel rows** (optional, needs Claude Code v2.1.205+ for the per-task
    model/context fields): offer to theme only the subagent rows below the prompt — the
    native main-session row remains visible. On Bash-capable installs, if the user says yes, run

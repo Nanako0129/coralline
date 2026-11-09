@@ -212,7 +212,7 @@ Bash install-only 與一般更新不會自行新增或刪除 `subagentStatusLine
 
 ### 跨 session 額度同步（選用）
 
-設定 `VL_LIMIT_SYNC=1`，讓會重繪的 session 透過 `limit-5h.d` 與 `limit-7d.d` 共用帳號仍開放的 5h 與 7d 視窗。session 自己的有效讀數永遠優先；只有 session 完全沒有讀數時，才使用仍開放的 stored window。即使 stored window 比較新也不會蓋過有效讀數，因為 store 不帶帳號身分：同一個設定目錄裡，較新的視窗通常屬於另一個帳號（`/login` 切換，或 relay 的 fallback 帳號）。它預設關閉、沒有 API 存取，也無法刷新完全閒置的 session。store 位於 `~/.claude/coralline`；若有設定 `CLAUDE_CONFIG_DIR`，則改為 `$CLAUDE_CONFIG_DIR/coralline`，burn 樣本與 float 檔案同理，因此兩個 Claude 設定目錄各自保有獨立狀態，不會互相覆蓋視窗。原始 redraw-only 契約見 [PR #24](https://github.com/Nanako0129/coralline/pull/24)，無讀數 fallback 見 [PR #64](https://github.com/Nanako0129/coralline/pull/64)。
+設定 `VL_LIMIT_SYNC=1`，讓會重繪的 session 透過 `limit-5h.d` 與 `limit-7d.d` 共用帳號仍開放的 5h 與 7d 視窗。session 自己的有效讀數永遠優先；只有 session 完全沒有讀數時，才使用仍開放的 stored window。即使 stored window 比較新也不會蓋過有效讀數，因為 store 不帶帳號身分：同一個設定目錄裡，較新的視窗通常屬於另一個帳號（`/login` 切換，或 relay 的 fallback 帳號）。payload 有 7d 視窗卻沒有 5h 視窗時，永遠不借用 stored 5h window，也不做 5h burn 預估：這代表帳號沒有 5h 限制，或 session 閒置超過自己的 5h reset（Claude Code 會丟掉已過期的視窗），而 store 無法分辨它的視窗屬於哪個帳號。它預設關閉、沒有 API 存取，也無法刷新完全閒置的 session。store 位於 `~/.claude/coralline`；若有設定 `CLAUDE_CONFIG_DIR`，則改為 `$CLAUDE_CONFIG_DIR/coralline`，burn 樣本與 float 檔案同理，因此兩個 Claude 設定目錄各自保有獨立狀態，不會互相覆蓋視窗。原始 redraw-only 契約見 [PR #24](https://github.com/Nanako0129/coralline/pull/24)，無讀數 fallback 見 [PR #64](https://github.com/Nanako0129/coralline/pull/64)。
 
 ### Float readout（選用）
 

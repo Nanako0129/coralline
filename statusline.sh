@@ -991,10 +991,8 @@ rl_choose() {  # $1=5|7; this session's valid reading wins; the store fills in o
   # 2.1.319 builder), so a session idle past its own 5h reset looks the same and
   # shows no 5h gauge until its next response, as before #64; accepted, since
   # that session cannot tell the store's window is its own account's.
-  # _RL5_NONE tells burn_estimate to drop its 5h projection too.
-  if [ "$which" = 5 ] && [ -z "${fh_pct:-}" ] && [ "${_CUR7_VALID:-0}" = 1 ]; then
-    valid=0; _RL5_NONE=1
-  fi
+  # burn_estimate applies the same test to its 5h projection.
+  [ "$which" = 5 ] && [ -z "${fh_pct:-}" ] && [ "${_CUR7_VALID:-0}" = 1 ] && valid=0
   if [ "$cvalid" = 1 ]; then
     valid=1; rst=$crst; pct=$cpct
   fi
@@ -1297,8 +1295,14 @@ burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
   # the append: a claim winner runs the full parse (and publishes its result);
   # a session that lost to a covering claim adopts the published estimate
   # when it validates, and everything else takes the plain read-only parse.
-  [ "${_STATE_MUTATE:-0}" = 1 ] && state_burn_lead && m=1
-  if [ "$m" = 1 ]; then
+  # A payload with a live 7d window but no five_hour (see rl_choose) means no 5h
+  # window: the shared history still holds the one recorded before, or another
+  # account's, so project nothing for 5h and neither lead nor publish an estimate
+  # adopters would take. idle, not warming: nothing for 5h is pending, so burn
+  # rests on 7d alone. Applies with sync on or off, since the history is shared.
+  if [ -z "${fh_pct:-}" ] && [ "${_CUR7_VALID:-0}" = 1 ]; then
+    _B5_STATE=idle; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0
+  elif [ "${_STATE_MUTATE:-0}" = 1 ] && state_burn_lead && m=1; then
     burn_eta_5h 1
     burn_est_publish
   elif [ "${_BURN_LOST:-0}" = 1 ] && [ "${_CUR_BURN_VALID:-0}" = 1 ] && burn_est_adopt; then
@@ -1315,11 +1319,8 @@ burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
   # beside a gauge for another, so gate on the stored state alone. burn_eta_5h
   # reports the window it used as NOW + _B5_TTR; falling back to warming when it does
   # not match is honest, no samples for that window have been observed yet.
-  # An account rl_choose judged to have no 5h window gets no 5h projection either:
-  # the shared history still holds the window recorded before, and a 5h ETA beside
-  # a hidden 5h gauge would describe a limit the account no longer has.
-  if [ "$VL_LIMIT_SYNC" = 1 ] && { [ "${_RL5_NONE:-0}" = 1 ] || { [ "${_STATE_RL5_VALID:-0}" = 1 ] \
-     && [ $(( NOW + _B5_TTR )) -ne "${_STATE_RL5_RST:-0}" ]; }; }; then
+  if [ "$VL_LIMIT_SYNC" = 1 ] && [ "${_STATE_RL5_VALID:-0}" = 1 ] \
+     && [ $(( NOW + _B5_TTR )) -ne "${_STATE_RL5_RST:-0}" ]; then
     _B5_STATE=warming; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0
   fi
   # The ownership rule covers the projection too, not just the gauge, and it has

@@ -948,15 +948,20 @@ _STATE_RL5_VALID=0
 M5T=1000
 burn_estimate
 eq 'no synced state leaves the projection alone' "$_BURN_STATE" active
-# An account with no 5h window (rl_choose set _RL5_NONE) projects no 5h ETA from
-# the history it left behind; burn falls through to 7d when 7d is active.
-_CUR5_VALID=0; _RL5_NONE=1
-burn_estimate
-eq 'no-5h account drops the 5h projection' "$_B5_STATE" warming
-M7E=7200 M7R=0 M7T=86400
-burn_estimate
-eq 'no-5h account binds burn to 7d' "$_BURN_LABEL" 7d
-M7E=inf M7R=0 M7T=0; _RL5_NONE=
+# A live 7d reading with no five_hour means no 5h window: burn projects no 5h ETA
+# from the history left behind (with sync on or off), binds to 7d when 7d is
+# active, and rests idle rather than warming when 7d is not.
+_fh_save=$fh_pct; fh_pct=''; _CUR5_VALID=0; _CUR7_VALID=1
+for _vls in 1 0; do
+  VL_LIMIT_SYNC=$_vls; M5S=active M5E=1000 M5R=0 M5T=9000 M7E=7200 M7R=0 M7T=86400
+  burn_estimate
+  eq "no-5h account projects no 5h (sync=$_vls)" "$_B5_STATE" idle
+  eq "no-5h account binds burn to 7d (sync=$_vls)" "$_BURN_LABEL" 7d
+  M7E=inf M7R=0 M7T=0
+  burn_estimate
+  eq "no-5h account with idle 7d rests idle (sync=$_vls)" "$_BURN_STATE" idle
+done
+fh_pct=$_fh_save; _CUR7_VALID=0; M7E=inf M7R=0 M7T=0
 VL_LIMIT_SYNC=$_VLS_SAVE2; _STATE_RL5_VALID=0; _CUR5_VALID=0
 M5S=active M5E=21600 M5R=0 M5T=15000 M7E=7200 M7R=0 M7T=86400
 SEG_BGS=(); SEG_TXT=(); SEG_LEN=(); _BURN_STATE=active; _BURN_LABEL=5h; _BURN_ETA=1000; _BURN_RATE=0; _BURN_TTR=900
