@@ -281,6 +281,20 @@ rl_latest "$_SL5_BASE" "$RL_MAX_5H" 0; rl_choose 5
 eq 'store is the sole source without an own reading' "$_STATE_RL5_PCT" 42000
 _CUR5_VALID=1; _CUR5_RST=1015900; _CUR5_PCT=15000
 
+# state_gate flags a payload with a live 7d window and no five_hour, and rl_choose
+# then refuses the stored 5h window; one flag, so gauge and burn cannot disagree.
+CASE="$TMPD/no5h-flag"; mkdir -p "$CASE"
+unit_gate "$CASE" 1000000 '' '' 30 1345600 0
+eq 'no five_hour with live 7d sets _CUR5_NONE' "$_CUR5_NONE" 1
+mkdir -p "$_SL5_ROOT/0001015900_042.000"
+rl_latest "$_SL5_BASE" "$RL_MAX_5H" 0; rl_choose 5
+eq 'no-5h payload refuses the stored 5h window' "$_STATE_RL5_VALID" 0
+unit_gate "$CASE" 1000000 '' '' '' '' 0
+eq 'no rate_limits at all leaves _CUR5_NONE clear' "$_CUR5_NONE" 0
+unit_gate "$CASE" 1000000 41.2 1015900 30 1345600 0
+eq 'a five_hour reading leaves _CUR5_NONE clear' "$_CUR5_NONE" 0
+_CUR5_VALID=1; _CUR5_RST=1015900; _CUR5_PCT=15000
+
 rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001015900_041.200"
 rl_latest "$_SL5_BASE" "$RL_MAX_5H" 0; eq 'limit fractional pct preserved' "$_LL_PCT" '041.200'
 
@@ -948,10 +962,11 @@ _STATE_RL5_VALID=0
 M5T=1000
 burn_estimate
 eq 'no synced state leaves the projection alone' "$_BURN_STATE" active
-# A live 7d reading with no five_hour means no 5h window: burn projects no 5h ETA
-# from the history left behind (with sync on or off), binds to 7d when 7d is
-# active, and rests idle rather than warming when 7d is not.
-_fh_save=$fh_pct; fh_pct=''; _CUR5_VALID=0; _CUR7_VALID=1
+# No 5h window (_CUR5_NONE): burn projects no 5h ETA from the history left behind,
+# with sync on or off, binds to 7d when 7d is active, and rests idle rather than
+# warming when 7d is not. A stale synced 5h state must not turn it back to warming,
+# and the election still runs so the maintenance-only claim keeps trimming.
+_CUR5_VALID=0; _CUR5_NONE=1; _CUR7_VALID=1
 for _vls in 1 0; do
   VL_LIMIT_SYNC=$_vls; M5S=active M5E=1000 M5R=0 M5T=9000 M7E=7200 M7R=0 M7T=86400
   burn_estimate
@@ -961,7 +976,20 @@ for _vls in 1 0; do
   burn_estimate
   eq "no-5h account with idle 7d rests idle (sync=$_vls)" "$_BURN_STATE" idle
 done
-fh_pct=$_fh_save; _CUR7_VALID=0; M7E=inf M7R=0 M7T=0
+VL_LIMIT_SYNC=1; _STATE_RL5_VALID=1; _STATE_RL5_RST=$(( NOW + 9000 ))
+burn_estimate
+eq 'no-5h idle survives a stale synced 5h state' "$_BURN_STATE" idle
+_STATE_RL5_VALID=0
+_lead_save=$(declare -f state_burn_lead)
+state_burn_lead() { return 0; }
+burn_eta_5h() { _B5_MUT="$1"; mk5h "$M5S" "$M5E" "$M5R" "$M5T"; }
+_B5_MUT=unset; _STATE_MUTATE=1
+burn_estimate
+eq 'no-5h leader still runs the mutating parse' "$_B5_MUT" 1
+eq 'no-5h leader result is still idle' "$_B5_STATE" idle
+_STATE_MUTATE=0; eval "$_lead_save"
+burn_eta_5h() { mk5h "$M5S" "$M5E" "$M5R" "$M5T"; }
+_CUR5_NONE=0; _CUR7_VALID=0; M7E=inf M7R=0 M7T=0
 VL_LIMIT_SYNC=$_VLS_SAVE2; _STATE_RL5_VALID=0; _CUR5_VALID=0
 M5S=active M5E=21600 M5R=0 M5T=15000 M7E=7200 M7R=0 M7T=86400
 SEG_BGS=(); SEG_TXT=(); SEG_LEN=(); _BURN_STATE=active; _BURN_LABEL=5h; _BURN_ETA=1000; _BURN_RATE=0; _BURN_TTR=900

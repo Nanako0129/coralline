@@ -680,7 +680,7 @@ state_gate() {  # canonicalize one render's values and state namespaces
   # CORALLINE_BURN_WINDOW / BURN_TRIM / BURN_SLACK are validated once, right
   # after the config loads (see knob_bounded above), not here.
 
-  _CUR5_VALID=0; _CUR7_VALID=0; _CUR_BURN_VALID=0
+  _CUR5_VALID=0; _CUR7_VALID=0; _CUR_BURN_VALID=0; _CUR5_NONE=0
   _CUR5_PCT=0; _CUR5_CANON=""; _CUR5_TSV=""; _CUR5_RST=0
   _CUR7_PCT=0; _CUR7_CANON=""; _CUR7_TSV=""; _CUR7_RST=0
   _CUR_BURN_SAMP=0; _CUR_BURN_PCT=0; _CUR_BURN_TSV=""; _CUR_BURN_RST=0
@@ -700,6 +700,9 @@ state_gate() {  # canonicalize one render's values and state namespaces
       [ "$_CUR7_RST" -gt "$NOW" ] && [ "$_CUR7_RST" -le $(( NOW + RL_MAX_7D )) ] && _CUR7_VALID=1
     fi
   fi
+  # A live 7d window with no five_hour field: no 5h window (see rl_choose). The
+  # gauge (rl_choose) and the projection (burn_estimate) both read this one flag.
+  [ -z "${fh_pct:-}" ] && [ "$_CUR7_VALID" = 1 ] && _CUR5_NONE=1
   if [ "$_CUR5_VALID" = 1 ] && state_epoch "$NOW" 12; then
     _CUR_BURN_SAMP=$_SE_VALUE; _CUR_BURN_RST=$_CUR5_RST
     _CUR_BURN_PCT=$_CUR5_PCT; _CUR_BURN_TSV=$_CUR5_TSV; _CUR_BURN_VALID=1
@@ -991,8 +994,8 @@ rl_choose() {  # $1=5|7; this session's valid reading wins; the store fills in o
   # 2.1.319 builder), so a session idle past its own 5h reset looks the same and
   # shows no 5h gauge until its next response, as before #64; accepted, since
   # that session cannot tell the store's window is its own account's.
-  # burn_estimate applies the same test to its 5h projection.
-  [ "$which" = 5 ] && [ -z "${fh_pct:-}" ] && [ "${_CUR7_VALID:-0}" = 1 ] && valid=0
+  # The test is _CUR5_NONE (state_gate), which burn_estimate reads too.
+  [ "$which" = 5 ] && [ "${_CUR5_NONE:-0}" = 1 ] && valid=0
   if [ "$cvalid" = 1 ]; then
     valid=1; rst=$crst; pct=$cpct
   fi
@@ -1295,14 +1298,8 @@ burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
   # the append: a claim winner runs the full parse (and publishes its result);
   # a session that lost to a covering claim adopts the published estimate
   # when it validates, and everything else takes the plain read-only parse.
-  # A payload with a live 7d window but no five_hour (see rl_choose) means no 5h
-  # window: the shared history still holds the one recorded before, or another
-  # account's, so project nothing for 5h and neither lead nor publish an estimate
-  # adopters would take. idle, not warming: nothing for 5h is pending, so burn
-  # rests on 7d alone. Applies with sync on or off, since the history is shared.
-  if [ -z "${fh_pct:-}" ] && [ "${_CUR7_VALID:-0}" = 1 ]; then
-    _B5_STATE=idle; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0
-  elif [ "${_STATE_MUTATE:-0}" = 1 ] && state_burn_lead && m=1; then
+  [ "${_STATE_MUTATE:-0}" = 1 ] && state_burn_lead && m=1
+  if [ "$m" = 1 ]; then
     burn_eta_5h 1
     burn_est_publish
   elif [ "${_BURN_LOST:-0}" = 1 ] && [ "${_CUR_BURN_VALID:-0}" = 1 ] && burn_est_adopt; then
@@ -1319,7 +1316,17 @@ burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
   # beside a gauge for another, so gate on the stored state alone. burn_eta_5h
   # reports the window it used as NOW + _B5_TTR; falling back to warming when it does
   # not match is honest, no samples for that window have been observed yet.
-  if [ "$VL_LIMIT_SYNC" = 1 ] && [ "${_STATE_RL5_VALID:-0}" = 1 ] \
+  # A payload with no 5h window (_CUR5_NONE) gets no 5h projection, with sync on or
+  # off: the shared history still holds the window recorded before, or another
+  # account's. The election above still runs, so this session keeps doing the
+  # maintenance-only claim (trim, heal, sweep); it never publishes, since that
+  # needs _CUR_BURN_VALID. idle, not warming: for a plan without a 5h limit nothing
+  # is pending, and warming would leave burn on "unknown" for good whenever 7d is
+  # not projecting. The cost is a session idle past its own 5h reset (the payload
+  # drops the expired window) resting on 7d alone, as its hidden gauge does.
+  if [ "${_CUR5_NONE:-0}" = 1 ]; then
+    _B5_STATE=idle; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0
+  elif [ "$VL_LIMIT_SYNC" = 1 ] && [ "${_STATE_RL5_VALID:-0}" = 1 ] \
      && [ $(( NOW + _B5_TTR )) -ne "${_STATE_RL5_RST:-0}" ]; then
     _B5_STATE=warming; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0
   fi
