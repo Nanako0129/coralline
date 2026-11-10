@@ -2189,19 +2189,27 @@ function Get-CurrentLimit([string]$RawPct, [string]$RawReset, [long]$NowValue, [
     return $none
 }
 
-# This session's own reading wins its own window; the store wins only when it holds
-# a newer one. Preferring the stored maximum for the same reset assumed usage inside
-# a window only rises, which breaks whenever the percentage legitimately drops while
-# resets_at stays put (upstream limit reset, plan upgrade, server-side adjustment):
-# the recorded maximum then became unbeatable for the rest of the window. Nothing in
-# the payload timestamps an observation, so a stale high reading cannot be aged out.
+# This session's valid reading always wins; the store fills in only without one
+# (statusline.sh rl_choose). Preferring the stored maximum for the same reset assumed
+# usage inside a window only rises, which breaks whenever the percentage legitimately
+# drops while resets_at stays put (upstream limit reset, plan upgrade, server-side
+# adjustment). Letting a NEWER stored reset win assumed another session had rolled
+# into the account's next window, but one account cannot do that while this
+# session's own reset is still ahead, and a roll-over first makes the own reading
+# invalid. A newer stored reset therefore came from another account writing the
+# same config directory (a /login switch, a model-relay fallback account): measured
+# 2026-11-10, a team-1 window at 5h 61% / 7d 10% rendered team-2's stored 0% / 0%.
+# The store carries no account identity, so it cannot be trusted over the payload.
+# Get-CorallineState hands the 5h call a retention with no winner when the account
+# reports no 5h window at all ($noFive).
 function Select-LimitResult($Snapshot, $Retention, $Current) {
     $valid = $false
     $reset = 0L
     $pct = 0
-    if ($Snapshot.Complete -and $null -ne $Retention.Winner) { $valid=$true; $reset=[long]$Retention.Winner.Reset; $pct=[int]$Retention.Winner.Pct }
-    if ($Current.Valid -and (-not $valid -or $Current.Reset -ge $reset)) {
+    if ($Current.Valid) {
         $valid=$true; $reset=[long]$Current.Reset; $pct=[int]$Current.Pct
+    } elseif ($Snapshot.Complete -and $null -ne $Retention.Winner) {
+        $valid=$true; $reset=[long]$Retention.Winner.Reset; $pct=[int]$Retention.Winner.Pct
     }
     return [pscustomobject]@{ Valid=$valid; Reset=$reset; Pct=$pct }
 }
@@ -2299,6 +2307,13 @@ function Get-CorallineState([bool]$BurnGate, [bool]$Limit5Gate, [bool]$Limit7Gat
     $slack = Get-BoundedInt $Cfg.BURN_SLACK 500 0 1000 4
     $current5 = Get-CurrentLimit $fhPct $fhRst $Now 21600L
     $current7 = Get-CurrentLimit $wdPct $wdRst $Now 691200L
+    # A live 7d window with an empty five_hour reading: the account has no 5h window
+    # (statusline.sh state_gate, _CUR5_NONE). Claude Code's builder emits five_hour
+    # only for a live window. The gauge (Select-LimitResult) and the projection
+    # (below) both read this one flag. A session idle past its own 5h reset arrives
+    # the same way and shows no 5h gauge until its next response, rather than a
+    # stored window it cannot attribute to its own account.
+    $noFive = [string]::IsNullOrEmpty([string]$fhPct) -and $current7.Valid
     $currentBurn = [pscustomobject]@{ Valid=$false; Reset=0L; Sample=$Now; Pct=0 }
     if ($current5.Valid -and $current5.Reset -ge $Now) { $currentBurn = [pscustomobject]@{ Valid=$true; Reset=[long]$current5.Reset; Sample=$Now; Pct=[int]$current5.Pct } }
 
@@ -2399,26 +2414,36 @@ function Get-CorallineState([bool]$BurnGate, [bool]$Limit5Gate, [bool]$Limit7Gat
     if ($limit5Snapshot.Complete) { $limit5Gc = Remove-StateCandidates $limit5Paths.Root $limit5Retention.Candidates 21600L $mutate }
     if ($limit7Snapshot.Complete) { $limit7Gc = Remove-StateCandidates $limit7Paths.Root $limit7Retention.Candidates 691200L $mutate }
 
-    $limit5 = Select-LimitResult $limit5Snapshot $limit5Retention $current5
+    # No 5h window: refuse the stored 5h entry. GC and Publish below still get the
+    # real snapshot and retention, so store maintenance is unchanged.
+    $limit5Pick = $limit5Retention
+    if ($noFive) { $limit5Pick = [pscustomobject]@{ Candidates=@(); Winner=$null } }
+    $limit5 = Select-LimitResult $limit5Snapshot $limit5Pick $current5
     $limit7 = Select-LimitResult $limit7Snapshot $limit7Retention $current7
     if ($Limit5Gate -and $limit5Snapshot.Complete) { [void](Publish-LimitState $limit5Paths.Root $current5 $limit5Snapshot $limit5Gc 21600L $mutate) }
     if ($Limit7Gate -and $limit7Snapshot.Complete) { [void](Publish-LimitState $limit7Paths.Root $current7 $limit7Snapshot $limit7Gc 691200L $mutate) }
 
-    $five = Get-Burn5Estimate $burnSnapshot $currentBurn $Now $window
-    # The 5h projection needs the same rebinding the 7d one gets: whenever the synced
-    # state is what the gauge draws, the ETA has to come from that same window. Two
-    # ways they diverge. With no reading of our own the history can still be on the
-    # window that just closed, since an expired reset stays plausible to the reader
-    # and its Ttr clamps to zero. With a valid reading of our own that a NEWER stored
-    # window beats, the history holds only our older window, and the session that
-    # published the newer one need not have burn enabled to contribute samples for
-    # it. Both put an active ETA for one window beside a gauge for another, so gate
-    # on the stored state alone, not on whether we have a reading. The estimate
-    # reports its window as Now + Ttr; warming when it does not match is honest, no
-    # samples for that window have been observed yet.
-    if ($Cfg.VL_LIMIT_SYNC -eq '1' -and $limit5.Valid -and
-        ($Now + [long]$five.Ttr) -ne [long]$limit5.Reset) {
-        $five = [pscustomobject]@{ State='warming'; Eta='inf'; Rate='0.0000000000'; Ttr=0L }
+    # No 5h window, no 5h projection, with sync on or off: the burn history is shared
+    # by every session in the config directory, so another account's 5h samples would
+    # otherwise project a window this account does not have. Idle rather than
+    # warming, since no samples will ever arrive for it; burn then binds to 7d when
+    # that one is active. The store is still read above, so its trim still runs.
+    if ($noFive) {
+        $five = [pscustomobject]@{ State='idle'; Eta='inf'; Rate='0.0000000000'; Ttr=0L }
+    } else {
+        $five = Get-Burn5Estimate $burnSnapshot $currentBurn $Now $window
+        # The 5h projection needs the same rebinding the 7d one gets: whenever the
+        # synced state is what the gauge draws, the ETA has to come from that same
+        # window. With no reading of our own the history can still be on the window
+        # that just closed, since an expired reset stays plausible to the reader and
+        # its Ttr clamps to zero. That puts an active ETA for one window beside a
+        # gauge for another. The estimate reports its window as Now + Ttr; warming
+        # when it does not match is honest, no samples for that window have been
+        # observed yet.
+        if ($Cfg.VL_LIMIT_SYNC -eq '1' -and $limit5.Valid -and
+            ($Now + [long]$five.Ttr) -ne [long]$limit5.Reset) {
+            $five = [pscustomobject]@{ State='warming'; Eta='inf'; Rate='0.0000000000'; Ttr=0L }
+        }
     }
     # The ownership rule covers the projection as well, and it has to be the SAME
     # rule: burn can bind to the 7d window, so any source Add-Limit7Segment is
@@ -3485,8 +3510,8 @@ function Add-LimitSegment([string]$Label, [string]$RawPct, [string]$ResetsAt, [s
 # the pct and the reset to have passed validation and the reset to have actually
 # passed, so neither an unvalidated pct nor an unobserved window reaches the bar.
 # Format-Countdown reports an elapsed reset as "now".
-# Ownership is decided once, in Select-LimitResult: this session's own reading wins
-# its own window and the store wins only with a strictly newer reset. Requiring
+# Ownership is decided once, in Select-LimitResult: this session's own valid reading
+# always wins and the store fills in only when there is none. Requiring
 # Current*.Valid again here added no protection and removed the store's last job,
 # being the sole source when this session has no reading at all. The payload carries
 # rate_limits only after the session has received an API response, so a freshly
@@ -3496,7 +3521,10 @@ function Add-LimitSegment([string]$Label, [string]$RawPct, [string]$ResetsAt, [s
 # garbage-collected, so no fossil is inherited. What is borrowed is the highest
 # percentage any session recorded for the CURRENT window, an over-estimate when
 # sessions disagree, which is the accepted cost of showing the account's window
-# instead of nothing. Same rule for both windows.
+# instead of nothing. Same rule for both windows. One limit stands: the store has
+# no account identity, so with several accounts in one config directory a session
+# without a reading can briefly show another account's window until its first
+# response; and an account with no 5h window ($noFive) never borrows a 5h entry.
 function Add-Limit5Segment {
     if ($Cfg.VL_LIMIT_SYNC -eq '1') {
         if ($null -eq $State) { return }

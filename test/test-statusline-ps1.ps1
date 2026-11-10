@@ -2789,6 +2789,66 @@ fi
         Check ('WIN-02 high-water maintenance converges ' + $limitSpec.Name) ($highNames.Count -eq 1 -and $highNames[0] -ceq $expectedHigh)
     }
 
+    # #112 parity, own reading first: a stored window with a LATER reset came from
+    # another account writing the same config directory (measured: team-1's 61%
+    # rendered team-2's stored 0%), so it no longer displaces a valid reading.
+    $ownRoot = Join-Path $stateRoot 'own-beats-newer'
+    $ownConfig = New-StateConfig 'win02-own-beats-newer' $ownRoot 'limit5h limit7d' $true
+    $ownStore = Join-Path $ownRoot 'limit5.d'
+    [void][IO.Directory]::CreateDirectory((Join-Path $ownStore (($reset5 + 1000L).ToString('D10', $Invariant) + '_000.000')))
+    $ownPayload = Clone-Object $statePayload
+    $ownPayload.rate_limits.five_hour.used_percentage = '61'
+    $ownDump = Join-Path $ownRoot 'ps.json'
+    $ownBashDump = Join-Path $ownRoot 'bash.txt'
+    $ownPs = Invoke-Statusline (Json $ownPayload) $ownConfig @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW=[string]$fixedNow; CORALLINE_TEST_STATE_DUMP=$ownDump } '' 10000
+    $ownBash = Invoke-BashStatusline (Json $ownPayload) $ownConfig @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW=[string]$fixedNow; CORALLINE_TEST_STATE_DUMP=(Forward-Path $ownBashDump) }
+    Check-Run 'WIN-02 PowerShell own reading vs newer store' $ownPs
+    Check-Run 'WIN-02 Bash own reading vs newer store' $ownBash
+    Check-Exact 'WIN-02 own reading vs newer store differential' $ownPs $ownBash
+    $ownState = [IO.File]::ReadAllText($ownDump, $StrictUtf8) | ConvertFrom-Json
+    $ownBashState = [IO.File]::ReadAllText($ownBashDump, $StrictUtf8).Trim()
+    Check 'WIN-02 own reading beats a newer stored window' ([string]$ownState.Limit5Pct -eq '61000' -and [string]$ownState.Limit5Reset -eq [string]$reset5 -and $ownBashState.Contains('Limit5Pct=61000') -and $ownPs.Stdout.Contains('61%'))
+
+    # #112 parity, no 5h window: a payload with a live seven_day and no five_hour
+    # hides limit5h instead of borrowing the stored 5h entry, and burn makes no 5h
+    # projection with sync on or off, binding to 7d or resting idle.
+    # Claude Code's builder leaves the five_hour object out entirely; null fields are
+    # the other shape both parsers must read as empty.
+    foreach ($noFiveSpec in @(
+        [pscustomobject]@{ Sync=$true;  Shape='absent' },
+        [pscustomobject]@{ Sync=$true;  Shape='null' },
+        [pscustomobject]@{ Sync=$false; Shape='absent' }
+    )) {
+        $syncSpec = $noFiveSpec.Sync
+        $noFiveRoot = Join-Path $stateRoot ('no-five-' + $syncSpec + '-' + $noFiveSpec.Shape)
+        $noFiveConfig = New-StateConfig ('win02-no-five-' + $syncSpec + '-' + $noFiveSpec.Shape) $noFiveRoot 'limit5h limit7d burn' $syncSpec
+        $noFiveStore = Join-Path $noFiveRoot 'limit5.d'
+        [void][IO.Directory]::CreateDirectory((Join-Path $noFiveStore ($reset5.ToString('D10', $Invariant) + '_020.000')))
+        $noFivePayload = Clone-Object $statePayload
+        if ($noFiveSpec.Shape -eq 'absent') {
+            $noFivePayload.rate_limits.PSObject.Properties.Remove('five_hour')
+        } else {
+            $noFivePayload.rate_limits.five_hour.used_percentage = $null
+            $noFivePayload.rate_limits.five_hour.resets_at = $null
+        }
+        $noFiveLabel = "sync=$syncSpec shape=$($noFiveSpec.Shape)"
+        $noFiveDump = Join-Path $noFiveRoot 'ps.json'
+        $noFiveBashDump = Join-Path $noFiveRoot 'bash.txt'
+        $noFivePs = Invoke-Statusline (Json $noFivePayload) $noFiveConfig @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW=[string]$fixedNow; CORALLINE_TEST_STATE_DUMP=$noFiveDump } '' 10000
+        $noFiveBash = Invoke-BashStatusline (Json $noFivePayload) $noFiveConfig @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW=[string]$fixedNow; CORALLINE_TEST_STATE_DUMP=(Forward-Path $noFiveBashDump) }
+        Check-Run "WIN-02 PowerShell no-5h $noFiveLabel" $noFivePs
+        Check-Run "WIN-02 Bash no-5h $noFiveLabel" $noFiveBash
+        Check-Exact "WIN-02 no-5h differential $noFiveLabel" $noFivePs $noFiveBash
+        $noFiveState = [IO.File]::ReadAllText($noFiveDump, $StrictUtf8) | ConvertFrom-Json
+        $noFiveBashState = [IO.File]::ReadAllText($noFiveBashDump, $StrictUtf8).Trim()
+        # Only with sync on is the store read at all, so only there can this fail.
+        if ($noFiveSpec.Sync) {
+            Check "WIN-02 no-5h refuses the stored 5h window $noFiveLabel" (-not $noFiveState.Limit5Valid -and -not $noFivePs.Stdout.Contains('5h ') -and $noFiveBashState.Contains('Limit5Valid=0'))
+        }
+        Check "WIN-02 no-5h burn has no 5h projection $noFiveLabel" ($noFiveState.FiveState -eq 'idle' -and $noFiveBashState.Contains('FiveState=idle'))
+        Check "WIN-02 no-5h keeps the 7d gauge $noFiveLabel" ($noFivePs.Stdout.Contains('7d ') -and $noFivePs.Stdout.Contains('30%'))
+    }
+
     # An elapsed window keeps its last canonical reading on the bar. Both runtimes
     # stop treating the payload snapshot and every store entry as valid the moment
     # resets_at passes, and Claude Code re-renders an idle session from its
