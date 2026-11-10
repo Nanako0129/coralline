@@ -2200,15 +2200,15 @@ function Get-CurrentLimit([string]$RawPct, [string]$RawReset, [long]$NowValue, [
 # same config directory (a /login switch, a model-relay fallback account): measured
 # 2026-11-10, a team-1 window at 5h 61% / 7d 10% rendered team-2's stored 0% / 0%.
 # The store carries no account identity, so it cannot be trusted over the payload.
-# NoWindow ($noFive in Get-CorallineState) refuses the store for an account that
-# reports no 5h window at all.
-function Select-LimitResult($Snapshot, $Retention, $Current, [bool]$NoWindow) {
+# Get-CorallineState hands the 5h call a retention with no winner when the account
+# reports no 5h window at all ($noFive).
+function Select-LimitResult($Snapshot, $Retention, $Current) {
     $valid = $false
     $reset = 0L
     $pct = 0
     if ($Current.Valid) {
         $valid=$true; $reset=[long]$Current.Reset; $pct=[int]$Current.Pct
-    } elseif (-not $NoWindow -and $Snapshot.Complete -and $null -ne $Retention.Winner) {
+    } elseif ($Snapshot.Complete -and $null -ne $Retention.Winner) {
         $valid=$true; $reset=[long]$Retention.Winner.Reset; $pct=[int]$Retention.Winner.Pct
     }
     return [pscustomobject]@{ Valid=$valid; Reset=$reset; Pct=$pct }
@@ -2314,7 +2314,7 @@ function Get-CorallineState([bool]$BurnGate, [bool]$Limit5Gate, [bool]$Limit7Gat
     # the same way and shows no 5h gauge until its next response, rather than a
     # stored window it cannot attribute to its own account.
     $noFive = [string]::IsNullOrEmpty([string]$fhPct) -and $current7.Valid
-    $currentBurn =[pscustomobject]@{ Valid=$false; Reset=0L; Sample=$Now; Pct=0 }
+    $currentBurn = [pscustomobject]@{ Valid=$false; Reset=0L; Sample=$Now; Pct=0 }
     if ($current5.Valid -and $current5.Reset -ge $Now) { $currentBurn = [pscustomobject]@{ Valid=$true; Reset=[long]$current5.Reset; Sample=$Now; Pct=[int]$current5.Pct } }
 
     $emptySnapshot = [pscustomobject]@{ Complete=$false; Exists=$false; Raw=0; Entries=@(); Rows=@() }
@@ -2414,8 +2414,12 @@ function Get-CorallineState([bool]$BurnGate, [bool]$Limit5Gate, [bool]$Limit7Gat
     if ($limit5Snapshot.Complete) { $limit5Gc = Remove-StateCandidates $limit5Paths.Root $limit5Retention.Candidates 21600L $mutate }
     if ($limit7Snapshot.Complete) { $limit7Gc = Remove-StateCandidates $limit7Paths.Root $limit7Retention.Candidates 691200L $mutate }
 
-    $limit5 = Select-LimitResult $limit5Snapshot $limit5Retention $current5 $noFive
-    $limit7 = Select-LimitResult $limit7Snapshot $limit7Retention $current7 $false
+    # No 5h window: refuse the stored 5h entry. GC and Publish below still get the
+    # real snapshot and retention, so store maintenance is unchanged.
+    $limit5Pick = $limit5Retention
+    if ($noFive) { $limit5Pick = [pscustomobject]@{ Candidates=@(); Winner=$null } }
+    $limit5 = Select-LimitResult $limit5Snapshot $limit5Pick $current5
+    $limit7 = Select-LimitResult $limit7Snapshot $limit7Retention $current7
     if ($Limit5Gate -and $limit5Snapshot.Complete) { [void](Publish-LimitState $limit5Paths.Root $current5 $limit5Snapshot $limit5Gc 21600L $mutate) }
     if ($Limit7Gate -and $limit7Snapshot.Complete) { [void](Publish-LimitState $limit7Paths.Root $current7 $limit7Snapshot $limit7Gc 691200L $mutate) }
 
@@ -3517,7 +3521,10 @@ function Add-LimitSegment([string]$Label, [string]$RawPct, [string]$ResetsAt, [s
 # garbage-collected, so no fossil is inherited. What is borrowed is the highest
 # percentage any session recorded for the CURRENT window, an over-estimate when
 # sessions disagree, which is the accepted cost of showing the account's window
-# instead of nothing. Same rule for both windows.
+# instead of nothing. Same rule for both windows. One limit stands: the store has
+# no account identity, so with several accounts in one config directory a session
+# without a reading can briefly show another account's window until its first
+# response; and an account with no 5h window ($noFive) never borrows a 5h entry.
 function Add-Limit5Segment {
     if ($Cfg.VL_LIMIT_SYNC -eq '1') {
         if ($null -eq $State) { return }

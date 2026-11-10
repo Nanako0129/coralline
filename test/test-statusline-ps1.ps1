@@ -2812,14 +2812,26 @@ fi
     # #112 parity, no 5h window: a payload with a live seven_day and no five_hour
     # hides limit5h instead of borrowing the stored 5h entry, and burn makes no 5h
     # projection with sync on or off, binding to 7d or resting idle.
-    foreach ($syncSpec in @($true, $false)) {
-        $noFiveRoot = Join-Path $stateRoot ('no-five-' + $syncSpec)
-        $noFiveConfig = New-StateConfig ('win02-no-five-' + $syncSpec) $noFiveRoot 'limit5h limit7d burn' $syncSpec
+    # Claude Code's builder leaves the five_hour object out entirely; null fields are
+    # the other shape both parsers must read as empty.
+    foreach ($noFiveSpec in @(
+        [pscustomobject]@{ Sync=$true;  Shape='absent' },
+        [pscustomobject]@{ Sync=$true;  Shape='null' },
+        [pscustomobject]@{ Sync=$false; Shape='absent' }
+    )) {
+        $syncSpec = $noFiveSpec.Sync
+        $noFiveRoot = Join-Path $stateRoot ('no-five-' + $syncSpec + '-' + $noFiveSpec.Shape)
+        $noFiveConfig = New-StateConfig ('win02-no-five-' + $syncSpec + '-' + $noFiveSpec.Shape) $noFiveRoot 'limit5h limit7d burn' $syncSpec
         $noFiveStore = Join-Path $noFiveRoot 'limit5.d'
         [void][IO.Directory]::CreateDirectory((Join-Path $noFiveStore ($reset5.ToString('D10', $Invariant) + '_020.000')))
         $noFivePayload = Clone-Object $statePayload
-        $noFivePayload.rate_limits.five_hour.used_percentage = $null
-        $noFivePayload.rate_limits.five_hour.resets_at = $null
+        if ($noFiveSpec.Shape -eq 'absent') {
+            $noFivePayload.rate_limits.PSObject.Properties.Remove('five_hour')
+        } else {
+            $noFivePayload.rate_limits.five_hour.used_percentage = $null
+            $noFivePayload.rate_limits.five_hour.resets_at = $null
+        }
+        $syncSpec = "$syncSpec $($noFiveSpec.Shape)"
         $noFiveDump = Join-Path $noFiveRoot 'ps.json'
         $noFiveBashDump = Join-Path $noFiveRoot 'bash.txt'
         $noFivePs = Invoke-Statusline (Json $noFivePayload) $noFiveConfig @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW=[string]$fixedNow; CORALLINE_TEST_STATE_DUMP=$noFiveDump } '' 10000
@@ -2829,7 +2841,10 @@ fi
         Check-Exact "WIN-02 no-5h differential sync=$syncSpec" $noFivePs $noFiveBash
         $noFiveState = [IO.File]::ReadAllText($noFiveDump, $StrictUtf8) | ConvertFrom-Json
         $noFiveBashState = [IO.File]::ReadAllText($noFiveBashDump, $StrictUtf8).Trim()
-        Check "WIN-02 no-5h refuses the stored 5h window sync=$syncSpec" (-not $noFiveState.Limit5Valid -and -not $noFivePs.Stdout.Contains('5h ') -and $noFiveBashState.Contains('Limit5Valid=0'))
+        # Only with sync on is the store read at all, so only there can this fail.
+        if ($noFiveSpec.Sync) {
+            Check "WIN-02 no-5h refuses the stored 5h window sync=$syncSpec" (-not $noFiveState.Limit5Valid -and -not $noFivePs.Stdout.Contains('5h ') -and $noFiveBashState.Contains('Limit5Valid=0'))
+        }
         Check "WIN-02 no-5h burn has no 5h projection sync=$syncSpec" ($noFiveState.FiveState -eq 'idle' -and $noFiveBashState.Contains('FiveState=idle'))
         Check "WIN-02 no-5h keeps the 7d gauge sync=$syncSpec" ($noFivePs.Stdout.Contains('7d ') -and $noFivePs.Stdout.Contains('30%'))
     }
