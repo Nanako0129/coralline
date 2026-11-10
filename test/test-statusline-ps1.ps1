@@ -2831,22 +2831,22 @@ fi
             $noFivePayload.rate_limits.five_hour.used_percentage = $null
             $noFivePayload.rate_limits.five_hour.resets_at = $null
         }
-        $syncSpec = "$syncSpec $($noFiveSpec.Shape)"
+        $noFiveLabel = "sync=$syncSpec shape=$($noFiveSpec.Shape)"
         $noFiveDump = Join-Path $noFiveRoot 'ps.json'
         $noFiveBashDump = Join-Path $noFiveRoot 'bash.txt'
         $noFivePs = Invoke-Statusline (Json $noFivePayload) $noFiveConfig @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW=[string]$fixedNow; CORALLINE_TEST_STATE_DUMP=$noFiveDump } '' 10000
         $noFiveBash = Invoke-BashStatusline (Json $noFivePayload) $noFiveConfig @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW=[string]$fixedNow; CORALLINE_TEST_STATE_DUMP=(Forward-Path $noFiveBashDump) }
-        Check-Run "WIN-02 PowerShell no-5h sync=$syncSpec" $noFivePs
-        Check-Run "WIN-02 Bash no-5h sync=$syncSpec" $noFiveBash
-        Check-Exact "WIN-02 no-5h differential sync=$syncSpec" $noFivePs $noFiveBash
+        Check-Run "WIN-02 PowerShell no-5h $noFiveLabel" $noFivePs
+        Check-Run "WIN-02 Bash no-5h $noFiveLabel" $noFiveBash
+        Check-Exact "WIN-02 no-5h differential $noFiveLabel" $noFivePs $noFiveBash
         $noFiveState = [IO.File]::ReadAllText($noFiveDump, $StrictUtf8) | ConvertFrom-Json
         $noFiveBashState = [IO.File]::ReadAllText($noFiveBashDump, $StrictUtf8).Trim()
         # Only with sync on is the store read at all, so only there can this fail.
         if ($noFiveSpec.Sync) {
-            Check "WIN-02 no-5h refuses the stored 5h window sync=$syncSpec" (-not $noFiveState.Limit5Valid -and -not $noFivePs.Stdout.Contains('5h ') -and $noFiveBashState.Contains('Limit5Valid=0'))
+            Check "WIN-02 no-5h refuses the stored 5h window $noFiveLabel" (-not $noFiveState.Limit5Valid -and -not $noFivePs.Stdout.Contains('5h ') -and $noFiveBashState.Contains('Limit5Valid=0'))
         }
-        Check "WIN-02 no-5h burn has no 5h projection sync=$syncSpec" ($noFiveState.FiveState -eq 'idle' -and $noFiveBashState.Contains('FiveState=idle'))
-        Check "WIN-02 no-5h keeps the 7d gauge sync=$syncSpec" ($noFivePs.Stdout.Contains('7d ') -and $noFivePs.Stdout.Contains('30%'))
+        Check "WIN-02 no-5h burn has no 5h projection $noFiveLabel" ($noFiveState.FiveState -eq 'idle' -and $noFiveBashState.Contains('FiveState=idle'))
+        Check "WIN-02 no-5h keeps the 7d gauge $noFiveLabel" ($noFivePs.Stdout.Contains('7d ') -and $noFivePs.Stdout.Contains('30%'))
     }
 
     # An elapsed window keeps its last canonical reading on the bar. Both runtimes
