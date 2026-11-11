@@ -152,6 +152,7 @@ Installer 可以從 `~/.p10k.zsh` 匯入選定的風格、色彩與時鐘設定�
 | `ttft` | 否 | 最後一則回應的第一個 token 等待時間；推算不出來時隱藏 |
 | `limit5h` | 是 | 五小時額度量表與重置倒數 |
 | `limit7d` | 是 | 七天額度量表與重置倒數 |
+| `fable` | 否 | 有自己每週上限的模型（`/usage` 裡 Fable 那一項）的量表與重置倒數，Claude Code 不會把它傳給 statusline。讀取 [model-relay](https://github.com/cablate/model-relay) 依每次回應的 rate-limit 標頭為每個 session 寫的用量檔（`model-relay-status/<session_id>.limits`；需要會寫這個檔的 model-relay，cablate/model-relay#9，尚未發版）；沒有檔案時隱藏，這個 session 第一次收到該模型的回應前也隱藏。檔案是 session 自己的，不會顯示其他帳號的視窗。僅 Bash renderer；不增加 fork |
 | `burn` | 否 | 綁定中的 5h 或 7d 額度到達 100% 的預估時間 |
 | `lines` | 否 | 本次 session 新增與刪除的行數 |
 | `cost` | 是 | 本次 session 花費（USD） |

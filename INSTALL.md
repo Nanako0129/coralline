@@ -234,14 +234,14 @@ Ask concise questions. If the user says "you decide", choose the defaults.
 2. **Style**: `pill` default, `lean`, or `classic` (p10k's uniform dark-bar look).
 3. **Segments**: default is `dir git model ctx limit5h limit7d cost clock`.
    Optional extras: `project`, `node`, `python`, `relay`, `effort`, `subagents`, `cache`, `toks`,
-   `ttft`, `burn`, `lines`, `style`, `duration`, `stash`. `node` shows the active Node version
+   `ttft`, `fable`, `burn`, `lines`, `style`, `duration`, `stash`. `node` shows the active Node version
    (`.nvmrc` / `.node-version`) and `python` the active env (`$VIRTUAL_ENV` / conda /
    `.python-version`); each stays hidden until something is detected. Only with
    `VL_RUNTIME_PROBE=1` do they fall back to `node` / `python3` on `PATH`, at the
    cost of forks per render.
    Write the chosen segments to `VL_SEGMENTS` in this canonical order (keep only the
    ones the user wants): `dir project git node python model relay effort subagents ctx
-   cache toks ttft limit5h limit7d burn lines cost style duration stash clock`. So opting in
+   cache toks ttft limit5h limit7d fable burn lines cost style duration stash clock`. So opting in
    `effort` lands it after `model`, with `relay` between them when both are chosen;
    a user who wants `relay` on a line of its own sets `VL_HEAD_SEGMENTS="relay"`
    instead of listing it here.

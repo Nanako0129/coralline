@@ -152,6 +152,7 @@ VL_BG_GIT_OK=65
 VL_BG_STASH=""                 # optional; falls back to VL_BG_GIT_OK when empty
 VL_BG_RELAY=""                 # optional; falls back to VL_BG_STYLE when empty (not
                                # VL_BG_MODEL or VL_BG_EFFORT: relay sits between them)
+VL_BG_FABLE=""                 # optional; falls back to VL_BG_7D when empty
 VL_RELAY_PREVIEW=""            # internal: provider the wizard preview shows for relay
 VL_BG_GIT_DIRTY=130
 VL_BG_MODEL=173
@@ -2204,6 +2205,35 @@ seg_relay() {  # model-relay: which model this session talks to (claude, a pinne
   push "${VL_BG_RELAY:-$VL_BG_STYLE}" "${_FG} ↪ ${_TR}${note} "
 }
 
+# The weekly window of the model with its own limit (7d_oi, "Fable" in /usage).
+# Claude Code's payload carries only the 5h and 7d windows; model-relay's router
+# writes what each answer's rate-limit headers report to
+# <relay config dir>/model-relay-status/<session_id>.limits, one line
+# "window<TAB>percent<TAB>reset" per window. Read with the builtin, so no fork. The
+# file is this session's own, so it never shows another account's window. A line
+# whose reset has passed is skipped: the router leaves an expired file as it is.
+# MODEL_RELAY_CONFIG_DIR is where a second account's window finds the relay.
+fable_sample() {  # → fable_pct, fable_rst ("" = none)
+  fable_pct="" fable_rst=""
+  case "$sid" in (''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) return 0 ;; esac
+  local f="${MODEL_RELAY_CONFIG_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/model-relay-status/$sid.limits" w p r n=0
+  [ -f "$f" ] || return 0                   # -f: a FIFO here must not block
+  while [ "$n" -lt 16 ] && IFS=$'\t' read -r w p r; do
+    n=$(( n + 1 ))
+    [ "$w" = 7d_oi ] || continue
+    r="${r%$'\r'}"
+    case "$p" in (''|*[!0123456789]*|??????*) return 0 ;; esac
+    case "$r" in (''|*[!0123456789]*|????????????*) return 0 ;; esac
+    [ "$r" -gt "$NOW" ] || return 0
+    fable_pct=$p fable_rst=$r
+    return 0
+  done < "$f" 2>/dev/null
+}
+
+seg_fable() {  # Fable weekly usage gauge, from model-relay's per-session limits file
+  limit_pill "fable" "$fable_pct" "$fable_rst" "${VL_BG_FABLE:-$VL_BG_7D}"
+}
+
 seg_stash() {  # git stash count
   [ -n "$GIT_BRANCH" ] || return 0
   local n
@@ -2686,6 +2716,7 @@ _SEG_SCAN="$_SEG_ROWS"
 if [ "$VL_FLOAT" = "1" ]; then words_of "$VL_FLOAT_SEGMENTS"; _SEG_SCAN="$_SEG_ROWS${_SW# }"; fi
 case "$_SEG_SCAN" in *" git "*|*" stash "*|*" project "*) read_git ;; esac
 case "$_SEG_SCAN" in (*" relay "*) relay_sample ;; esac
+case "$_SEG_SCAN" in (*" fable "*) fable_sample ;; esac
 
 # The disabled/default path performs no state work. Enabled paths canonicalize
 # values and namespaces once, then use the released TSV/compact-directory flow.
