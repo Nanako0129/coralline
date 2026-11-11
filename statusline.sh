@@ -2224,7 +2224,10 @@ fable_sample() {  # → fable_pct, fable_rst ("" = none)
     r="${r%$'\r'}"
     case "$p" in (''|*[!0123456789]*|??????*) return 0 ;; esac
     case "$r" in (''|*[!0123456789]*|????????????*) return 0 ;; esac
-    [ "$r" -gt "$NOW" ] || return 0
+    # 10#: a leading zero would be read as octal and abort the render on "09"
+    p=$(( 10#$p )) r=$(( 10#$r ))
+    # a weekly window resets within 8 days; anything further out is not one
+    [ "$r" -gt "$NOW" ] && [ "$r" -le $(( NOW + 691200 )) ] || return 0
     fable_pct=$p fable_rst=$r
     return 0
   done < "$f" 2>/dev/null
