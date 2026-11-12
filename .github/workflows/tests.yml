@@ -1,0 +1,74 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push to a pull request replaces the older run. A push to main gets a
+# group of its own (the commit), so no run on main is cancelled or left pending
+# behind another: each merge commit keeps its own result, and a break is
+# attributed to the commit that caused it.
+concurrency:
+  group: tests-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  bash:
+    # ubuntu-latest has bash 5 on PATH; macos-latest has only the stock bash 3.2,
+    # the oldest shell the renderer supports. The Versions step fails if that
+    # stops being true, so the macOS leg cannot silently stop covering 3.2.
+    name: bash suites (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Versions
+        run: |
+          bash --version | head -1
+          jq --version
+          git --version
+          if [ "$RUNNER_OS" = macOS ]; then
+            case "$(bash -c 'printf %s "$BASH_VERSION"')" in
+              3.2.*) ;;
+              *) echo "::error::the macOS runner's bash is no longer 3.2; this leg must run the suites under /bin/bash"; exit 1 ;;
+            esac
+          fi
+      # One file per invocation: `bash -n a b c` checks only a and passes the
+      # rest to it as arguments.
+      - name: Syntax
+        run: |
+          fail=0
+          for f in statusline.sh configure.sh install.sh example/float-display-iterm2/coralline-float test/*.sh; do
+            bash -n "$f" || { fail=1; echo "::error file=$f::syntax error"; }
+          done
+          exit "$fail"
+      # Every suite exits non-zero on a failed case. The loop keeps going so one
+      # run names every failing suite. Each suite gets an empty HOME of its own, so
+      # here whatever a suite reads or leaves under ~/.claude is its own and the
+      # result does not depend on the order of the suites. That isolation is this
+      # workflow's: run by hand, a suite uses the real HOME.
+      # A failed suite is run once more before it counts: several cases bound
+      # real concurrency by wall-clock time (test-burn's 32 simultaneous renders
+      # with one writer per second), written for a local machine, and a loaded
+      # shared runner can overrun them. A real break fails both times; a retry
+      # leaves a warning on the run so a recurring one is seen.
+      - name: Suites
+        run: |
+          fail=0
+          for t in test/*.sh; do
+            echo "::group::$t"
+            if ! HOME="$(mktemp -d)" bash "$t"; then
+              echo "::warning file=$t::suite failed once; running it again"
+              HOME="$(mktemp -d)" bash "$t" || { fail=1; echo "::error file=$t::suite failed twice"; }
+            fi
+            echo "::endgroup::"
+          done
+          exit "$fail"

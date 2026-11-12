@@ -259,6 +259,23 @@ rl_choose 5; eq 'own reading beats a higher stored pct' "$_STATE_RL5_PCT" 15000
 eq 'own reading keeps its own reset' "$_STATE_RL5_RST" 1015900
 rl_latest "$_SL5_BASE" "$RL_MAX_5H" 1
 entry_count "$_SL5_ROOT"; eq 'limit mutable GC keeps winner' "$_COUNT" 1
+# A reading below the latest stored entry is not published. rl_latest's GC
+# removes every entry but the latest, so publishing it cost a mkdir and an rmdir
+# on every render of a session whose window is not the latest one in the store.
+CASE="$TMPD/nopublish"; mkdir -p "$CASE"
+unit_gate "$CASE" 1000000 15 1015900 30 1345600 0
+mkdir -p "$_SL5_ROOT/0001016900_010.000"
+rl_sample "$_SL5_BASE" "$_CUR5_PCT" "$_CUR5_RST"
+true_case 'limit publish: skipped below the latest entry' test ! -e "$_SL5_ROOT/0001015900_015.000"
+rmdir "$_SL5_ROOT/0001016900_010.000"; mkdir -p "$_SL5_ROOT/0001015800_090.000" "$_SL5_ROOT/not-an-entry-zzzzzz"
+rl_sample "$_SL5_BASE" "$_CUR5_PCT" "$_CUR5_RST"
+true_case 'limit publish: written above the latest valid entry' test -d "$_SL5_ROOT/0001015900_015.000"
+# Only an entry the reader would take as the winner suppresses publishing: a
+# stray file, a non-empty directory or a reset beyond the horizon does not.
+rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001016000_010.000/x" "$_SL5_ROOT/9999999999_000.000"; : > "$_SL5_ROOT/0001016100_010.000"
+rl_sample "$_SL5_BASE" "$_CUR5_PCT" "$_CUR5_RST"
+true_case 'limit publish: not silenced by entries the reader refuses' test -d "$_SL5_ROOT/0001015900_015.000"
+rm -rf "$_SL5_ROOT"
 
 # A drop inside one window is followed.
 rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001015900_090.000"
@@ -802,7 +819,11 @@ if burn_est_adopt; then bad 'est adopt: unknown state token rejected' adopted; e
 printf '1000000 253402300799 active 300 5000 50000\n' > "$EST"
 if burn_est_adopt; then bad 'est adopt: reset beyond the 5h horizon rejected' adopted; else ok 'est adopt: reset beyond the 5h horizon rejected'; fi
 printf '1000000 1021600 active 300 5000 50000\n' > "$EST"
+_own_rst=$_CUR_BURN_RST
+if burn_est_adopt; then bad 'est adopt: an estimate for another window rejected' adopted; else ok 'est adopt: an estimate for another window rejected'; fi
+_CUR_BURN_RST=1021600
 true_case 'est adopt: reset at the 5h horizon accepted' burn_est_adopt
+_CUR_BURN_RST=$_own_rst
 printf '1000000 1015900 active 08 5000 50000\n' > "$EST"
 if burn_est_adopt 2> "$CASE/octal.err"; then bad 'est adopt: leading-zero span rejected' adopted; else ok 'est adopt: leading-zero span rejected'; fi
 eq 'est adopt: leading-zero rejection leaks no stderr' "$(wc -c < "$CASE/octal.err" | tr -d ' ')" 0
@@ -904,6 +925,21 @@ CASE2="$TMPD/twowin-read"; mkdir -p "$CASE2"
 unit_gate "$CASE2" $((_now + 5)) 49.5 "$_rB" '' '' 1
 burn_eta_5h 0
 eq 'two-window: newer window estimates active' "$_B5_STATE" active
+
+# The estimate binds to this session's own window, not the latest reset in the
+# store: in one config dir a relay fallback account or a /login switch leaves
+# another account's later window in the shared history (#112's rule, for burn).
+OWNW="$TMPD/own-window"; mkdir -p "$OWNW"
+unit_gate "$OWNW" 1000360 8 1015900 '' '' 1
+printf '1000000\t6\t1015900\n1000060\t7\t1015900\n1000300\t8\t1015900\n1000100\t50\t1017000\n1000350\t52\t1017000\n' > "$BURN_FILE"
+burn_eta_5h 0
+eq 'own window: projected from our reset, not the later one' "$_B5_TTR" 15540
+eq 'own window: state from our samples' "$_B5_STATE" active
+# With no reading of our own the latest window in the store is still used.
+unit_gate "$OWNW" 1000360 '' '' '' '' 1
+printf '1000000\t6\t1015900\n1000060\t7\t1015900\n1000300\t8\t1015900\n1000100\t50\t1017000\n1000350\t52\t1017000\n' > "$BURN_FILE"
+_CUR_BURN_VALID=0; burn_eta_5h 0
+eq 'no own reading: latest stored window' "$_B5_TTR" 16640
 
 # Binding and renderer regressions after state/storage tests. Stubs isolate the
 # already-tested estimators from the presentation logic.
