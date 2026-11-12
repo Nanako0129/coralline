@@ -31,7 +31,7 @@ macOS、Linux 與 Git Bash 上是純 Bash，Windows 另有原生 PowerShell rend
 <td valign="top"><b>跟著視窗寬度走。</b><br><code>VL_LAYOUT="auto"</code> 會在終端機變窄時，把狀態列折成最多 <code>VL_MAX_LINES</code> 行。</td>
 </tr>
 <tr>
-<td valign="top"><b>執行零成本。</b><br>全程在本機：不連網、不呼叫 API、不用 token。Bash 主列每個 payload 只用一次 <code>jq</code> 解析，預設主列每次 render 只呼叫一次 <code>git</code>（選用的 <code>project</code> 與 <code>stash</code> 各多一次）。</td>
+<td valign="top"><b>執行零成本。</b><br>全程在本機：不連網、不呼叫 API、不用 token。Bash 主列每個 payload 只用一次 <code>jq</code> 解析，預設主列每次 render 只呼叫一次 <code>git</code>（選用的 <code>project</code> 與 <code>stash</code> 會另外呼叫）。</td>
 <td valign="top"><b>Claude Code 能跑的地方都能跑。</b><br>macOS 內建的 Bash 3.2、Linux Bash 4+、Git Bash，以及原生 Windows PowerShell 5.1 renderer。</td>
 </tr>
 </table>

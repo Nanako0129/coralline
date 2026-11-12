@@ -31,7 +31,7 @@ Pure Bash on macOS, Linux, and Git Bash, plus a native PowerShell renderer for W
 <td valign="top"><b>Fits the window.</b><br><code>VL_LAYOUT="auto"</code> wraps the bar over as many as <code>VL_MAX_LINES</code> rows as the terminal narrows.</td>
 </tr>
 <tr>
-<td valign="top"><b>Costs nothing to run.</b><br>Local only: no network, no API calls, no tokens. The Bash bar parses each payload with one <code>jq</code> call, and the default bar runs one <code>git</code> call per render (the opt-in <code>project</code> and <code>stash</code> each add one).</td>
+<td valign="top"><b>Costs nothing to run.</b><br>Local only: no network, no API calls, no tokens. The Bash bar parses each payload with one <code>jq</code> call, and the default bar runs one <code>git</code> call per render (the opt-in <code>project</code> and <code>stash</code> add calls of their own).</td>
 <td valign="top"><b>Runs where Claude Code runs.</b><br>Stock macOS Bash 3.2, Linux Bash 4+, Git Bash, and a native Windows PowerShell 5.1 renderer.</td>
 </tr>
 </table>
