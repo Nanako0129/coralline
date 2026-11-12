@@ -235,9 +235,10 @@ Ask concise questions. If the user says "you decide", choose the defaults.
 3. **Segments**: default is `dir git model ctx limit5h limit7d cost clock`.
    Optional extras: `project`, `node`, `python`, `relay`, `effort`, `cache`, `toks`, `ttft`,
    `burn`, `lines`, `style`, `duration`, `stash`. `node` shows the active Node version
-   (`.nvmrc` / `.node-version`, else `node` on `PATH`) and `python` the active env
-   (`$VIRTUAL_ENV` / conda / `.python-version`, else `python3`); each stays hidden
-   until something is detected.
+   (`.nvmrc` / `.node-version`) and `python` the active env (`$VIRTUAL_ENV` / conda /
+   `.python-version`); each stays hidden until something is detected. Only with
+   `VL_RUNTIME_PROBE=1` do they fall back to `node` / `python3` on `PATH`, at the
+   cost of forks per render.
    Write the chosen segments to `VL_SEGMENTS` in this canonical order (keep only the
    ones the user wants): `dir project git node python model relay effort ctx cache
    toks ttft limit5h limit7d burn lines cost style duration stash clock`. So opting in
@@ -346,16 +347,14 @@ cd ~/.claude/coralline-src
 bash configure.sh --install
 ```
 
-If the repository is already available locally, copy from that clone instead of downloading:
+If the repository is already available locally, run the installer from that clone instead of downloading; it copies the runtime, the themes and the sample input into `~/.claude/coralline` itself:
 
 ```bash
-mkdir -p ~/.claude/coralline/themes
-cp statusline.sh configure.sh install.sh ~/.claude/coralline/
-cp test/sample-input.json ~/.claude/coralline/sample-input.json
-cp themes/*.conf ~/.claude/coralline/themes/
-chmod +x ~/.claude/coralline/statusline.sh ~/.claude/coralline/configure.sh
-bash ~/.claude/coralline/configure.sh --install
+cd /path/to/your/coralline/clone
+bash configure.sh --install
 ```
+
+Use the clone's `configure.sh`, not the copy in `~/.claude/coralline`: the installer takes its files from the directory `configure.sh` itself is in, and needs `test/sample-input.json` and `themes/` beside it.
 
 ## Verification
 

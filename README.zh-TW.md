@@ -31,7 +31,7 @@ macOS、Linux 與 Git Bash 上是純 Bash，Windows 另有原生 PowerShell rend
 <td valign="top"><b>跟著視窗寬度走。</b><br><code>VL_LAYOUT="auto"</code> 會在終端機變窄時，把狀態列折成最多 <code>VL_MAX_LINES</code> 行。</td>
 </tr>
 <tr>
-<td valign="top"><b>執行零成本。</b><br>全程在本機：不連網、不呼叫 API、不用 token。Bash 主列每個 payload 只用一次 <code>jq</code> 解析，每次 render 最多一次 <code>git</code> 呼叫。</td>
+<td valign="top"><b>執行零成本。</b><br>全程在本機：不連網、不呼叫 API、不用 token。Bash 主列每個 payload 只用一次 <code>jq</code> 解析，預設主列每次 render 只呼叫一次 <code>git</code>（選用的 <code>project</code> 與 <code>stash</code> 會另外呼叫）。</td>
 <td valign="top"><b>Claude Code 能跑的地方都能跑。</b><br>macOS 內建的 Bash 3.2、Linux Bash 4+、Git Bash，以及原生 Windows PowerShell 5.1 renderer。</td>
 </tr>
 </table>
@@ -257,7 +257,7 @@ Bash 讀取 `~/.claude/coralline.conf`，原生 renderer 也能讀同一個檔�
 
 ### Windows 無 Git Bash
 
-`statusline.ps1` 是原生 Windows PowerShell 5.1 renderer。它不需要 Bash、`jq`、WSL、archive 解壓工具或 Git；`git.exe` 是選用項目，只用來啟用 `git`、`stash` 與 `project`。它支援和 Bash 相同的主列區段、風格、版面、state-backed 功能、float 輸出與套用主題的 subagent 列。
+`statusline.ps1` 是原生 Windows PowerShell 5.1 renderer。它不需要 Bash、`jq`、WSL、archive 解壓工具或 Git；`git.exe` 是選用項目，只用來啟用 `git`、`stash` 與 `project`。它支援和 Bash 相同的風格、版面、state-backed 功能、float 輸出與套用主題的 subagent 列；主列區段除了 `relay` 以外也都相同。`VL_HEAD_SEGMENTS` 與 `VL_GIT_CACHE_TTL` 同樣只有 Bash 支援，原生 renderer 會略過它們。
 
 以下 bootstrap 會跟隨可變的 `main`，在下載可執行 installer 前先解析成 commit，再把同一個 commit 傳給 `install.ps1`：
 
@@ -375,7 +375,7 @@ Remove-Item -LiteralPath (Join-Path $HOME '.claude\coralline.conf') -Force -Erro
 | Windows with Git Bash | Bash renderer |
 | Windows without Git Bash | 原生 Windows PowerShell 5.1 renderer |
 
-Renderer 全程在本機執行：不呼叫網路或 API，也不使用 token。Bash 主列只用一次 `jq` 解析 payload；兩種 renderer 每次 render 最多呼叫一次 `git status --porcelain=v2 --branch`，不會為每個欄位啟動 process。可重現的量測方法見 [BENCHMARK.zh-TW.md](./BENCHMARK.zh-TW.md)，來源是 [PR #65](https://github.com/Nanako0129/coralline/pull/65)。
+Renderer 全程在本機執行：不呼叫網路或 API，也不使用 token。Bash 主列只用一次 `jq` 解析 payload；兩種 renderer 每次 render 最多呼叫一次 `git status --porcelain=v2 --branch`，預設區段不會啟動其他 process；選用的 `project` 與 `stash` 會另外呼叫 git。可重現的量測方法見 [BENCHMARK.zh-TW.md](./BENCHMARK.zh-TW.md)，來源是 [PR #65](https://github.com/Nanako0129/coralline/pull/65)。
 
 ## 支持、致謝與授權
 
