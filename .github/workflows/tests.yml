@@ -72,3 +72,77 @@ jobs:
             echo "::endgroup::"
           done
           exit "$fail"
+
+  windows:
+    # The native PowerShell renderer and installer. test-statusline-ps1.ps1 runs
+    # differential checks against statusline.sh with Git Bash as the oracle, so
+    # this leg also puts the Bash renderer on Git Bash.
+    name: PowerShell suites (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      # Git for Windows converts line endings by default; the Bash scripts and
+      # the byte-exact fixtures need the files as they are in the repository.
+      - name: Keep line endings
+        shell: bash
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - name: Versions
+        shell: powershell
+        run: |
+          "Windows PowerShell $($PSVersionTable.PSVersion)"
+          if ($PSVersionTable.PSVersion.Major -ne 5) { Write-Output "::error::this leg must run Windows PowerShell 5.1"; exit 1 }
+          # Each tool is checked on its own: only the last native exit code decides a
+          # step, so a missing jq would otherwise be hidden by the next command.
+          & "C:\Program Files\Git\bin\bash.exe" --version | Select-Object -First 1
+          if ($LASTEXITCODE -ne 0) { Write-Output "::error::Git Bash is not where the suites expect it"; exit 1 }
+          & "C:\Program Files\Git\bin\bash.exe" -c 'command -v jq && jq --version'
+          if ($LASTEXITCODE -ne 0) { Write-Output "::error::jq is not on Git Bash's PATH; the Bash oracle cannot run"; exit 1 }
+          git --version
+          if ($LASTEXITCODE -ne 0) { Write-Output "::error::git is missing"; exit 1 }
+      # The suite's git segment case needs a repository on a branch named main; a
+      # pull-request checkout is a detached HEAD. Snapshot the tree into one.
+      - name: Snapshot into a repository on branch main
+        shell: bash
+        run: |
+          rm -rf .git
+          git init -q -b main
+          git add -A
+          git -c user.name=ci -c user.email=ci@example.invalid commit -qm snapshot
+      # The suites start child processes through .NET Framework's Process class,
+      # which prefixes the child's stdin with a BOM under this runner's UTF-8
+      # console code page; each suite sets a preamble-free input encoding first
+      # (see the note at its top).
+      # A suite passes only with exit 0 AND a summary line that says blocked=0:
+      # both suites skip whole sections as BLOCKED (no Git Bash, no jq, no junction
+      # support) without failing, which would leave this job green over cases
+      # that never ran. A failed attempt is run once more before it counts, as the
+      # bash job does: several cases are bounded by wall-clock time.
+      - name: test-statusline-ps1
+        id: statusline
+        shell: powershell
+        run: |
+          $ok = $false
+          foreach ($attempt in 1, 2) {
+            powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-statusline-ps1.ps1 2>&1 | Tee-Object -FilePath statusline-suite.log
+            $code = $LASTEXITCODE
+            $summary = Select-String -Path statusline-suite.log -Pattern '^SUMMARY pass=\d+ fail=0 blocked=0\s*$' -Quiet
+            if ($code -eq 0 -and $summary) { $ok = $true; break }
+            if ($attempt -eq 1) { Write-Output "::warning::test-statusline-ps1 failed once (exit $code); running it again" }
+          }
+          if (-not $ok) { Write-Output "::error::test-statusline-ps1 failed, or cases were blocked (exit $code)"; exit 1 }
+      # Runs after a failure of the renderer suite, but not when the setup above
+      # failed and the renderer suite never started.
+      - name: test-install-ps1
+        if: ${{ !cancelled() && steps.statusline.conclusion != 'skipped' }}
+        shell: powershell
+        run: |
+          $ok = $false
+          foreach ($attempt in 1, 2) {
+            powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-install-ps1.ps1 2>&1 | Tee-Object -FilePath install-suite.log
+            $code = $LASTEXITCODE
+            $summary = Select-String -Path install-suite.log -Pattern '^RESULT\s+pass=\d+ fail=0 blocked=0\s*$' -Quiet
+            if ($code -eq 0 -and $summary) { $ok = $true; break }
+            if ($attempt -eq 1) { Write-Output "::warning::test-install-ps1 failed once (exit $code); running it again" }
+          }
+          if (-not $ok) { Write-Output "::error::test-install-ps1 failed, or cases were blocked (exit $code)"; exit 1 }

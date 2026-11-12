@@ -17,6 +17,24 @@ $script:StateBashScript = $BashScript
 $Configure = Join-Path $Repo 'configure.sh'
 $PowerShellExe = (Get-Process -Id $PID).Path
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+# .NET Framework's Process.Start hands the child's stdin to a writer that takes
+# its encoding from [Console]::InputEncoding and emits that encoding's preamble
+# as soon as it is created. Under a UTF-8 console code page (65001, as on hosted
+# CI runners) a BOM therefore reaches the child BEFORE anything this suite writes,
+# and the renderer rightly refuses a payload that does not start with "{". An
+# encoding without a preamble avoids it; Claude Code writes through its own pipe.
+# The console is shared with the terminal that started the suite, so the original
+# encoding is put back when PowerShell exits. If the preamble is still there after
+# the assignment (no console to set it on), say so: every child would get the BOM
+# and thousands of cases would fail with a clock-only render.
+$script:OriginalInputEncoding = $null
+try { $script:OriginalInputEncoding = [Console]::InputEncoding; [Console]::InputEncoding = $Utf8NoBom } catch { }
+if ($null -ne $script:OriginalInputEncoding) {
+    try { [void](Register-EngineEvent -SourceIdentifier PowerShell.Exiting -MessageData $script:OriginalInputEncoding -Action { try { [Console]::InputEncoding = $Event.MessageData } catch { } }) } catch { }
+}
+try {
+    if ([Console]::InputEncoding.GetPreamble().Length -ne 0) { [Console]::Out.WriteLine('WARN  console input encoding still has a preamble; child processes will receive a BOM before their stdin payload') }
+} catch { }
 $StrictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
 $Invariant = [System.Globalization.CultureInfo]::InvariantCulture
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ('coralline-win01-test-' + [guid]::NewGuid().ToString('N'))

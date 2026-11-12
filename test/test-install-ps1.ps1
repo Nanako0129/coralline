@@ -14,6 +14,13 @@ $Repo = Split-Path -Path $Here -Parent
 $Installer = Join-Path $Repo 'install.ps1'
 $PowerShellExe = (Get-Process -Id $PID).Path
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+# A preamble-free console input encoding for the children this suite starts, put
+# back on exit; test-statusline-ps1.ps1 explains why at the same place.
+$script:OriginalInputEncoding = $null
+try { $script:OriginalInputEncoding = [Console]::InputEncoding; [Console]::InputEncoding = $Utf8NoBom } catch { }
+if ($null -ne $script:OriginalInputEncoding) {
+    try { [void](Register-EngineEvent -SourceIdentifier PowerShell.Exiting -MessageData $script:OriginalInputEncoding -Action { try { [Console]::InputEncoding = $Event.MessageData } catch { } }) } catch { }
+}
 $StrictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ('c 雪&(p)-' + [guid]::NewGuid().ToString('N'))
 $script:Pass = 0
