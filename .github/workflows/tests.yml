@@ -104,88 +104,14 @@ jobs:
           git init -q -b main
           git add -A
           git -c user.name=ci -c user.email=ci@example.invalid commit -qm snapshot
-      # TEMPORARY diagnostic: in the suite every launch of statusline.ps1 returns
-      # exit 0 with empty stdout on the hosted runner, while a direct run renders.
-      # This launches it the way the suite does and changes one factor at a time.
-      # Remove once explained.
-      - name: Diagnose the suite's launch (temporary)
-        continue-on-error: true
-        shell: powershell
-        run: |
-          $repo = (Get-Location).Path
-          $json = [IO.File]::ReadAllBytes((Join-Path $repo 'test\sample-input.json'))
-          $exe = (Get-Process -Id $PID).Path
-          "host exe: $exe"
-          function Launch([string]$label, [hashtable]$vars, [string]$cwd, [bool]$noWindow, [string]$script) {
-            $psi = New-Object System.Diagnostics.ProcessStartInfo
-            $psi.FileName = $exe
-            $psi.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $script + '"'
-            $psi.UseShellExecute = $false
-            $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
-            $psi.CreateNoWindow = $noWindow
-            if ($cwd) { $psi.WorkingDirectory = $cwd }
-            foreach ($k in $vars.Keys) { if ($null -eq $vars[$k]) { [void]$psi.EnvironmentVariables.Remove($k) } else { $psi.EnvironmentVariables[$k] = [string]$vars[$k] } }
-            $p = New-Object System.Diagnostics.Process; $p.StartInfo = $psi; [void]$p.Start()
-            $o = $p.StandardOutput.BaseStream; $e = $p.StandardError.BaseStream
-            $om = New-Object IO.MemoryStream; $em = New-Object IO.MemoryStream
-            $ot = $o.CopyToAsync($om); $et = $e.CopyToAsync($em)
-            if ($script:DelayMs -gt 0) { Start-Sleep -Milliseconds $script:DelayMs }
-            $p.StandardInput.BaseStream.Write($json, 0, $json.Length); $p.StandardInput.BaseStream.Flush()
-            if ($script:CloseRaw) { $p.StandardInput.BaseStream.Close() } else { $p.StandardInput.Close() }
-            [void]$p.WaitForExit(20000); [void]$ot.Wait(2000); [void]$et.Wait(2000)
-            "{0,-44} exit={1} stdout={2} stderr={3}" -f $label, $p.ExitCode, $om.Length, $em.Length
-            if ($em.Length -gt 0) { [Text.Encoding]::UTF8.GetString($em.ToArray()).Substring(0, [Math]::Min(600, $em.Length)) }
-            if ($script:ShowOut) { ([Text.Encoding]::UTF8.GetString($om.ToArray())).Replace([string][char]27, '<ESC>').Trim() }
-          }
-          $script:DelayMs = 0; $script:ShowOut = $false; $script:CloseRaw = $false
-          "payload bytes: $($json.Length), first byte: $($json[0]), last byte: $($json[$json.Length - 1])"
-          "console input code page: $([Console]::InputEncoding.CodePage), preamble bytes: $([Console]::InputEncoding.GetPreamble().Length)"
-          $script:CloseRaw = $true
-          Launch 'runner default encoding'             @{} (Get-Location).Path $true (Join-Path (Get-Location).Path 'statusline.ps1')
-          try { [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false); "set a preamble-free input encoding" } catch { "could not set the input encoding: $_" }
-          "console input code page: $([Console]::InputEncoding.CodePage), preamble bytes: $([Console]::InputEncoding.GetPreamble().Length)"
-          Launch 'preamble-free input encoding'        @{} (Get-Location).Path $true (Join-Path (Get-Location).Path 'statusline.ps1')
-          $script = Join-Path $repo 'statusline.ps1'
-          $rt = Join-Path ([IO.Path]::GetTempPath()) 'coralline-diag-home'
-          Launch 'plain, window allowed'               @{} $repo $false $script
-          Launch 'plain, CreateNoWindow'               @{} $repo $true  $script
-          Launch 'NO_SAMPLE=1'                         @{ CORALLINE_NO_SAMPLE='1' } $repo $true $script
-          Launch 'profile dir missing'                 @{ HOME=($rt -replace '\\','/'); USERPROFILE=$rt } $repo $true $script
-          New-Item -ItemType Directory -Force $rt | Out-Null
-          Launch 'profile dir present'                 @{ HOME=($rt -replace '\\','/'); USERPROFILE=$rt } $repo $true $script
-          Launch 'suite vars, all of them'             @{ HOME=($rt -replace '\\','/'); USERPROFILE=$rt; CORALLINE_CONFIG=$null; CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW=$null; REMORA_ACTIVE=$null; VIRTUAL_ENV=$null; CONDA_DEFAULT_ENV=$null } $repo $true $script
-          "--- the renderer's own view when it is launched that way"
-          $probe = Join-Path $repo 'probe.ps1'
-          Set-Content -Path $probe -Encoding ascii -Value @'
-          try { $s = [Console]::OpenStandardInput(); $r = New-Object IO.StreamReader($s); $t = $r.ReadToEnd(); "stdin chars: $($t.Length)" } catch { "stdin failed: $_" }
-          try { "pipeline input items: $(@($input).Count)" } catch { "input failed: $_" }
-          try { "in redirected: $([Console]::IsInputRedirected) out encoding: $([Console]::OutputEncoding.WebName)" } catch { "console failed: $_" }
-          '@
-          $script:ShowOut = $true
-          Launch 'probe, write at once' @{} $repo $true $probe
-          $script:DelayMs = 3000
-          Launch 'probe, write after 3 s' @{} $repo $true $probe
-          Launch 'renderer, write after 3 s' @{} $repo $true $script
-          $script:DelayMs = 0
-          "--- the same payload from a file handle instead of a pipe"
-          cmd /c "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File probe.ps1 < test\sample-input.json"
-          "--- and through a cmd pipe"
-          cmd /c "type test\sample-input.json | powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File probe.ps1"
-          cmd /c "type test\sample-input.json | powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File statusline.ps1 > piped.txt"
-          "renderer through a cmd pipe: stdout=$((Get-Item piped.txt).Length)"
+      # The suites start child processes through .NET Framework's Process class,
+      # which prefixes the child's stdin with a BOM under this runner's UTF-8
+      # console code page; each suite sets a preamble-free input encoding first
+      # (see the note at its top).
       - name: test-statusline-ps1
-        # A long-form temp directory: the runner's own one is suspected to be an
-        # 8.3 short path (C:\Users\RUNNER~1\...), which the renderer's config path
-        # checks refuse.
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
         shell: cmd
         run: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-statusline-ps1.ps1
       - name: test-install-ps1
         if: ${{ !cancelled() }}
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
         shell: cmd
         run: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-install-ps1.ps1
