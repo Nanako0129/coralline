@@ -536,6 +536,12 @@ state_abs_path() {  # → _SAP; lexical absolute path, including MSYS drive form
   local p="$1" drive rest part out=""
   _SAP=""
   [ -n "$p" ] && [ "${#p}" -le 4096 ] || return 1
+  # Already canonical (what every caller after the first pass hands back): the
+  # walk below would rebuild the same string, so skip it. Anything with an empty,
+  # "." or ".." component, a backslash or a drive letter takes the walk.
+  case "$p" in
+    (/?*) case "$p/" in (*//*|*/./*|*/../*|*\\*) ;; (*) _SAP="$p"; return 0 ;; esac ;;
+  esac
   p="${p//\\//}"
   case "$p" in
     (//*) return 1 ;;
@@ -550,7 +556,8 @@ state_abs_path() {  # → _SAP; lexical absolute path, including MSYS drive form
     part="${rest%%/*}"
     case "$part" in
       (''|.) ;;
-      (..) [ -n "$out" ] || return 1; out="${out%/*}" ;;
+      # ${out%/*} leaves a single component as it is, so pop it by hand
+      (..) [ -n "$out" ] || return 1; case "$out" in (*/*) out="${out%/*}" ;; (*) out="" ;; esac ;;
       (*) out="${out:+$out/}$part" ;;
     esac
     [ "$rest" = "$part" ] && break
@@ -1622,6 +1629,12 @@ text_width() {
     s="${s#*$ESC}" ; s="${s#*m}"
   done
   plain+="$s"
+  # Printable ASCII is one column each and is most of every segment: count it in
+  # one expansion and walk only what is left (glyphs, CJK, stray bytes). Under
+  # the local LC_ALL=C one character is one byte and [[:print:]] is exactly
+  # 0x20-0x7E, on bash 3.2 too; a range would follow the collation there.
+  s="${plain//[[:print:]]/}"
+  w=$(( ${#plain} - ${#s} )) ; plain="$s"
   n=${#plain} ; i=0
   while [ "$i" -lt "$n" ]; do
     printf -v b '%d' "'${plain:i:1}" ; [ "$b" -lt 0 ] && b=$((b + 256))
