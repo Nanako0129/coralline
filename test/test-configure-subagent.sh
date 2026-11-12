@@ -207,6 +207,14 @@ printf '{"subagentStatusLine":{"type":"command","command":"CORALLINE_CONFIG=/tmp
 cp "$SETTINGS_FILE" "$KEEPD/before"
 enable_subagent_statusline >/dev/null 2>&1
 cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "enable keeps an own entry with a trailing redirection" || bad "enable keeps an own entry with a trailing redirection"
+# both words merely mentioned, the flag not following the script, another tool's
+# object without a command, or a tab where a space is expected
+_st() { printf '%s\n' "$1" > "$SETTINGS_FILE"; subagent_state; [ "$_SUB_STATE" = "$2" ] && ok "$2: $3" || bad "$2: $3 ($_SUB_STATE)"; }
+_st '{"subagentStatusLine":{"type":"command","command":"other-tool --rows # not statusline.sh --subagent2"}}' foreign 'a comment mentioning the script'
+_st '{"subagentStatusLine":{"type":"command","command":"other-tool --subagent --config /x/statusline.sh"}}' foreign 'the flag before the script'
+_st '{"subagentStatusLine":{"type":"script","path":"/opt/tool/rows"}}' foreign 'an object in another shape'
+_st '{"subagentStatusLine":{"type":"command"}}' broken 'an object with only a type'
+_st '{"subagentStatusLine":{"type":"command","command":"bash /x/statusline.sh\t--subagent"}}' ours 'a tab before the flag'
 # a quoted flag is still the flag
 printf '{"subagentStatusLine":{"type":"command","command":"bash /tmp/statusline.sh \\"--subagent\\""}}\n' > "$SETTINGS_FILE"
 subagent_state; [ "$_SUB_STATE" = ours ] && ok "ours: a quoted --subagent" || bad "ours: a quoted --subagent ($_SUB_STATE)"
@@ -239,6 +247,10 @@ for _cmd in 'bash ~/.claude/coralline/statusline.sh' 'bash \"$HOME/.claude/coral
 done
 printf '{"statusLine":{"type":"command","command":"bash %s/statusline.sh>/tmp/statusline.log"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
 settings_runs_coralline statusLine && ok "ours: a redirection right after the path" || bad "ours: a redirection right after the path"
+printf '{"statusLine":{"type":"command","command":"bash /Volumes/bk%s/statusline.sh"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
+settings_runs_coralline statusLine && bad "a longer path that ends with ours is not this install" || ok "a longer path that ends with ours is not this install"
+printf '{"statusLine":{"type":"command","command":"bash %s/statusline.sh\\n"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
+settings_runs_coralline statusLine && ok "ours: a trailing newline after the path" || bad "ours: a trailing newline after the path"
 printf '{"statusLine":{"type":"command","command":"bash %s/statusline.sh.bak.20261101"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
 settings_runs_coralline statusLine && bad "a .bak path is not this install" || ok "a .bak path is not this install"
 printf '{"statusLine":{"command":"bash %s/statusline.sh"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"

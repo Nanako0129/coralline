@@ -1362,8 +1362,11 @@ settings_merge() {  # apply jq filter $1 (plus any --arg pairs after it) to sett
 settings_runs_coralline() {  # $1=settings key; exit 0 when its command runs this install's statusline.sh
   # The path as typed, shell-quoted the way this installer writes it, or spelled
   # with ~, $HOME or ${HOME}; a wrapper around the script (an env prefix, extra flags)
-  # still counts. The path has to end there, at the end of the command or before
-  # a space, a quote or a shell operator: statusline.sh.bak-... is not it.
+  # still counts. The path has to be a word of its own: it starts the command or
+  # follows whitespace, a quote or "=", and it ends the command or is followed by
+  # whitespace, a quote or a shell operator. So statusline.sh.bak-... is not it,
+  # nor is a longer path that merely ends with ours. The command is not parsed as
+  # shell: a path that only appears in a comment or as an argument still counts.
   local raw="$TARGET_DIR/statusline.sh" quoted tilde="" var="" brace=""
   [ -s "$SETTINGS_FILE" ] || return 1
   printf -v quoted '%q' "$raw"
@@ -1372,7 +1375,9 @@ settings_runs_coralline() {  # $1=settings key; exit 0 when its command runs thi
     .[$k] as $s
     | ($s | type) == "object" and $s.type == "command" and ($s.command | type) == "string"
       and any([$raw, $quoted, $tilde, $var, $brace][] | select(length > 0);
-              . as $p | ($s.command | split($p)[1:] | any(. == "" or test("^[ \"\u0027><|;&)]"))))
+              . as $p | ($s.command | split($p)) as $parts
+              | any(range(1; $parts | length);
+                    ($parts[. - 1] | test("(^|[\\s\"\u0027=])$")) and ($parts[.] | test("^($|[\\s\"\u0027><|;&)])"))))
   ' "$SETTINGS_FILE" >/dev/null 2>&1
 }
 
@@ -1406,21 +1411,25 @@ subagent_enabled() {  # exit 0 when settings.json registers the subagent rendere
 }
 
 subagent_state() {  # → _SUB_STATE: absent | ours | broken | foreign | unreadable, in one jq call
-  # ours: a command that runs a statusline.sh with --subagent as whole words (any
-  # copy, an env prefix, a trailing redirection); enable leaves it exactly as it
-  # is and disable removes it. broken: no usable command (not an object, no
-  # command string, an empty one, or our command without type "command"); enable repairs it
-  # and disable removes it. foreign: a command that is something else, which
-  # neither touches. unreadable: settings.json does not parse; the caller goes on
+  # ours: a command that runs a script named statusline.sh with --subagent as its
+  # first argument (any copy, an env prefix, a trailing redirection). The install
+  # path is not compared, since a documented custom entry runs a copy elsewhere;
+  # the flag right after that file name is what marks the renderer. enable leaves
+  # it exactly as it is and disable removes it. broken: nothing anyone could run
+  # (not an object, an object with nothing but "type", a blank command, or our
+  # command without type "command"); enable repairs it and disable removes it.
+  # foreign: any other command, or an object in a shape that is not ours (no
+  # command but other keys); neither touches it. unreadable: settings.json does not parse; the caller goes on
   # to settings_merge, which stops with the parse error and a backup.
   _SUB_STATE=absent
   [ -s "$SETTINGS_FILE" ] || return 0
   _SUB_STATE=$(jq -r '
     .subagentStatusLine as $s
     | if $s == null then "absent"
-      elif ($s | type) != "object" or ($s.command | type) != "string" or ($s.command | test("^\\s*$")) then "broken"
-      elif ($s.command | test("(^|[/ \"\u0027])statusline\\.sh($|[ \"\u0027><|;&)])"))
-           and ($s.command | test("(^|[ \"\u0027])--subagent($|[ \"\u0027><|;&)])"))
+      elif ($s | type) != "object" then "broken"
+      elif ($s.command | type) != "string" then (if ($s | del(.type) | length) == 0 then "broken" else "foreign" end)
+      elif ($s.command | test("^\\s*$")) then "broken"
+      elif ($s.command | test("(^|[/\\s\"\u0027])statusline\\.sh[\"\u0027]?\\s+[\"\u0027]?--subagent($|[\\s\"\u0027><|;&)])"))
         then (if $s.type == "command" then "ours" else "broken" end)
       else "foreign" end
   ' "$SETTINGS_FILE" 2>/dev/null) || _SUB_STATE=unreadable
@@ -1481,7 +1490,14 @@ verify_subagent_render() {  # preview the panel-row bodies with the user's theme
 
 offer_subagent_rows() {  # opt-in toggle; default answer = current state (no change)
   local cur=n
-  subagent_enabled && cur=y
+  # The same classification the toggles act on, so the default and the no-change
+  # shortcut cannot disagree with them. Another tool owns the rows: nothing to ask.
+  subagent_state
+  if [ "$_SUB_STATE" = foreign ]; then
+    printf '%s has a subagentStatusLine from another tool; coralline leaves the subagent rows to it.\n' "$SETTINGS_FILE"
+    return 0
+  fi
+  [ "$_SUB_STATE" = ours ] && cur=y
   if yes_no "Render subagent panel rows in your coralline theme (Claude Code >= 2.1.205)" "$cur"; then
     [ "$cur" = "y" ] || enable_subagent_statusline || return 0
     verify_subagent_render

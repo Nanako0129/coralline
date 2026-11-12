@@ -274,7 +274,7 @@ Ask concise questions. If the user says "you decide", choose the defaults.
    backup-then-merge as the installer) and prints a preview. To disable it, run
    `bash ~/.claude/coralline/configure.sh --subagent-rows=off`; this removes only that
    settings entry. Neither command touches a `subagentStatusLine` that belongs to
-   another tool (a command that is not a `statusline.sh` run with `--subagent`): `on`
+   another tool (anything but a `statusline.sh` run with `--subagent` as its first argument): `on`
    stops with a message and a non-zero exit, `off` leaves it. On PowerShell-only Windows, rerun the native installer with
    `-SubagentRows on` or `-SubagentRows off`; `preserve` remains the ordinary default.
    Explain that model comes from Claude Code's per-task payload, missing
