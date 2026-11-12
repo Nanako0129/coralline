@@ -22,7 +22,7 @@ VL_FLOAT_FILE="$floatf"
 VL_FLOAT_SEGMENTS="ctx limit5h limit7d cost"
 EOF
 
-CORALLINE_CONFIG="$conf" bash "$SCRIPT" < "$SAMPLE" >/dev/null
+CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$conf" "$BASH" "$SCRIPT" < "$SAMPLE" >/dev/null
 
 check() {  # $1=description ; $2=1 if pass
   if [ "$2" = "1" ]; then printf 'ok    %s\n' "$1"; else printf 'FAIL  %s\n' "$1"; fail=1; fi
@@ -57,7 +57,7 @@ EOF
 gitinput="$tmpdir/git-input.json"
 reporoot=$(cd "$HERE/.." && pwd)
 jq --arg cwd "$reporoot" '.cwd = $cwd | .workspace.current_dir = $cwd' "$SAMPLE" > "$gitinput"
-CORALLINE_CONFIG="$gitconf" bash "$SCRIPT" < "$gitinput" >/dev/null
+CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$gitconf" "$BASH" "$SCRIPT" < "$gitinput" >/dev/null
 check "float git segment: file created"  "$([ -f "$gitfloatf" ] && echo 1 || echo 0)"
 check "float git segment: contains ⎇"   "$(grep -q '⎇' "$gitfloatf" && echo 1 || echo 0)"
 

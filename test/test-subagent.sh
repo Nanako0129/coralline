@@ -83,7 +83,7 @@ make_bar -30
 
 # ── end-to-end: --subagent protocol ──────────────────────────────────────────
 SAMPLE="$HERE/sample-subagent-input.json"
-OUT=$(CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent < "$SAMPLE")
+OUT=$(CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent < "$SAMPLE")
 
 n=$(printf '%s\n' "$OUT" | grep -c .)
 [ "$n" = 3 ] && ok "three rows out" || bad "three rows out (got $n)"
@@ -108,7 +108,7 @@ case "$c1" in (*"⬡"*) ok "row1 uses the default ctx glyph" ;; (*) bad "row1 ct
 # for the main row would otherwise keep a broken hexagon here (#47).
 GCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-subglyph.XXXXXX") || exit 1
 printf 'VL_CTX_GLYPH="◔"\n' > "$GCONF"
-GOUT=$(CORALLINE_CONFIG="$GCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
+GOUT=$(CORALLINE_CONFIG="$GCONF" "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
 rm -f "$GCONF"
 case "$GOUT" in (*"◔"*) ok "VL_CTX_GLYPH reaches the subagent ctx row" ;; (*) bad "subagent VL_CTX_GLYPH: [$GOUT]" ;; esac
 case "$GOUT" in (*"⬡"*) bad "subagent row kept the default glyph: [$GOUT]" ;; (*) ok "subagent override displaces the default" ;; esac
@@ -122,17 +122,17 @@ printf '%s\n' '{"agentType":"scout","description":"fixture"}' > "$ROLE_BASE/suba
 ROLE_PAYLOAD_TRANSCRIPT="$ROLE_TRANSCRIPT"
 if [ -n "${MSYSTEM:-}" ]; then ROLE_PAYLOAD_TRANSCRIPT=$(cygpath -w "$ROLE_TRANSCRIPT"); fi
 ROLE=$(jq -nc --arg tp "$ROLE_PAYLOAD_TRANSCRIPT" '{transcript_path:$tp,tasks:[{id:"role-1",type:"local_agent",label:"payload label",status:"running"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$ROLE" in (*"scout"*) ok "agentType recovered from task sidecar" ;; (*) bad "agentType sidecar: [$ROLE]" ;; esac
 case "$ROLE" in (*"payload label"*) ok "agentType and task label both render" ;; (*) bad "agentType label pair: [$ROLE]" ;; esac
 
 NAMED=$(jq -nc --arg tp "$ROLE_PAYLOAD_TRANSCRIPT" '{transcript_path:$tp,tasks:[{id:"role-1",name:"friendly-name",type:"local_agent",label:"payload label",status:"running"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$NAMED" in (*"friendly-name"*"scout"*"payload label"*) ok "name, agentType, and label compose" ;; (*) bad "name/role/label composition: [$NAMED]" ;; esac
 
 printf '{"agentType":"scout\033[2J"}\n' > "$ROLE_BASE/subagents/agent-role-1.meta.json"
 UNSAFE_ROLE=$(jq -nc --arg tp "$ROLE_PAYLOAD_TRANSCRIPT" '{transcript_path:$tp,tasks:[{id:"role-1",type:"local_agent",label:"safe fallback",status:"running"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$UNSAFE_ROLE" in (*"safe fallback"*) ok "unsafe sidecar role rejected" ;; (*) bad "unsafe sidecar role: [$UNSAFE_ROLE]" ;; esac
 
 c2=$(printf '%s\n' "$OUT" | sed -n 2p | jq -r .content)
@@ -151,7 +151,7 @@ case "$c3" in (*'[38;2;177;177;177m'*) ok "row3 unknown status is dim" ;; (*) ba
 # low as 1.0:1 — hence the dark ground the built-in defaults and every theme set.
 SCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-subfg.XXXXXX") || exit 1
 printf 'VL_FG_SUB_OK="4,5,6"\nVL_FG_SUB_DIM="1,2,3"\n' > "$SCONF"
-SOUT=$(CORALLINE_CONFIG="$SCONF" bash "$SCRIPT" --subagent < "$SAMPLE")
+SOUT=$(CORALLINE_CONFIG="$SCONF" "$BASH" "$SCRIPT" --subagent < "$SAMPLE")
 rm -f "$SCONF"
 s2=$(printf '%s\n' "$SOUT" | sed -n 2p | jq -r .content)   # completed
 s3=$(printf '%s\n' "$SOUT" | sed -n 3p | jq -r .content)   # queued → unknown
@@ -163,7 +163,7 @@ case "$s3" in (*'38;2;177;177;177'*) bad "VL_FG_SUB_DIM did not displace the def
 # fallback, so a user can restore the old light-pill look from their own config.
 ECONF=$(mktemp "${TMPDIR:-/tmp}/coralline-subempty.XXXXXX") || exit 1
 printf 'VL_BG_SUB_NAME=""\nVL_FG_SUB_TEXT=""\nVL_FG_SUB_HOT=""\nVL_FG_SUB_DIM=""\n' > "$ECONF"
-e3=$(CORALLINE_CONFIG="$ECONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
+e3=$(CORALLINE_CONFIG="$ECONF" "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
 rm -f "$ECONF"
 case "$e3" in (*'[38;5;245m'*) ok "empty VL_FG_SUB_DIM falls back to VL_FG_DIM" ;; (*) bad "empty-string fallback: [$e3]" ;; esac
 case "$e3" in (*'48;2;81;166;199'*) ok "empty VL_BG_SUB_NAME falls back to VL_BG_DIR" ;; (*) bad "empty bg fallback: [$e3]" ;; esac
@@ -173,7 +173,7 @@ case "$e3" in (*'48;2;81;166;199'*) ok "empty VL_BG_SUB_NAME falls back to VL_BG
 # palette has to keep subseg_name falling back to that theme's own colors.
 LCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-legacy.XXXXXX") || exit 1
 printf 'VL_BG_DIR="250,250,250"\nVL_FG_DIM="20,20,20"\n' > "$LCONF"
-l3=$(CORALLINE_CONFIG="$LCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
+l3=$(CORALLINE_CONFIG="$LCONF" "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
 rm -f "$LCONF"
 case "$l3" in (*'48;2;250;250;250'*) ok "legacy custom palette keeps its own name pill" ;; (*) bad "legacy pill: [$l3]" ;; esac
 case "$l3" in (*'38;2;20;20;20'*) ok "legacy custom palette keeps its own dim ink" ;; (*) bad "legacy dim: [$l3]" ;; esac
@@ -184,7 +184,7 @@ case "$l3" in (*'48;2;68;68;68'*) bad "legacy palette got pinned to the stock gr
 # VL_BG_DIR, and forcing the dark pill under a dark custom ink is unreadable.
 PCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-partial.XXXXXX") || exit 1
 printf 'VL_FG_OK="0,0,0"\n' > "$PCONF"          # VL_BG_DIR left at the stock value
-p2=$(CORALLINE_CONFIG="$PCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 2p | jq -r .content)
+p2=$(CORALLINE_CONFIG="$PCONF" "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 2p | jq -r .content)
 rm -f "$PCONF"
 case "$p2" in (*'48;2;68;68;68'*) bad "partial custom palette got the stock dark pill: [$p2]" ;; (*) ok "one retinted ink marks the palette custom" ;; esac
 case "$p2" in (*'48;2;81;166;199'*) ok "partial custom palette keeps the VL_BG_DIR pill" ;; (*) bad "partial pill: [$p2]" ;; esac
@@ -196,7 +196,7 @@ case "$p2" in (*'48;2;81;166;199'*) ok "partial custom palette keeps the VL_BG_D
 # lands on the theme's dark pill — claude-coral + VL_FG_OK="0,0,0" is 2.16:1.
 TCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-theme-ovr.XXXXXX") || exit 1
 printf '. %s/themes/claude-coral.conf\nVL_FG_OK="0,0,0"\n' "$HERE/.." > "$TCONF"
-t2=$(CORALLINE_CONFIG="$TCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 2p | jq -r .content)
+t2=$(CORALLINE_CONFIG="$TCONF" "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 2p | jq -r .content)
 rm -f "$TCONF"
 case "$t2" in (*'48;2;68;68;68'*) bad "retinted palette kept the theme's dark pill: [$t2]" ;; (*) ok "retinting after a sourced theme drops its panel colors" ;; esac
 case "$t2" in (*'48;2;81;166;199'*) ok "retinted palette falls back to the VL_BG_DIR pill" ;; (*) bad "sourced-theme fallback: [$t2]" ;; esac
@@ -204,7 +204,7 @@ case "$t2" in (*'48;2;81;166;199'*) ok "retinted palette falls back to the VL_BG
 # ...and an untouched sourced theme must still get its own pill.
 UCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-theme-plain.XXXXXX") || exit 1
 printf '. %s/themes/nord.conf\n' "$HERE/.." > "$UCONF"
-u3=$(CORALLINE_CONFIG="$UCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
+u3=$(CORALLINE_CONFIG="$UCONF" "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
 rm -f "$UCONF"
 case "$u3" in (*'48;2;67;76;94'*) ok "an untouched sourced theme applies its own pill" ;; (*) bad "sourced theme pill: [$u3]" ;; esac
 
@@ -214,7 +214,7 @@ case "$u3" in (*'48;2;67;76;94'*) ok "an untouched sourced theme applies its own
 # would be 1:1 where the inherited VL_BG_DIR accent was readable.
 NCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-lean.XXXXXX") || exit 1
 printf '. %s/themes/claude-coral.conf\nVL_STYLE="lean"\n' "$HERE/.." > "$NCONF"
-n1=$(CORALLINE_CONFIG="$NCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
+n1=$(CORALLINE_CONFIG="$NCONF" "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
 rm -f "$NCONF"
 case "$n1" in (*'38;2;255;255;255'*) bad "bare lean adopted the pill's running ink: [$n1]" ;; (*) ok "bare lean skips the panel candidates" ;; esac
 case "$n1" in (*'38;2;81;166;199'*) ok "bare lean keeps the segment accent" ;; (*) bad "bare lean accent: [$n1]" ;; esac
@@ -222,7 +222,7 @@ case "$n1" in (*'38;2;81;166;199'*) ok "bare lean keeps the segment accent" ;; (
 # The stock panel colors are resolved from unset, so an exported VL_FG_SUB_* from
 # the parent shell would otherwise read as a deliberate config and survive even
 # CORALLINE_CONFIG=/dev/null. Every other VL_* is assigned outright at the top.
-e2=$(VL_FG_SUB_OK="0,0,0" CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 2p | jq -r .content)
+e2=$(VL_FG_SUB_OK="0,0,0" CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 2p | jq -r .content)
 case "$e2" in (*'38;2;0;0;0'*) bad "an inherited VL_FG_SUB_OK reached the row: [$e2]" ;; (*) ok "inherited env values do not count as config" ;; esac
 
 # The bar knobs only matter in the styles that paint a bar. In pill style a
@@ -230,9 +230,9 @@ case "$e2" in (*'38;2;0;0;0'*) bad "an inherited VL_FG_SUB_OK reached the row: [
 # not disable the pill fix; in classic the same value has to disqualify it.
 PCONF2=$(mktemp "${TMPDIR:-/tmp}/coralline-inertbar.XXXXXX") || exit 1
 printf 'VL_BG_BAR="255,255,255"\n' > "$PCONF2"
-i3=$(CORALLINE_CONFIG="$PCONF2" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
+i3=$(CORALLINE_CONFIG="$PCONF2" "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
 printf 'VL_STYLE="classic"\nVL_BG_BAR="255,255,255"\n' > "$PCONF2"
-k3=$(CORALLINE_CONFIG="$PCONF2" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
+k3=$(CORALLINE_CONFIG="$PCONF2" "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 3p | jq -r .content)
 rm -f "$PCONF2"
 case "$i3" in (*'48;2;68;68;68'*) ok "an inert bar does not disable the pill fix" ;; (*) bad "inert bar: [$i3]" ;; esac
 case "$k3" in (*'[38;5;245m'*) ok "a painted custom bar still bows out" ;; (*) bad "classic custom bar: [$k3]" ;; esac
@@ -241,7 +241,7 @@ case "$k3" in (*'[38;5;245m'*) ok "a painted custom bar still bows out" ;; (*) b
 # assigns it to VL_FG_TEXT, and a status ink resolved here must not outrank it.
 FCONF=$(mktemp "${TMPDIR:-/tmp}/coralline-leanfg.XXXXXX") || exit 1
 printf 'VL_STYLE="classic"\nVL_LEAN_FG="1,2,3"\n' > "$FCONF"
-f1=$(CORALLINE_CONFIG="$FCONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
+f1=$(CORALLINE_CONFIG="$FCONF" "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
 rm -f "$FCONF"
 case "$f1" in (*'38;2;255;255;255'*) bad "VL_LEAN_FG was overridden by the running ink: [$f1]" ;; (*) ok "VL_LEAN_FG outranks the running default" ;; esac
 case "$f1" in (*'38;2;1;2;3'*) ok "VL_LEAN_FG reaches the name" ;; (*) bad "VL_LEAN_FG not applied: [$f1]" ;; esac
@@ -250,33 +250,33 @@ case "$f1" in (*'38;2;1;2;3'*) ok "VL_LEAN_FG reaches the name" ;; (*) bad "VL_L
 # back to the main palette rather than assuming the one they were solved against.
 GCONF2=$(mktemp "${TMPDIR:-/tmp}/coralline-ownbg.XXXXXX") || exit 1
 printf '. %s/themes/nord.conf\nVL_BG_SUB_NAME="190,221,229"\n' "$HERE/.." > "$GCONF2"
-g1=$(CORALLINE_CONFIG="$GCONF2" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
+g1=$(CORALLINE_CONFIG="$GCONF2" "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
 rm -f "$GCONF2"
 case "$g1" in (*'48;2;190;221;229'*'38;2;46;52;64'*) ok "a custom ground keeps nord's own VL_FG_TEXT" ;; (*) bad "custom ground ink: [$g1]" ;; esac
 
 # tokenCount without contextWindowSize → bare count, no bar
 NOBAR=$(printf '{"tasks":[{"id":"x","name":"n","type":"t","tokenCount":42000}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$NOBAR" in (*"⬡ 42.0k"*) ok "ctx degrades to bare count" ;; (*) bad "ctx degrade: [$NOBAR]" ;; esac
 case "$NOBAR" in (*"▰"*|*"%"*) bad "ctx degrade must drop bar/% : [$NOBAR]" ;; (*) ok "no bar without window size" ;; esac
 
 # 16 digits remain arithmetic-safe; oversized fields degrade without arithmetic
 SAFE16=$(printf '{"tasks":[{"id":"x","name":"n","tokenCount":"4000000000000000","contextWindowSize":"8000000000000000"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$SAFE16" in (*"50%"*) ok "16-digit ctx remains valid" ;; (*) bad "16-digit ctx: [$SAFE16]" ;; esac
 
 LEADERR="$TMPD/leading-zero.err"
 LEAD=$(printf '{"tasks":[{"id":"x","name":"n","tokenCount":"0800000000000000","contextWindowSize":"1600000000000000"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent 2> "$LEADERR")
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent 2> "$LEADERR")
 printf '%s\n' "$LEAD" | jq -e '(.id == "x") and (.content | contains("50%"))' >/dev/null 2>&1 \
   && [ ! -s "$LEADERR" ] && ok "leading-zero ctx stays decimal JSON" || bad "leading-zero ctx: [$LEAD]"
 
 BIGTOK=$(printf '{"tasks":[{"id":"x","name":"n","tokenCount":"10000000000000000","contextWindowSize":200000}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$BIGTOK" in (*"⬡"*|*"%"*) bad "17-digit token must hide ctx: [$BIGTOK]" ;; (*) ok "17-digit token hides ctx" ;; esac
 
 BIGWIN=$(printf '{"tasks":[{"id":"x","name":"n","tokenCount":42000,"contextWindowSize":"10000000000000000"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$BIGWIN" in (*"⬡ 42.0k"*) ok "oversized window degrades to bare count" ;; (*) bad "oversized window: [$BIGWIN]" ;; esac
 case "$BIGWIN" in (*"▰"*|*"%"*) bad "oversized window must drop bar/%: [$BIGWIN]" ;; (*) ok "oversized window drops bar" ;; esac
 
@@ -284,7 +284,7 @@ case "$BIGWIN" in (*"▰"*|*"%"*) bad "oversized window must drop bar/%: [$BIGWI
 # make_bar count upward from a huge negative filled value.
 ADV_OUT="$TMPD/adversarial.jsonl"
 ( printf '{"tasks":[{"id":"x","name":"n","tokenCount":"4601686018427387904","contextWindowSize":1}]}' \
-    | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent > "$ADV_OUT" ) & wpid=$!
+    | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent > "$ADV_OUT" ) & wpid=$!
 ( sleep 5; kill -9 "$wpid" 2>/dev/null ) & kpid=$!
 if wait "$wpid" 2>/dev/null; then
   kill "$kpid" 2>/dev/null; wait "$kpid" 2>/dev/null
@@ -297,22 +297,22 @@ fi
 
 # digit-bearing garbage startTime → elapsed hidden, not misparsed as epoch
 BADT=$(printf '{"tasks":[{"id":"x","name":"n","type":"t","startTime":"abc123xyz"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$BADT" in (*"⧖"*) bad "garbage startTime must hide elapsed: [$BADT]" ;; (*) ok "garbage startTime hides elapsed" ;; esac
 
 BADDATE=$(printf '{"tasks":[{"id":"x","name":"n","type":"t","startTime":"2026-02-31T00:00:00Z"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$BADDATE" in (*"⧖"*) bad "invalid calendar date must hide elapsed: [$BADDATE]" ;; (*) ok "invalid calendar date hides elapsed" ;; esac
 
 # a crafted label must not smuggle escape sequences into the terminal
 INJ=$(printf '{"tasks":[{"id":"x","type":"local_agent","label":"A\\u001b[2JB"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$INJ" in (*$'\033'"[2J"*) bad "label ESC injection reaches terminal" ;; (*) ok "label ESC injection stripped" ;; esac
 case "$INJ" in (*"A[2JB"*) ok "label text survives sans control bytes" ;; (*) bad "label text mangled: [$INJ]" ;; esac
 
 # C1 CSI (U+009B) must be scrubbed even in a byte-oriented C locale
 C1=$(printf '{"tasks":[{"id":"x","type":"local_agent","label":"A\\u009b2JB"}]}' \
-  | LC_ALL=C LANG=C CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent \
+  | LC_ALL=C LANG=C CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent \
   | LC_ALL=C LANG=C jq -r .content)
 C1_CSI=$'\302\233'
 case "$C1" in (*"$C1_CSI"*) bad "label C1 CSI injection reaches terminal" ;; (*) ok "label C1 CSI injection stripped" ;; esac
@@ -320,13 +320,13 @@ case "$C1" in (*"A2JB"*) ok "C1 label text survives sans control bytes" ;; (*) b
 
 # columns is metadata, not a row source; framing bytes there must emit no rows
 COLS=$(printf '{"columns":"120\\nforged\\u001fforged-row\\u001f\\u001f\\u001ft\\u001frunning\\u001f\\u001f\\u001f\\u001f","tasks":[]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent)
 [ -z "$COLS" ] && ok "hostile columns cannot fabricate a row" || bad "columns framing: [$COLS]"
 
 # a literal newline in an untrusted field must not split the field stream and
 # fabricate an extra row whose id the attacker controls
 NL=$(printf '{"tasks":[{"id":"task-A","name":"evil\\nsplit","type":"t","status":"running","model":"claude-fable-5","contextWindowSize":200000,"tokenCount":1000},{"id":"task-B","name":"real","type":"t"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent)
 nn=$(printf '%s\n' "$NL" | grep -c .)
 [ "$nn" = 2 ] && ok "newline in name cannot fabricate a row" || bad "newline framing: got $nn rows"
 nids=$(printf '%s\n' "$NL" | jq -j '.id, " "')
@@ -334,23 +334,23 @@ nids=$(printf '%s\n' "$NL" | jq -j '.id, " "')
 
 # an embedded 0x1f (the join separator) must not shift the fields that follow it
 US=$(printf '{"tasks":[{"id":"x","name":"evil\\u001fname","type":"t","status":"running","model":"claude-fable-5","contextWindowSize":200000,"tokenCount":42000}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$US" in (*"Fable 5"*) ok "0x1f cannot shift fields" ;; (*) bad "0x1f field shift: [$US]" ;; esac
 
 # absent status is "unknown" → dim, not the running text color (per README table)
 NOST=$(printf '{"tasks":[{"id":"x","name":"nostatus","type":"t"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$NOST" in (*'[38;2;177;177;177m'*) ok "missing status renders dim" ;; (*) bad "missing status dim: [$NOST]" ;; esac
 
 # description (documented task field) beats type in the display-name fallback
 DESC=$(printf '{"tasks":[{"id":"x","type":"local_agent","description":"Summarize the diff"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$DESC" in (*"Summarize the diff"*) ok "description fallback used" ;; (*) bad "description fallback: [$DESC]" ;; esac
 case "$DESC" in (*"local_agent"*) bad "type shown despite description: [$DESC]" ;; (*) ok "type hidden when description present" ;; esac
 
 # tz-offset ISO startTime → elapsed hidden by design (stays fork-free per row)
 TZT=$(printf '{"tasks":[{"id":"x","name":"n","type":"t","startTime":"2026-07-15T04:00:00+02:00"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent | jq -r .content)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent | jq -r .content)
 case "$TZT" in (*"⧖"*) bad "tz-offset startTime must hide elapsed: [$TZT]" ;; (*) ok "tz-offset startTime hides elapsed" ;; esac
 
 # effort is opt-in and comes from the task transcript's first assistant line,
@@ -376,7 +376,7 @@ printf 'VL_SUB_SEGMENTS="name model effort"\n' > "$CONF"
 EFF=$(jq -nc --arg tp "$EB_TP" '{transcript_path:$tp,tasks:((["e-med","e-late","e-haiku","e-early","e-partial","e-deep","e-bad","e-none"]
   | map({id:., name:., type:"local_agent", model:"claude-sonnet-5", effort:"xhigh"}))
   + [{id:"e-remote", name:"e-remote", type:"remote_agent", effort:"low"}])}' \
-  | CORALLINE_CONFIG="$CONF" bash "$SCRIPT" --subagent)
+  | CORALLINE_CONFIG="$CONF" "$BASH" "$SCRIPT" --subagent)
 rm -f "$CONF"
 row() { printf '%s\n' "$EFF" | jq -r --arg i "$1" 'select(.id==$i).content'; }
 e_med=$(row e-med)
@@ -393,7 +393,7 @@ done
 # VL_SUB_SEGMENTS is honored
 CONF=$(mktemp "${TMPDIR:-/tmp}/coralline-conf.XXXXXX")
 printf 'VL_SUB_SEGMENTS="model"\n' > "$CONF"
-ONLYM=$(CORALLINE_CONFIG="$CONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
+ONLYM=$(CORALLINE_CONFIG="$CONF" "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
 rm -f "$CONF"
 case "$ONLYM" in (*"Haiku 4.5"*) ok "VL_SUB_SEGMENTS honored (model shown)" ;; (*) bad "VL_SUB_SEGMENTS: [$ONLYM]" ;; esac
 case "$ONLYM" in (*"⬡"*|*"Explore"*) bad "VL_SUB_SEGMENTS must drop others: [$ONLYM]" ;; (*) ok "VL_SUB_SEGMENTS drops others" ;; esac
@@ -401,25 +401,25 @@ case "$ONLYM" in (*"⬡"*|*"Explore"*) bad "VL_SUB_SEGMENTS must drop others: [$
 # ASCII mode drops Nerd/gauge glyphs but stays valid
 CONF=$(mktemp "${TMPDIR:-/tmp}/coralline-conf.XXXXXX")
 printf 'VL_ASCII=1\n' > "$CONF"
-ASC=$(CORALLINE_CONFIG="$CONF" bash "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
+ASC=$(CORALLINE_CONFIG="$CONF" "$BASH" "$SCRIPT" --subagent < "$SAMPLE" | sed -n 1p | jq -r .content)
 rm -f "$CONF"
 case "$ASC" in (*"▰"*) bad "ASCII mode still emits ▰: [$ASC]" ;; (*) ok "ASCII bar substituted" ;; esac
 
 # Claude Code delivers concatenated snapshots without newlines; each doc is a
 # full panel snapshot, so only the LAST one may render (no stale/duplicate ids)
 CAT=$(printf '{"tasks":[{"id":"A","name":"OLD","type":"t"}]}{"tasks":[{"id":"A","name":"NEW","type":"t"},{"id":"B","name":"fresh","type":"t"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent)
+  | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent)
 cn=$(printf '%s\n' "$CAT" | grep -c .)
 [ "$cn" = 2 ] && ok "concatenated payloads render last snapshot only" || bad "concatenated: got $cn rows"
 case "$CAT" in (*OLD*) bad "stale snapshot leaked: [$CAT]" ;; (*) ok "stale snapshot dropped" ;; esac
 case "$CAT" in (*NEW*) ok "fresh snapshot rendered" ;; (*) bad "fresh snapshot missing: [$CAT]" ;; esac
 
 # malformed stdin → empty output, exit 0
-ERR=$(printf 'not json' | CORALLINE_CONFIG=/dev/null bash "$SCRIPT" --subagent; echo "rc=$?")
+ERR=$(printf 'not json' | CORALLINE_CONFIG=/dev/null "$BASH" "$SCRIPT" --subagent; echo "rc=$?")
 [ "$ERR" = "rc=0" ] && ok "bad input: silent, exit 0" || bad "bad input: [$ERR]"
 
 # main mode untouched by the flag machinery
-MAIN=$(CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG=/dev/null COLUMNS=120 bash "$SCRIPT" < "$HERE/sample-input.json")
+MAIN=$(CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG=/dev/null COLUMNS=120 "$BASH" "$SCRIPT" < "$HERE/sample-input.json")
 case "$MAIN" in (*"Fable 5"*) ok "main mode still renders" ;; (*) bad "main mode" ;; esac
 
 exit "$fail"
