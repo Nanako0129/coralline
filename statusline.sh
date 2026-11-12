@@ -1473,11 +1473,12 @@ json_escape() {
 
 # Resolved model ID → short display name → _MS. The subagent panel's per-task
 # model is an ID (claude-haiku-4-5-20251001), not the main statusline's
-# display_name. Strip claude- and a trailing date stamp, dot the version, map
-# the known families (bash 3.2 has no ${var^}). Anything unrecognized passes
-# through verbatim — never wrong, merely verbose.
+# display_name. Strip claude- and a trailing date stamp, dot the version and
+# capitalize the family: any family of plain lowercase letters, so a new one
+# (fable, then mythos) needs no entry here. bash 3.2 has no ${var^}, hence the
+# lookup. Anything else passes through verbatim — never wrong, merely verbose.
 model_short() {
-  local s="$1" fam ver
+  local s="$1" fam ver lo=abcdefghijklmnopqrstuvwxyz up=ABCDEFGHIJKLMNOPQRSTUVWXYZ i
   _MS="$1"
   case "$s" in (claude-*) ;; (*) return 0 ;; esac
   s="${s#claude-}"
@@ -1485,14 +1486,9 @@ model_short() {
   case "$s" in (*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) s="${s%-*}" ;; esac
   fam="${s%%-*}" ; ver="${s#"$fam"}" ; ver="${ver#-}"
   case "$ver" in (''|*[!0-9-]*) return 0 ;; esac
-  case "$fam" in
-    (fable)  fam="Fable"  ;;
-    (opus)   fam="Opus"   ;;
-    (sonnet) fam="Sonnet" ;;
-    (haiku)  fam="Haiku"  ;;
-    (*) return 0 ;;
-  esac
-  _MS="$fam ${ver//-/.}"
+  case "$fam" in (''|*[!abcdefghijklmnopqrstuvwxyz]*) return 0 ;; esac
+  i="${lo%%"${fam:0:1}"*}"
+  _MS="${up:${#i}:1}${fam:1} ${ver//-/.}"
 }
 
 # ── Git state (single subprocess, parsed once, used by git/stash segments) ──

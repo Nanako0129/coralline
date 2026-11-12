@@ -1413,13 +1413,10 @@ function Get-SubagentModelShort([string]$Model) {
     $family = $value.Substring(0, $dash)
     $version = $value.Substring($dash + 1)
     if ($version -notmatch '\A[0-9-]+\z') { return $Model }
-    switch -CaseSensitive ($family) {
-        'fable' { $family = 'Fable'; break }
-        'opus' { $family = 'Opus'; break }
-        'sonnet' { $family = 'Sonnet'; break }
-        'haiku' { $family = 'Haiku'; break }
-        default { return $Model }
-    }
+    # Any family of plain lowercase letters is capitalized, so a new one (fable,
+    # then mythos) needs no entry here; mirrors model_short in statusline.sh.
+    if ($family -cnotmatch '\A[a-z]+\z') { return $Model }
+    $family = $family.Substring(0, 1).ToUpperInvariant() + $family.Substring(1)
     return $family + ' ' + $version.Replace('-', '.')
 }
 

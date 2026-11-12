@@ -51,8 +51,13 @@ ms claude-sonnet-5                "Sonnet 5"
 ms claude-haiku-4-5-20251001      "Haiku 4.5"
 ms 'claude-opus-5-5[1m]'           "Opus 5.5"         # context suffix
 ms 'claude-sonnet-5[1m]'           "Sonnet 5"
-ms 'claude-foo-2[1m]'              "claude-foo-2[1m]" # unknown family stays raw
-ms claude-foo-2                   "claude-foo-2"      # unknown family → raw id
+ms claude-mythos-5-2              "Mythos 5.2"        # a family with no entry of its own
+ms 'claude-mythos-5-2[1m]'         "Mythos 5.2"
+ms claude-foo-2                   "Foo 2"             # any lowercase family is capitalized
+ms claude-3-5-sonnet-20241022     "claude-3-5-sonnet-20241022" # old id order: family is not letters → raw id
+ms claude-Foo-2                   "claude-Foo-2"      # not plain lowercase → raw id
+ms claude-fo_o-2                  "claude-fo_o-2"
+ms claude-opus                    "claude-opus"       # no version → raw id
 ms gpt-oss-120b                   "gpt-oss-120b"      # non-claude → raw id
 ms claude-fable-next              "claude-fable-next" # non-numeric version → raw id
 
