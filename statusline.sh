@@ -888,7 +888,7 @@ state_limit_entry_ok() {  # $1=base $2=root $3=path $4=name
 }
 
 rl_sample() {  # $1=canonical base $2=pct_milli $3=reset
-  local base="$1" pct="$2" rst="$3" root name path
+  local base="$1" pct="$2" rst="$3" root name path other LC_ALL=C
   [ "${_STATE_MUTATE:-0}" = 1 ] || return 0
   if [ "$base" = "${_SL5_BASE:-}" ]; then
     [ "${_STATE_RL5_SAFE:-0}" = 1 ] && [ "${_CUR5_VALID:-0}" = 1 ] \
@@ -913,6 +913,14 @@ rl_sample() {  # $1=canonical base $2=pct_milli $3=reset
     state_limit_entry_ok "$base" "$root" "$path" "$name" >/dev/null 2>&1 || true
     return 0
   fi
+  # An entry below the latest one is removed by rl_latest's GC in this same
+  # render, and since a session's own reading always wins its own window nobody
+  # reads it: skip it instead of paying a mkdir and an rmdir on every render.
+  # Names are fixed-width digits, so the string order is the numeric one.
+  for other in "$root"/*; do
+    other="${other##*/}"
+    [[ "$other" > "$name" ]] && state_limit_name "$other" && return 0
+  done
   state_paths_revalidate || return 0
   state_no_symlink_path "$path" && [ "$_SNP" = "$path" ] && [ ! -e "$path" ] && [ ! -L "$path" ] || return 0
   mkdir "$path" 2>/dev/null || true
@@ -1150,6 +1158,11 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
       if (curvalid) add_obs(crst + 0, csamp + 0, cpct + 0)
       maxrst = 0
       for (i = 1; i <= n; i++) if (rs[i] > maxrst) maxrst = rs[i]
+      # Our own reading names the window. A later reset in the store belongs to
+      # another account (a relay fallback account or a /login switch in this
+      # config dir): one account has no later window while ours is still open.
+      # (No apostrophes here: this comment sits inside the single-quoted awk.)
+      if (curvalid) maxrst = crst + 0
       if (maxrst <= 0) { print "warming 0 0 0 0"; exit }
       m = 0
       for (i = 1; i <= n; i++) if (rs[i] == maxrst) {
@@ -1276,6 +1289,9 @@ burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated esti
   # renders warming through the TSV and an adopted active estimate through
   # the cache.
   [ "$rst" -le $(( NOW + RL_MAX_5H )) ] || return 1
+  # A published estimate for another window (the leader's own, when it is on
+  # another account) is not ours to adopt; the caller then parses for itself.
+  [ "$rst" = "${_CUR_BURN_RST:-0}" ] || return 1
   case "${s:-}" in (active|idle|warming) ;; (*) return 1 ;; esac
   # Canonical form, the same rule state_epoch applies: a leading zero is
   # rejected rather than tolerated, because these three fields reach bash
