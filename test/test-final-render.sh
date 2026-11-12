@@ -98,6 +98,10 @@ printf 'y\n' | run_install "$hl" "$hl/.claude/coralline.conf" >/dev/null
 [ -L "$hl/.claude/coralline.conf" ] && check "a symlinked config is still a symlink" 1 || check "a symlinked config is still a symlink" 0
 grep -q 'MY_HAND_KNOB' "$hl/dotfiles/coralline.conf" && check "the link target holds the new config" 0 || check "the link target holds the new config" 1
 set -- "$hl/dotfiles"/*.new.*; [ -e "$1" ] && check "no temp file left beside the target" 0 || check "no temp file left beside the target" 1
+# a dangling link into an existing directory is refused too: nothing is created
+rm -f "$hl/.claude/coralline.conf"; ln -s "$hl/dotfiles/absent.conf" "$hl/.claude/coralline.conf"
+run_install "$hl" "$hl/.claude/coralline.conf" >/dev/null; rca=$?
+[ "$rca" -ne 0 ] && [ ! -e "$hl/dotfiles/absent.conf" ] && check "a dangling link into an existing directory creates nothing" 1 || check "a dangling link into an existing directory creates nothing" 0
 # a dangling link whose target directory does not exist: fail loudly, leak nothing
 rm -f "$hl/.claude/coralline.conf"; ln -s "$hl/nowhere/coralline.conf" "$hl/.claude/coralline.conf"
 before=$(ls "${TMPDIR:-/tmp}" 2>/dev/null | grep -c '^coralline-config\.')

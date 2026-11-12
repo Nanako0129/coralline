@@ -1299,7 +1299,9 @@ publish_file() {  # $1=finished temp file $2=the user's file; non-zero on failur
   if [ -L "$dst" ]; then
     link_target "$dst" || { rm -f "$1"; return 1; }
     dst="$_LT"
-    [ ! -d "$dst" ] && [ -d "$(dirname "$dst")" ] || { rm -f "$1"; return 1; }
+    # the link has to end at an existing regular file: a dangling link or one to
+    # a directory is refused before anything is written
+    [ -f "$dst" ] || { rm -f "$1"; return 1; }
     beside="$dst.new.$$"
     if cp "$1" "$beside" && mv -f "$beside" "$dst"; then rm -f "$1"; return 0; fi
     rm -f "$beside" "$1"
@@ -1321,6 +1323,9 @@ install_one() {  # $1=source $2=destination $3=x to make it executable
   local src="$1" dst="$2" dir tmp
   dir=$(dirname "$dst"); tmp="$dst.new.$$"
   mkdir -p "$dir" || die "could not create $dir"
+  # A directory where the file belongs (or a link to one) would swallow the copy:
+  # mv and cp both put the file inside it and report success.
+  [ ! -d "$dst" ] || die "$dst is a directory, expected a file"
   if [ -L "$dst" ] || [ ! -w "$dir" ]; then
     cp "$src" "$dst" || die "could not write $dst (check permissions on the existing file)"
     [ "${3:-}" != x ] || chmod +x "$dst" 2>/dev/null

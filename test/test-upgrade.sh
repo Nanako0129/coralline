@@ -225,6 +225,14 @@ if [ "$IS_ROOT" != "1" ]; then
   [ ! -e "$home7/settings.json" ] && check "E7 unwritable file: settings.json not registered" 1 || check "E7 unwritable file: settings.json not registered" 0
   grep -q 'seg_burn' "$home7/coralline/statusline.sh" && check "E7 unwritable file: the old runtime is still in place" 0 || check "E7 unwritable file: the old runtime is still in place" 1
 fi
+# (E8) a directory where statusline.sh belongs stops the install before
+# settings.json: mv and cp would both put the file inside it and report success.
+home8="$tmp/h8/.claude"; mkdir -p "$home8/coralline/statusline.sh"
+out8=$(CORALLINE_HOME="$home8/coralline" CLAUDE_SETTINGS="$home8/settings.json" "$BASH" "$CONF" --install-only 2>&1); rc8=$?
+[ "$rc8" != "0" ] && check "E8 directory at the destination: install fails loudly" 1 || check "E8 directory at the destination: install fails loudly" 0
+[ ! -e "$home8/settings.json" ] && check "E8 directory at the destination: settings.json not registered" 1 || check "E8 directory at the destination: settings.json not registered" 0
+[ -z "$(ls -A "$home8/coralline/statusline.sh")" ] && check "E8 directory at the destination: nothing put inside it" 1 || check "E8 directory at the destination: nothing put inside it" 0
+
 # A normal upgrade leaves no temp file behind and replaces the runtime by rename.
 set -- "$home"/coralline/*.new.* "$home"/coralline/themes/*.new.*; [ -e "$1" ] || [ -e "$2" ] && check "upgrade leaves no temp file" 0 || check "upgrade leaves no temp file" 1
 
