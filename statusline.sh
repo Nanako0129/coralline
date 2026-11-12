@@ -1703,7 +1703,11 @@ seg_dir() {  # current directory, long paths collapsed to ~/a/…/z
   local tilde='~'; local short="${cwd/#"$HOME"/$tilde}" n last
   # set -f: the split must not glob, or a directory named "a*" is replaced by
   # whatever matches it in the render's working directory
-  local IFS='/'; set -f; set -- $short; set +f; n=$#
+  local IFS='/' nog=0
+  case $- in (*f*) ;; (*) set -f; nog=1 ;; esac
+  set -- $short
+  [ "$nog" = 0 ] || set +f
+  n=$#
   if [ "$n" -gt "$VL_PATH_DEPTH" ]; then
     eval "last=\${$n}"
     short="$1/$2/…/$last"
@@ -2404,9 +2408,15 @@ subseg_elapsed() {  # wall-clock since startTime; hidden when unparseable
 
 # ── Render ───────────────────────────────────────────────────────────────────
 build_segments() {
-  local s
+  local s words nog=0
   SEG_BGS=() ; SEG_TXT=() ; SEG_LEN=()
-  for s in $1; do
+  # Split without globbing, as words_of does for the scan: a name such as "g?t"
+  # must not turn into a file that happens to match it. noglob is put back as it
+  # was before the segments run (a coralline.conf may have set it).
+  case $- in (*f*) ;; (*) set -f; nog=1 ;; esac
+  words=($1)
+  [ "$nog" = 0 ] || set +f
+  for s in ${words[@]+"${words[@]}"}; do
     command -v "seg_$s" >/dev/null 2>&1 && "seg_$s"
   done
 }
@@ -2608,15 +2618,18 @@ sid="${sid%$'\r'}"  # native Windows jq writes CRLF; the last field keeps the CR
 # The lists are split on any whitespace when they are drawn (build_segments), so
 # the scan strings are normalized the same way: with a tab or a newline between
 # two names, `*" git "*` never matched, the segment was drawn and its sampler
-# never ran (git vanished, burn showed its idle mark).
-seg_words() {  # $1=segment lists → _SW: the names, single-spaced, with a space at each end
-  local IFS=$' \t\n'
-  set -f; set -- $1; set +f
+# never ran (git vanished, burn showed its idle mark). Not named seg_*: the
+# wizard and the upgrade report list every seg_* function as a segment.
+words_of() {  # $1=segment lists → _SW: the names, single-spaced, with a space at each end
+  local IFS=$' \t\n' nog=0
+  case $- in (*f*) ;; (*) set -f; nog=1 ;; esac
+  set -- $1
+  [ "$nog" = 0 ] || set +f
   _SW=" $* "
 }
-seg_words "$VL_HEAD_SEGMENTS $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3"; _SEG_ROWS="$_SW"
+words_of "$VL_HEAD_SEGMENTS $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3"; _SEG_ROWS="$_SW"
 _SEG_SCAN="$_SEG_ROWS"
-if [ "$VL_FLOAT" = "1" ]; then seg_words "$_SEG_ROWS $VL_FLOAT_SEGMENTS"; _SEG_SCAN="$_SW"; fi
+if [ "$VL_FLOAT" = "1" ]; then words_of "$VL_FLOAT_SEGMENTS"; _SEG_SCAN="$_SEG_ROWS${_SW# }"; fi
 case "$_SEG_SCAN" in *" git "*|*" stash "*|*" project "*) read_git ;; esac
 case "$_SEG_SCAN" in (*" relay "*) relay_sample ;; esac
 
@@ -2675,8 +2688,13 @@ emit_float() {
     line="${line:+$line$VL_FLOAT_SEP}$s"
   done
   VL_NOCOLOR="$_nc" ; BOLD="$_b" ; NORM="$_n" ; R="$_r"
-  # No dirname fork, and mkdir only for a directory that is not there yet: this
-  # runs on every render. A write that fails stays off the render's stderr.
+  # No dirname fork, and no mkdir for a directory that exists: this runs on every
+  # render. (A directory that cannot be created still costs a failed mkdir each
+  # time.) A path that names no file (empty, a trailing slash, an existing
+  # directory, where mv would drop the temp file inside it) is skipped. A write
+  # that fails stays off the render's stderr.
+  case "$VL_FLOAT_FILE" in (''|*/) return 0 ;; esac
+  [ ! -d "$VL_FLOAT_FILE" ] || return 0
   case "$VL_FLOAT_FILE" in (*/*) dir="${VL_FLOAT_FILE%/*}"; [ -n "$dir" ] || dir=/ ;; (*) dir=. ;; esac
   [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null || return 0
   tmp="$dir/.float.tmp.$$"
