@@ -23,7 +23,18 @@ $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 # CI runners) a BOM therefore reaches the child BEFORE anything this suite writes,
 # and the renderer rightly refuses a payload that does not start with "{". An
 # encoding without a preamble avoids it; Claude Code writes through its own pipe.
-try { [Console]::InputEncoding = $Utf8NoBom } catch { }
+# The console is shared with the terminal that started the suite, so the original
+# encoding is put back when PowerShell exits. If the preamble is still there after
+# the assignment (no console to set it on), say so: every child would get the BOM
+# and thousands of cases would fail with a clock-only render.
+$script:OriginalInputEncoding = $null
+try { $script:OriginalInputEncoding = [Console]::InputEncoding; [Console]::InputEncoding = $Utf8NoBom } catch { }
+if ($null -ne $script:OriginalInputEncoding) {
+    try { [void](Register-EngineEvent -SourceIdentifier PowerShell.Exiting -MessageData $script:OriginalInputEncoding -Action { try { [Console]::InputEncoding = $Event.MessageData } catch { } }) } catch { }
+}
+try {
+    if ([Console]::InputEncoding.GetPreamble().Length -ne 0) { [Console]::Out.WriteLine('WARN  console input encoding still has a preamble; child processes will receive a BOM before their stdin payload') }
+} catch { }
 $StrictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
 $Invariant = [System.Globalization.CultureInfo]::InvariantCulture
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ('coralline-win01-test-' + [guid]::NewGuid().ToString('N'))
@@ -84,10 +95,8 @@ function Invoke-CapturedProcess(
         $outTask = $process.StandardOutput.BaseStream.CopyToAsync($stdout)
         $errTask = $process.StandardError.BaseStream.CopyToAsync($stderr)
         if ($null -eq $InputBytes) { $InputBytes = $Utf8NoBom.GetBytes($InputText) }
-        # Bytes go to the raw stream so no text encoding touches the payload (see
-        # the [Console]::InputEncoding note at the top for the writer's preamble).
         if ($InputBytes.Length -gt 0) { $process.StandardInput.BaseStream.Write($InputBytes, 0, $InputBytes.Length) }
-        $process.StandardInput.BaseStream.Close()
+        $process.StandardInput.Close()
         $timedOut = -not $process.WaitForExit($TimeoutMs)
         if ($timedOut) {
             try { $process.Kill() } catch { }
@@ -156,7 +165,7 @@ function Start-CapturedProcessAsync(
     $errTask = $process.StandardError.BaseStream.CopyToAsync($stderr)
     $inputBytes = $Utf8NoBom.GetBytes($InputText)
     if ($inputBytes.Length -gt 0) { $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length) }
-    $process.StandardInput.BaseStream.Close()
+    $process.StandardInput.Close()
     return [pscustomobject]@{ Process=$process; Stdout=$stdout; Stderr=$stderr; OutTask=$outTask; ErrTask=$errTask }
 }
 
