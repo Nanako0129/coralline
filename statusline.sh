@@ -1026,6 +1026,14 @@ rl_choose() {  # $1=5|7; this session's valid reading wins; the store fills in o
   [ "$which" = 5 ] && [ "${_CUR5_NONE:-0}" = 1 ] && valid=0
   if [ "$cvalid" = 1 ]; then
     valid=1; rst=$crst; pct=$cpct
+  elif [ "$which" = 5 ] && [ -n "${own5_pct:-}" ]; then
+    # No payload reading yet (a session just started or resumed), but the relay
+    # has this session's own windows on file: they beat the shared store, which
+    # cannot say whose its entries are. They also beat _CUR5_NONE: a 5h line
+    # with a reset still ahead is a window this session was answered in.
+    valid=1; rst=$own5_rst; pct=$(( own5_pct * 1000 ))
+  elif [ "$which" = 7 ] && [ -n "${own7_pct:-}" ]; then
+    valid=1; rst=$own7_rst; pct=$(( own7_pct * 1000 ))
   fi
   if [ "$which" = 5 ]; then _STATE_RL5_VALID=$valid; _STATE_RL5_RST=$rst; _STATE_RL5_PCT=$pct
   else _STATE_RL7_VALID=$valid; _STATE_RL7_RST=$rst; _STATE_RL7_PCT=$pct; fi
@@ -2029,6 +2037,7 @@ limit_elapsed_ok() {  # $1=canonical pct $2=parsed reset $3=max elapsed age; set
 # Both windows use the same rule.
 seg_limit5h() {  # 5h rate-limit gauge with reset countdown
   local p="$fh_pct" r="$fh_rst" m=""
+  [ -n "$p" ] || { p="${own5_pct:-}"; r="${own5_rst:-}"; }   # no payload reading: the relay's file for this session
   if [ "$VL_LIMIT_SYNC" = 1 ]; then
     limit_elapsed_ok "${_CUR5_CANON:-}" "${_CUR5_RST:-0}" "$RL_MAX_5H"
     if [ "${_STATE_RL5_VALID:-0}" = 1 ]; then m=$_STATE_RL5_PCT; r=$_STATE_RL5_RST
@@ -2040,6 +2049,7 @@ seg_limit5h() {  # 5h rate-limit gauge with reset countdown
 }
 seg_limit7d() {  # 7d rate-limit gauge with reset countdown
   local p="$wd_pct" r="$wd_rst" m=""
+  [ -n "$p" ] || { p="${own7_pct:-}"; r="${own7_rst:-}"; }
   if [ "$VL_LIMIT_SYNC" = 1 ]; then
     limit_elapsed_ok "${_CUR7_CANON:-}" "${_CUR7_RST:-0}" "$RL_MAX_7D"
     if [ "${_STATE_RL7_VALID:-0}" = 1 ]; then m=$_STATE_RL7_PCT; r=$_STATE_RL7_RST
@@ -2205,31 +2215,35 @@ seg_relay() {  # model-relay: which model this session talks to (claude, a pinne
   push "${VL_BG_RELAY:-$VL_BG_STYLE}" "${_FG} ↪ ${_TR}${note} "
 }
 
-# The weekly window of the model with its own limit (7d_oi, "Fable" in /usage).
-# Claude Code's payload carries only the 5h and 7d windows; model-relay's router
-# writes what each answer's rate-limit headers report to
+# Usage windows from model-relay, per session. Claude Code's payload carries only
+# the 5h and 7d windows and not the weekly window of the model with its own limit
+# (7d_oi, "Fable" in /usage); model-relay's router writes what each answer's
+# rate-limit headers report to
 # <relay config dir>/model-relay-status/<session_id>.limits, one line
 # "window<TAB>percent<TAB>reset" per window. Read with the builtin, so no fork. The
-# file is this session's own, so it never shows another account's window. A line
-# whose reset has passed is skipped: the router leaves an expired file as it is.
+# file is this session's own, so it never holds another account's window. A line
+# whose reset has passed is skipped (the router leaves an expired file as it is),
+# and so is one further out than its window can be.
 # MODEL_RELAY_CONFIG_DIR is where a second account's window finds the relay.
-fable_sample() {  # → fable_pct, fable_rst ("" = none)
-  fable_pct="" fable_rst=""
+relay_limits_sample() {  # → fable_pct/rst, own5_pct/rst, own7_pct/rst ("" = none)
+  fable_pct="" fable_rst="" own5_pct="" own5_rst="" own7_pct="" own7_rst=""
   case "$sid" in (''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) return 0 ;; esac
-  local f="${MODEL_RELAY_CONFIG_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/model-relay-status/$sid.limits" w p r n=0
+  local f="${MODEL_RELAY_CONFIG_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/model-relay-status/$sid.limits" w p r n=0 max
   [ -f "$f" ] || return 0                   # -f: a FIFO here must not block
   while [ "$n" -lt 16 ] && IFS=$'\t' read -r w p r; do
     n=$(( n + 1 ))
-    [ "$w" = 7d_oi ] || continue
+    case "$w" in (5h) max=$RL_MAX_5H ;; (7d|7d_oi) max=$RL_MAX_7D ;; (*) continue ;; esac
     r="${r%$'\r'}"
-    case "$p" in (''|*[!0123456789]*|??????*) return 0 ;; esac
-    case "$r" in (''|*[!0123456789]*|????????????*) return 0 ;; esac
+    case "$p" in (''|*[!0123456789]*|??????*) continue ;; esac
+    case "$r" in (''|*[!0123456789]*|????????????*) continue ;; esac
     # 10#: a leading zero would be read as octal and abort the render on "09"
     p=$(( 10#$p )) r=$(( 10#$r ))
-    # a weekly window resets within 8 days; anything further out is not one
-    [ "$r" -gt "$NOW" ] && [ "$r" -le $(( NOW + 691200 )) ] || return 0
-    fable_pct=$p fable_rst=$r
-    return 0
+    [ "$r" -gt "$NOW" ] && [ "$r" -le $(( NOW + max )) ] || continue
+    case "$w" in
+      (5h)    own5_pct=$p own5_rst=$r ;;
+      (7d)    own7_pct=$p own7_rst=$r ;;
+      (7d_oi) fable_pct=$p fable_rst=$r ;;
+    esac
   done < "$f" 2>/dev/null
 }
 
@@ -2719,7 +2733,14 @@ _SEG_SCAN="$_SEG_ROWS"
 if [ "$VL_FLOAT" = "1" ]; then words_of "$VL_FLOAT_SEGMENTS"; _SEG_SCAN="$_SEG_ROWS${_SW# }"; fi
 case "$_SEG_SCAN" in *" git "*|*" stash "*|*" project "*) read_git ;; esac
 case "$_SEG_SCAN" in (*" relay "*) relay_sample ;; esac
-case "$_SEG_SCAN" in (*" fable "*) fable_sample ;; esac
+# The session's own windows from model-relay: always for fable, and for the limit
+# gauges and burn only when the payload is missing one, so a render that has both
+# readings never opens the file.
+own5_pct="" own5_rst="" own7_pct="" own7_rst="" fable_pct="" fable_rst=""
+case "$_SEG_SCAN" in
+  (*" fable "*) relay_limits_sample ;;
+  (*" limit5h "*|*" limit7d "*|*" burn "*) { [ -n "${fh_pct:-}" ] && [ -n "${wd_pct:-}" ]; } || relay_limits_sample ;;
+esac
 
 # The disabled/default path performs no state work. Enabled paths canonicalize
 # values and namespaces once, then use the released TSV/compact-directory flow.

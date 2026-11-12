@@ -13,7 +13,9 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 SCRIPT="$HERE/../statusline.sh"
 
-TMP=$(mktemp -d)
+# The physical path: the state stores refuse a path with a symlink in it, and
+# macOS hands out temp dirs under /var, a link to /private/var.
+TMP=$(cd "$(mktemp -d)" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_CONFIG_DIR="$TMP/cfg" CORALLINE_NO_SAMPLE=1
 unset MODEL_RELAY_CONFIG_DIR
@@ -77,5 +79,41 @@ check "the relay's directory, not the window's" "fable 42% ↺1d01h"  "$(MODEL_R
 printf 'VL_CLOCK=off\nVL_SEGMENTS="model"\n' > "$TMP/conf"
 limits s1 "7d_oi\t30\t$AHEAD\n"
 check "segment not listed"                    ""                    "$(render s1)"
+
+# ── limit5h / limit7d fall back to the session's own windows ───────────────────
+# With no payload reading (a session just started or resumed) the gauges take the
+# relay's file for this session before the shared store, which cannot say whose
+# its entries are. A payload reading always wins.
+R5=$(( NOW + 9000 )); R7=$(( NOW + 400000 ))
+# Payloads are built here, outside any command substitution: bash 3.2 mangles
+# escaped quotes nested inside "$(...)".
+RL_BOTH=$(printf '{"five_hour":{"used_percentage":5,"resets_at":%s},"seven_day":{"used_percentage":6,"resets_at":%s}}' "$R5" "$R7")
+RL_7D=$(printf '{"seven_day":{"used_percentage":6,"resets_at":%s}}' "$R7")
+gauges() {  # $1=session_id $2=rate_limits JSON ("" = none) → "5h N% 7d N%" as drawn
+  local rl=""; [ -z "$2" ] || rl=',"rate_limits":'"$2"
+  printf '{"session_id":"%s","model":{"display_name":"Opus"}%s}' "$1" "$rl" |
+    CORALLINE_CONFIG="$TMP/conf" COLUMNS=200 "$BASH" "$SCRIPT" |
+    perl -e 'local $/; $_ = <STDIN> // ""; s/\e\[[0-9;]*m//g; my @o; push @o, "$1 $2" while /\b(5h|7d) \S+ (\d+%)/g; print /Opus/ ? join(" ", @o) : "BROKEN"'
+}
+limits s1 "5h\t61\t$R5\n7d\t10\t$R7\n7d_oi\t30\t$AHEAD\n"
+for sync in 0 1; do
+  STATE="$TMP/state-$sync"; mkdir -p "$STATE"
+  printf 'VL_CLOCK=off\nVL_SEGMENTS="model limit5h limit7d"\nVL_LIMIT_SYNC=%s\n' "$sync" > "$TMP/conf"
+  export CORALLINE_NO_SAMPLE=1
+  check "sync=$sync: no payload reading, own windows from the file" "5h 61% 7d 10%" "$(gauges s1 '')"
+  check "sync=$sync: another session has no file"                   ""              "$(gauges s2 '')"
+  check "sync=$sync: a payload reading wins over the file"          "5h 5% 7d 6%"   "$(gauges s1 "$RL_BOTH")"
+  check "sync=$sync: payload 7d only, the file supplies 5h"         "5h 61% 7d 6%"  "$(gauges s1 "$RL_7D")"
+done
+# The file beats the shared store: a later window stored by another account in
+# this config dir is not shown to a session that has its own windows on file.
+printf 'VL_CLOCK=off\nVL_SEGMENTS="model limit5h limit7d"\nVL_LIMIT_SYNC=1\n' > "$TMP/conf"
+mkdir -p "$CLAUDE_CONFIG_DIR/coralline/limit-5h.d/$(printf '%010d' $(( R5 + 600 )))_042.000" "$CLAUDE_CONFIG_DIR/coralline/limit-7d.d/$(printf '%010d' $(( R7 + 600 )))_043.000"
+check "sync=1: own file beats a later stored window"  "5h 61% 7d 10%" "$(gauges s1 '')"
+check "sync=1: without a file the store still fills in" "5h 42% 7d 43%" "$(gauges s2 '')"
+# a 5h line further out than a 5h window can be is not one
+limits s3 "5h\t61\t$(( NOW + 90000 ))\n"
+rm -rf "$CLAUDE_CONFIG_DIR/coralline"
+check "a 5h reset further out than its window" "" "$(gauges s3 '')"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "SOME FAILED"; exit 1; }
