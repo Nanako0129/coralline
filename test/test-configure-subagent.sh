@@ -12,6 +12,8 @@ CONF="$HERE/../configure.sh"
 
 eval "$(sed -n '/^settings_merge() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^subagent_enabled() {/,/^}/p' "$CONF")"
+eval "$(sed -n '/^subagent_foreign() {/,/^}/p' "$CONF")"
+eval "$(sed -n '/^settings_runs_coralline() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^update_settings() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^enable_subagent_statusline() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^disable_subagent_statusline() {/,/^}/p' "$CONF")"
@@ -163,6 +165,37 @@ jq -e '.subagentStatusLine.command | endswith("--subagent")' "$SETTINGS_FILE" >/
 CLAUDE_SETTINGS="$SETTINGS_FILE" bash "$CONF" --subagent-rows=off >/dev/null 2>&1
 jq -e 'has("subagentStatusLine") | not' "$SETTINGS_FILE" >/dev/null 2>&1 \
   && ok "--subagent-rows=off removes" || bad "--subagent-rows=off removes"
+
+# (4b2) an update leaves a statusLine that already runs this install as the user
+# has it: refreshInterval, padding and a wrapped command survive, byte for byte,
+# and no backup is written. A statusLine that runs something else is replaced.
+KEEPD="$TMPD/keep"; mkdir -p "$KEEPD"; SETTINGS_FILE="$KEEPD/settings.json"
+printf '{"statusLine":{"type":"command","command":"CORALLINE_CONFIG=/tmp/x.conf bash %s/statusline.sh","refreshInterval":5,"padding":2},"other":1}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
+cp "$SETTINGS_FILE" "$KEEPD/before"
+KEEPOUT=$(update_settings)
+cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "update keeps an existing coralline statusLine byte for byte" || bad "update keeps an existing coralline statusLine byte for byte"
+ls "$SETTINGS_FILE".bak.* >/dev/null 2>&1 && bad "update without a change writes no backup" || ok "update without a change writes no backup"
+case "$KEEPOUT" in (*"left as it is"*) ok "update says it left statusLine alone" ;; (*) bad "update says it left statusLine alone" ;; esac
+printf '{"statusLine":{"type":"command","command":"bash /opt/other/prompt.sh","refreshInterval":9}}\n' > "$SETTINGS_FILE"
+update_settings >/dev/null
+jq -e --arg p "$TARGET_DIR/statusline.sh" '(.statusLine.command | contains($p)) and .statusLine.refreshInterval == 1' "$SETTINGS_FILE" >/dev/null 2>&1 \
+  && ok "a statusLine that runs something else is replaced" || bad "a statusLine that runs something else is replaced"
+ls "$SETTINGS_FILE".bak.* >/dev/null 2>&1 && ok "the replaced statusLine is backed up" || bad "the replaced statusLine is backed up"
+
+# (4b3) a subagentStatusLine from another tool is never replaced or removed
+printf '{"subagentStatusLine":{"type":"command","command":"other-tool --rows"}}\n' > "$SETTINGS_FILE"
+cp "$SETTINGS_FILE" "$KEEPD/before"
+enable_subagent_statusline >/dev/null 2>&1 && bad "enable refuses another tool's entry" || ok "enable refuses another tool's entry"
+cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "enable leaves another tool's entry" || bad "enable leaves another tool's entry"
+disable_subagent_statusline >/dev/null 2>&1
+cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "disable leaves another tool's entry" || bad "disable leaves another tool's entry"
+CLAUDE_SETTINGS="$SETTINGS_FILE" bash "$CONF" --subagent-rows=on >/dev/null 2>&1 && bad "--subagent-rows=on exits non-zero on another tool's entry" || ok "--subagent-rows=on exits non-zero on another tool's entry"
+# our own entry, wrapped: enabling again changes nothing
+printf '{"subagentStatusLine":{"type":"command","command":"CORALLINE_CONFIG=/tmp/s.conf bash /tmp/statusline.sh --subagent"}}\n' > "$SETTINGS_FILE"
+cp "$SETTINGS_FILE" "$KEEPD/before"
+enable_subagent_statusline >/dev/null 2>&1
+cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "enable keeps an existing wrapped entry" || bad "enable keeps an existing wrapped entry"
+SETTINGS_FILE="$MAIN_SETTINGS"
 
 # (4c) explicit no-menu setup modes must not ask the closing wizard question
 DEFAULTD="$TMPD/default-mode"; mkdir -p "$DEFAULTD/home"

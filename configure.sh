@@ -1239,7 +1239,7 @@ EOF
 }
 
 write_final_config() {
-  local tmp
+  local tmp backup n=0
   tmp=$(mktemp "${TMPDIR:-/tmp}/coralline-config.XXXXXX") || exit 1
   write_candidate_config "$tmp"
   if [ -f "$CONFIG_FILE" ]; then
@@ -1259,6 +1259,14 @@ write_final_config() {
   # leaving $CONFIG_FILE a directory that statusline.sh never sources.
   [ -d "$CONFIG_FILE" ] && die "config path $CONFIG_FILE is a directory, expected a file"
   mkdir -p "$(dirname "$CONFIG_FILE")" || die "could not create $(dirname "$CONFIG_FILE")"
+  # The wizard builds the new file from its own answers, not from the old one, so
+  # anything added by hand goes with the overwrite: keep the old file beside it.
+  if [ -f "$CONFIG_FILE" ]; then
+    backup="$CONFIG_FILE.bak.$(date +%Y%m%d%H%M%S)"
+    while [ -e "$backup" ]; do n=$((n + 1)); backup="${backup%.[0-9]*}.$n"; done
+    cp -p "$CONFIG_FILE" "$backup" || { rm -f "$tmp"; die "could not back up $CONFIG_FILE; left unchanged"; }
+    printf 'Previous config kept at %s\n' "$backup"
+  fi
   mv "$tmp" "$CONFIG_FILE" || die "could not write $CONFIG_FILE"
   printf '%sWrote%s %s\n' "$T_GREEN" "$T_RESET" "$CONFIG_FILE"
   [ "$float_enabled" = "1" ] && print_float_help
@@ -1350,8 +1358,28 @@ settings_merge() {  # apply jq filter $1 (plus any --arg pairs after it) to sett
   fi
 }
 
+settings_runs_coralline() {  # $1=settings key; exit 0 when its command runs this install's statusline.sh
+  # Either spelling of the path: as typed, or shell-quoted the way this installer
+  # writes it. A wrapper around the script (an env prefix, extra flags) still counts.
+  local raw="$TARGET_DIR/statusline.sh" quoted
+  [ -s "$SETTINGS_FILE" ] || return 1
+  printf -v quoted '%q' "$raw"
+  jq -e --arg k "$1" --arg raw "$raw" --arg quoted "$quoted" '
+    .[$k] as $s
+    | ($s | type) == "object" and ($s.command | type) == "string"
+      and (($s.command | contains($raw)) or ($s.command | contains($quoted)))
+  ' "$SETTINGS_FILE" >/dev/null 2>&1
+}
+
 update_settings() {
   local command
+  # An update leaves a statusLine that already runs this install exactly as the
+  # user has it: refreshInterval, padding, a wrapped command. Only a first install,
+  # or a statusLine that runs something else, gets the fresh entry.
+  if settings_runs_coralline statusLine; then
+    printf '%s already runs coralline; statusLine left as it is\n' "$SETTINGS_FILE"
+    return 0
+  fi
   printf -v command 'bash %q' "$TARGET_DIR/statusline.sh"
   settings_merge '.statusLine = {"type": "command", "command": $command, "refreshInterval": 1}' \
     --arg command "$command"
@@ -1359,6 +1387,8 @@ update_settings() {
 }
 
 subagent_enabled() {  # exit 0 when settings.json registers the subagent renderer
+  # Any command ending in " --subagent": the install path is not compared, since a
+  # documented custom entry runs a copy elsewhere or wraps it in an env prefix.
   [ -f "$SETTINGS_FILE" ] || return 1
   jq -e '
     .subagentStatusLine as $s |
@@ -1370,10 +1400,26 @@ subagent_enabled() {  # exit 0 when settings.json registers the subagent rendere
   ' "$SETTINGS_FILE" >/dev/null 2>&1
 }
 
+subagent_foreign() {  # exit 0 when subagentStatusLine is set to something that is not that renderer
+  [ -s "$SETTINGS_FILE" ] || return 1
+  jq -e '.subagentStatusLine != null' "$SETTINGS_FILE" >/dev/null 2>&1 || return 1
+  ! subagent_enabled
+}
+
 enable_subagent_statusline() {
   # No refreshInterval here: Claude Code documents it for statusLine only;
   # subagentStatusLine re-renders on panel events.
   local command
+  # Another tool's subagentStatusLine is the user's, not ours to replace; our own
+  # entry is left as it is, wrapper and all.
+  if subagent_foreign; then
+    printf '%s has a subagentStatusLine from another tool; left unchanged. Remove it to let coralline draw the rows.\n' "$SETTINGS_FILE" >&2
+    return 1
+  fi
+  if subagent_enabled; then
+    printf '%s already has the coralline subagent panel rows; left as it is\n' "$SETTINGS_FILE"
+    return 0
+  fi
   printf -v command 'bash %q --subagent' "$TARGET_DIR/statusline.sh"
   settings_merge '.subagentStatusLine = {"type": "command", "command": $command}' \
     --arg command "$command"
@@ -1382,6 +1428,11 @@ enable_subagent_statusline() {
 
 disable_subagent_statusline() {
   [ -s "$SETTINGS_FILE" ] || return 0
+  if subagent_foreign; then
+    printf '%s has a subagentStatusLine from another tool; left unchanged\n' "$SETTINGS_FILE" >&2
+    return 0
+  fi
+  subagent_enabled || return 0
   settings_merge 'del(.subagentStatusLine)'
   printf 'Updated %s (subagent panel rows disabled)\n' "$SETTINGS_FILE"
 }
@@ -1409,7 +1460,7 @@ offer_subagent_rows() {  # opt-in toggle; default answer = current state (no cha
   local cur=n
   subagent_enabled && cur=y
   if yes_no "Render subagent panel rows in your coralline theme (Claude Code >= 2.1.205)" "$cur"; then
-    [ "$cur" = "y" ] || enable_subagent_statusline
+    [ "$cur" = "y" ] || enable_subagent_statusline || return 0
     verify_subagent_render
   else
     [ "$cur" = "n" ] || disable_subagent_statusline
@@ -1544,7 +1595,7 @@ for arg in "$@"; do
     --install) install_files; update_settings ;;
     --install-only) install_only=1; install_files; update_settings ;;
     --default) setup_mode="default" ;;
-    --subagent-rows=on)  enable_subagent_statusline;  verify_subagent_render; exit 0 ;;
+    --subagent-rows=on)  enable_subagent_statusline || exit 1; verify_subagent_render; exit 0 ;;
     --subagent-rows=off) disable_subagent_statusline; exit 0 ;;
     --import-p10k) setup_mode="import-p10k" ;;
     --wizard) setup_mode="wizard" ;;
