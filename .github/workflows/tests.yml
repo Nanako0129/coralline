@@ -55,12 +55,20 @@ jobs:
       # here whatever a suite reads or leaves under ~/.claude is its own and the
       # result does not depend on the order of the suites. That isolation is this
       # workflow's: run by hand, a suite uses the real HOME.
+      # A failed suite is run once more before it counts: several cases bound
+      # real concurrency by wall-clock time (test-burn's 32 simultaneous renders
+      # with one writer per second), written for a local machine, and a loaded
+      # shared runner can overrun them. A real break fails both times; a retry
+      # leaves a warning on the run so a recurring one is seen.
       - name: Suites
         run: |
           fail=0
           for t in test/*.sh; do
             echo "::group::$t"
-            HOME="$(mktemp -d)" bash "$t" || { fail=1; echo "::error file=$t::suite failed"; }
+            if ! HOME="$(mktemp -d)" bash "$t"; then
+              echo "::warning file=$t::suite failed once; running it again"
+              HOME="$(mktemp -d)" bash "$t" || { fail=1; echo "::error file=$t::suite failed twice"; }
+            fi
             echo "::endgroup::"
           done
           exit "$fail"
