@@ -1409,7 +1409,7 @@ subagent_state() {  # → _SUB_STATE: absent | ours | broken | foreign | unreada
   # ours: a command that runs a statusline.sh with --subagent as whole words (any
   # copy, an env prefix, a trailing redirection); enable leaves it exactly as it
   # is and disable removes it. broken: no usable command (not an object, no
-  # command string, or our command without type "command"); enable repairs it
+  # command string, an empty one, or our command without type "command"); enable repairs it
   # and disable removes it. foreign: a command that is something else, which
   # neither touches. unreadable: settings.json does not parse; the caller goes on
   # to settings_merge, which stops with the parse error and a backup.
@@ -1418,9 +1418,9 @@ subagent_state() {  # → _SUB_STATE: absent | ours | broken | foreign | unreada
   _SUB_STATE=$(jq -r '
     .subagentStatusLine as $s
     | if $s == null then "absent"
-      elif ($s | type) != "object" or ($s.command | type) != "string" then "broken"
+      elif ($s | type) != "object" or ($s.command | type) != "string" or ($s.command | test("^\\s*$")) then "broken"
       elif ($s.command | test("(^|[/ \"\u0027])statusline\\.sh($|[ \"\u0027><|;&)])"))
-           and ($s.command | test("(^| )--subagent($|[ \"\u0027><|;&)])"))
+           and ($s.command | test("(^|[ \"\u0027])--subagent($|[ \"\u0027><|;&)])"))
         then (if $s.type == "command" then "ours" else "broken" end)
       else "foreign" end
   ' "$SETTINGS_FILE" 2>/dev/null) || _SUB_STATE=unreadable

@@ -207,6 +207,19 @@ printf '{"subagentStatusLine":{"type":"command","command":"CORALLINE_CONFIG=/tmp
 cp "$SETTINGS_FILE" "$KEEPD/before"
 enable_subagent_statusline >/dev/null 2>&1
 cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "enable keeps an own entry with a trailing redirection" || bad "enable keeps an own entry with a trailing redirection"
+# a quoted flag is still the flag
+printf '{"subagentStatusLine":{"type":"command","command":"bash /tmp/statusline.sh \\"--subagent\\""}}\n' > "$SETTINGS_FILE"
+subagent_state; [ "$_SUB_STATE" = ours ] && ok "ours: a quoted --subagent" || bad "ours: a quoted --subagent ($_SUB_STATE)"
+# an empty or blank command is nobody's renderer: disable removes it, enable repairs it
+for _cmd in '' '   '; do
+  printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$_cmd" > "$SETTINGS_FILE"
+  subagent_state; [ "$_SUB_STATE" = broken ] && ok "broken: command [$_cmd]" || bad "broken: command [$_cmd] ($_SUB_STATE)"
+done
+enable_subagent_statusline >/dev/null 2>&1
+subagent_enabled && ok "enable repairs a blank command" || bad "enable repairs a blank command"
+printf '{"subagentStatusLine":{"type":"command","command":""}}\n' > "$SETTINGS_FILE"
+disable_subagent_statusline >/dev/null 2>&1
+jq -e 'has("subagentStatusLine") | not' "$SETTINGS_FILE" >/dev/null 2>&1 && ok "disable removes an empty command" || bad "disable removes an empty command"
 # a longer file name, or a longer flag, is another tool
 for _cmd in 'bash /opt/other/statusline.sh-helper --subagent' 'bash /opt/other/statusline.sh --subagents'; do
   printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$_cmd" > "$SETTINGS_FILE"
