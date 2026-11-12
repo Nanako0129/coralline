@@ -8,11 +8,12 @@ on:
 permissions:
   contents: read
 
-# A newer push to a pull request replaces the older run. Runs on main are never
-# cancelled: each merge commit keeps its own result, so a break is attributed
-# to the commit that caused it.
+# A newer push to a pull request replaces the older run. A push to main gets a
+# group of its own (the commit), so no run on main is cancelled or left pending
+# behind another: each merge commit keeps its own result, and a break is
+# attributed to the commit that caused it.
 concurrency:
-  group: tests-${{ github.ref }}
+  group: tests-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -50,9 +51,10 @@ jobs:
           done
           exit "$fail"
       # Every suite exits non-zero on a failed case. The loop keeps going so one
-      # run names every failing suite. Each suite gets an empty HOME of its own:
-      # nothing reads or leaves state in ~/.claude, so the result does not depend
-      # on the order of the suites.
+      # run names every failing suite. Each suite gets an empty HOME of its own, so
+      # here whatever a suite reads or leaves under ~/.claude is its own and the
+      # result does not depend on the order of the suites. That isolation is this
+      # workflow's: run by hand, a suite uses the real HOME.
       - name: Suites
         run: |
           fail=0
