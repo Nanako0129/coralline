@@ -12,7 +12,7 @@ CONF="$HERE/../configure.sh"
 
 eval "$(sed -n '/^settings_merge() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^subagent_enabled() {/,/^}/p' "$CONF")"
-eval "$(sed -n '/^subagent_foreign() {/,/^}/p' "$CONF")"
+eval "$(sed -n '/^subagent_state() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^settings_runs_coralline() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^update_settings() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^enable_subagent_statusline() {/,/^}/p' "$CONF")"
@@ -189,7 +189,33 @@ enable_subagent_statusline >/dev/null 2>&1 && bad "enable refuses another tool's
 cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "enable leaves another tool's entry" || bad "enable leaves another tool's entry"
 disable_subagent_statusline >/dev/null 2>&1
 cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "disable leaves another tool's entry" || bad "disable leaves another tool's entry"
-CLAUDE_SETTINGS="$SETTINGS_FILE" bash "$CONF" --subagent-rows=on >/dev/null 2>&1 && bad "--subagent-rows=on exits non-zero on another tool's entry" || ok "--subagent-rows=on exits non-zero on another tool's entry"
+ONERR=$(CLAUDE_SETTINGS="$SETTINGS_FILE" bash "$CONF" --subagent-rows=on 2>&1 >/dev/null); ONRC=$?
+[ "$ONRC" = 1 ] && ok "--subagent-rows=on exits 1 on another tool's entry" || bad "--subagent-rows=on exits 1 on another tool's entry (rc=$ONRC)"
+case "$ONERR" in (*"another tool"*) ok "--subagent-rows=on says why" ;; (*) bad "--subagent-rows=on says why" ;; esac
+CLAUDE_SETTINGS="$SETTINGS_FILE" bash "$CONF" --subagent-rows=off >/dev/null 2>&1
+cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "the flags leave another tool's entry byte for byte" || bad "the flags leave another tool's entry byte for byte"
+# an entry that is ours but not in the installer's shape is still ours: a trailing
+# wrapper after --subagent, or a broken value, can be removed and repaired
+printf '{"subagentStatusLine":{"type":"command","command":"bash /tmp/statusline.sh --subagent 2>/dev/null"}}\n' > "$SETTINGS_FILE"
+disable_subagent_statusline >/dev/null 2>&1
+jq -e 'has("subagentStatusLine") | not' "$SETTINGS_FILE" >/dev/null 2>&1 && ok "disable removes our entry with a trailing wrapper" || bad "disable removes our entry with a trailing wrapper"
+printf '{"subagentStatusLine":true}\n' > "$SETTINGS_FILE"
+enable_subagent_statusline >/dev/null 2>&1
+subagent_enabled && ok "enable repairs a broken entry" || bad "enable repairs a broken entry"
+# a settings.json that does not parse stops with the error instead of reporting success
+printf '{"subagentStatusLine":{"type":"command",}\n' > "$SETTINGS_FILE"
+( disable_subagent_statusline >/dev/null 2>&1 ) && bad "disable fails on unparseable settings" || ok "disable fails on unparseable settings"
+# statusLine spelled with ~ or $HOME is this install too; a .bak path or a wrong type is not
+TARGET_SAVE=$TARGET_DIR; TARGET_DIR="$HOME/.claude/coralline"
+for _cmd in 'bash ~/.claude/coralline/statusline.sh' 'bash \"$HOME/.claude/coralline/statusline.sh\"'; do
+  printf '{"statusLine":{"type":"command","command":"%s","refreshInterval":5}}\n' "$_cmd" > "$SETTINGS_FILE"
+  settings_runs_coralline statusLine && ok "ours: $_cmd" || bad "ours: $_cmd"
+done
+printf '{"statusLine":{"type":"command","command":"bash %s/statusline.sh.bak.20261101"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
+settings_runs_coralline statusLine && bad "a .bak path is not this install" || ok "a .bak path is not this install"
+printf '{"statusLine":{"command":"bash %s/statusline.sh"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
+settings_runs_coralline statusLine && bad "an entry without type command is rewritten" || ok "an entry without type command is rewritten"
+TARGET_DIR=$TARGET_SAVE
 # our own entry, wrapped: enabling again changes nothing
 printf '{"subagentStatusLine":{"type":"command","command":"CORALLINE_CONFIG=/tmp/s.conf bash /tmp/statusline.sh --subagent"}}\n' > "$SETTINGS_FILE"
 cp "$SETTINGS_FILE" "$KEEPD/before"

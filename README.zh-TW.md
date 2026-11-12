@@ -182,7 +182,7 @@ bash ~/.claude/coralline/configure.sh --subagent-rows=on
 bash ~/.claude/coralline/configure.sh --subagent-rows=off
 ```
 
-Bash install-only 與一般更新不會自行新增或刪除 `subagentStatusLine`；只有 wizard 選擇或上方明確指令才會改動，而且不會動到其他工具的設定。更新也會原樣保留已經指向這份安裝的 `statusLine`（`refreshInterval`、`padding`、包過的指令）。原生 installer 預設使用 `-SubagentRows preserve`，只有明確指定 `on` 或 `off` 才改設定。
+Bash install-only 與一般更新不會自行新增或刪除 `subagentStatusLine`；只有 wizard 選擇或上方明確指令才會改動，而且不會動到其他工具的設定。Bash 的更新也會原樣保留已經指向這份安裝的 `statusLine`（`refreshInterval`、`padding`、包過的指令）；`install.ps1` 仍然每次都重寫它。原生 installer 預設使用 `-SubagentRows preserve`，只有明確指定 `on` 或 `off` 才改設定。
 
 | `VL_SUB_SEGMENTS` 值 | 顯示內容 |
 |---|---|

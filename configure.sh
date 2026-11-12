@@ -1239,7 +1239,7 @@ EOF
 }
 
 write_final_config() {
-  local tmp backup n=0
+  local tmp backup stamp n=0
   tmp=$(mktemp "${TMPDIR:-/tmp}/coralline-config.XXXXXX") || exit 1
   write_candidate_config "$tmp"
   if [ -f "$CONFIG_FILE" ]; then
@@ -1261,9 +1261,10 @@ write_final_config() {
   mkdir -p "$(dirname "$CONFIG_FILE")" || die "could not create $(dirname "$CONFIG_FILE")"
   # The wizard builds the new file from its own answers, not from the old one, so
   # anything added by hand goes with the overwrite: keep the old file beside it.
-  if [ -f "$CONFIG_FILE" ]; then
-    backup="$CONFIG_FILE.bak.$(date +%Y%m%d%H%M%S)"
-    while [ -e "$backup" ]; do n=$((n + 1)); backup="${backup%.[0-9]*}.$n"; done
+  if [ -f "$CONFIG_FILE" ] && ! cmp -s "$CONFIG_FILE" "$tmp"; then
+    stamp=$(date +%Y%m%d%H%M%S)
+    backup="$CONFIG_FILE.bak.$stamp"
+    while [ -e "$backup" ]; do n=$((n + 1)); backup="$CONFIG_FILE.bak.$stamp.$n"; done
     cp -p "$CONFIG_FILE" "$backup" || { rm -f "$tmp"; die "could not back up $CONFIG_FILE; left unchanged"; }
     printf 'Previous config kept at %s\n' "$backup"
   fi
@@ -1359,15 +1360,18 @@ settings_merge() {  # apply jq filter $1 (plus any --arg pairs after it) to sett
 }
 
 settings_runs_coralline() {  # $1=settings key; exit 0 when its command runs this install's statusline.sh
-  # Either spelling of the path: as typed, or shell-quoted the way this installer
-  # writes it. A wrapper around the script (an env prefix, extra flags) still counts.
-  local raw="$TARGET_DIR/statusline.sh" quoted
+  # The path as typed, shell-quoted the way this installer writes it, or spelled
+  # with ~ or $HOME; a wrapper around the script (an env prefix, extra flags)
+  # still counts. The path has to end there: statusline.sh.bak-... is not it.
+  local raw="$TARGET_DIR/statusline.sh" quoted tilde="" var=""
   [ -s "$SETTINGS_FILE" ] || return 1
   printf -v quoted '%q' "$raw"
-  jq -e --arg k "$1" --arg raw "$raw" --arg quoted "$quoted" '
+  case "$raw" in ("$HOME"/*) tilde="~${raw#"$HOME"}"; var="\$HOME${raw#"$HOME"}" ;; esac
+  jq -e --arg k "$1" --arg raw "$raw" --arg quoted "$quoted" --arg tilde "$tilde" --arg var "$var" '
     .[$k] as $s
-    | ($s | type) == "object" and ($s.command | type) == "string"
-      and (($s.command | contains($raw)) or ($s.command | contains($quoted)))
+    | ($s | type) == "object" and $s.type == "command" and ($s.command | type) == "string"
+      and any([$raw, $quoted, $tilde, $var][] | select(length > 0);
+              . as $p | ($s.command | endswith($p) or contains($p + " ") or contains($p + "\"") or contains($p + "\u0027")))
   ' "$SETTINGS_FILE" >/dev/null 2>&1
 }
 
@@ -1400,10 +1404,22 @@ subagent_enabled() {  # exit 0 when settings.json registers the subagent rendere
   ' "$SETTINGS_FILE" >/dev/null 2>&1
 }
 
-subagent_foreign() {  # exit 0 when subagentStatusLine is set to something that is not that renderer
-  [ -s "$SETTINGS_FILE" ] || return 1
-  jq -e '.subagentStatusLine != null' "$SETTINGS_FILE" >/dev/null 2>&1 || return 1
-  ! subagent_enabled
+subagent_state() {  # → _SUB_STATE: absent | ours | foreign | unreadable, in one jq call
+  # ours: a command that runs a statusline.sh with --subagent (any copy, any
+  # wrapper), or an entry too broken to be anyone's renderer (no command string),
+  # which enable may repair and disable may remove. foreign: a command that is
+  # something else. unreadable: settings.json does not parse; the caller goes on
+  # to settings_merge, which stops with the parse error and a backup.
+  _SUB_STATE=absent
+  [ -s "$SETTINGS_FILE" ] || return 0
+  _SUB_STATE=$(jq -r '
+    .subagentStatusLine as $s
+    | if $s == null then "absent"
+      elif ($s | type) != "object" or ($s.command | type) != "string" then "ours"
+      elif ($s.command | contains("statusline.sh")) and ($s.command | contains("--subagent")) then "ours"
+      else "foreign" end
+  ' "$SETTINGS_FILE" 2>/dev/null) || _SUB_STATE=unreadable
+  case "$_SUB_STATE" in (absent|ours|foreign) ;; (*) _SUB_STATE=unreadable ;; esac
 }
 
 enable_subagent_statusline() {
@@ -1412,11 +1428,12 @@ enable_subagent_statusline() {
   local command
   # Another tool's subagentStatusLine is the user's, not ours to replace; our own
   # entry is left as it is, wrapper and all.
-  if subagent_foreign; then
+  subagent_state
+  if [ "$_SUB_STATE" = foreign ]; then
     printf '%s has a subagentStatusLine from another tool; left unchanged. Remove it to let coralline draw the rows.\n' "$SETTINGS_FILE" >&2
     return 1
   fi
-  if subagent_enabled; then
+  if [ "$_SUB_STATE" = ours ] && subagent_enabled; then
     printf '%s already has the coralline subagent panel rows; left as it is\n' "$SETTINGS_FILE"
     return 0
   fi
@@ -1428,11 +1445,12 @@ enable_subagent_statusline() {
 
 disable_subagent_statusline() {
   [ -s "$SETTINGS_FILE" ] || return 0
-  if subagent_foreign; then
+  subagent_state
+  if [ "$_SUB_STATE" = foreign ]; then
     printf '%s has a subagentStatusLine from another tool; left unchanged\n' "$SETTINGS_FILE" >&2
     return 0
   fi
-  subagent_enabled || return 0
+  [ "$_SUB_STATE" != absent ] || return 0
   settings_merge 'del(.subagentStatusLine)'
   printf 'Updated %s (subagent panel rows disabled)\n' "$SETTINGS_FILE"
 }
