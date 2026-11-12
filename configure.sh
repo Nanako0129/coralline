@@ -663,6 +663,7 @@ render_preview() {
   # relay reads the status file model-relay writes for the session, and the
   # sample payload's session has none; give the preview a provider to show.
   printf 'VL_RELAY_PREVIEW=glm\n' >> "$tmp"
+  printf 'VL_FABLE_PREVIEW=30\n' >> "$tmp"
   cache=$(preview_cache_path "$tmp" "$cols")
   printf '\nPreview (%s cols):\n' "$cols"
   if [ ! -f "$cache" ]; then

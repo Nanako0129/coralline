@@ -96,24 +96,55 @@ gauges() {  # $1=session_id $2=rate_limits JSON ("" = none) → "5h N% 7d N%" as
     perl -e 'local $/; $_ = <STDIN> // ""; s/\e\[[0-9;]*m//g; my @o; push @o, "$1 $2" while /\b(5h|7d) \S+ (\d+%)/g; print /Opus/ ? join(" ", @o) : "BROKEN"'
 }
 limits s1 "5h\t61\t$R5\n7d\t10\t$R7\n7d_oi\t30\t$AHEAD\n"
+export CORALLINE_NO_SAMPLE=1
 for sync in 0 1; do
-  STATE="$TMP/state-$sync"; mkdir -p "$STATE"
   printf 'VL_CLOCK=off\nVL_SEGMENTS="model limit5h limit7d"\nVL_LIMIT_SYNC=%s\n' "$sync" > "$TMP/conf"
-  export CORALLINE_NO_SAMPLE=1
-  check "sync=$sync: no payload reading, own windows from the file" "5h 61% 7d 10%" "$(gauges s1 '')"
+  check "sync=$sync: off by default, the file is not used"          ""              "$(gauges s1 '')"
+  printf 'VL_CLOCK=off\nVL_SEGMENTS="model limit5h limit7d"\nVL_LIMIT_SYNC=%s\nVL_RELAY_LIMITS=1\n' "$sync" > "$TMP/conf"
+  check "sync=$sync: no payload window, own windows from the file"  "5h 61% 7d 10%" "$(gauges s1 '')"
   check "sync=$sync: another session has no file"                   ""              "$(gauges s2 '')"
   check "sync=$sync: a payload reading wins over the file"          "5h 5% 7d 6%"   "$(gauges s1 "$RL_BOTH")"
-  check "sync=$sync: payload 7d only, the file supplies 5h"         "5h 61% 7d 6%"  "$(gauges s1 "$RL_7D")"
+  # a payload with 7d but no 5h has no 5h window (#112): the file does not bring one back
+  check "sync=$sync: payload 7d only, no 5h gauge from the file"    "7d 6%"         "$(gauges s1 "$RL_7D")"
+  # listing fable reads the file anyway; it must not change what the gauges draw
+  printf 'VL_CLOCK=off\nVL_SEGMENTS="model limit5h limit7d fable"\nVL_LIMIT_SYNC=%s\n' "$sync" > "$TMP/conf"
+  check "sync=$sync: fable listed, knob off: gauges unchanged"      ""              "$(gauges s1 '')"
 done
-# The file beats the shared store: a later window stored by another account in
-# this config dir is not shown to a session that has its own windows on file.
-printf 'VL_CLOCK=off\nVL_SEGMENTS="model limit5h limit7d"\nVL_LIMIT_SYNC=1\n' > "$TMP/conf"
-mkdir -p "$CLAUDE_CONFIG_DIR/coralline/limit-5h.d/$(printf '%010d' $(( R5 + 600 )))_042.000" "$CLAUDE_CONFIG_DIR/coralline/limit-7d.d/$(printf '%010d' $(( R7 + 600 )))_043.000"
-check "sync=1: own file beats a later stored window"  "5h 61% 7d 10%" "$(gauges s1 '')"
+# With the sync, the file beats the shared store: a later window stored by another
+# account in this config dir is not shown to a session with its own windows on file.
+printf 'VL_CLOCK=off\nVL_SEGMENTS="model limit5h limit7d"\nVL_LIMIT_SYNC=1\nVL_RELAY_LIMITS=1\n' > "$TMP/conf"
+S5="$CLAUDE_CONFIG_DIR/coralline/limit-5h.d"; S7="$CLAUDE_CONFIG_DIR/coralline/limit-7d.d"
+mkdir -p "$S5/$(printf '%010d' $(( R5 + 600 )))_042.000" "$S7/$(printf '%010d' $(( R7 + 600 )))_043.000"
+check "sync=1: own file beats a later stored window"    "5h 61% 7d 10%" "$(gauges s1 '')"
 check "sync=1: without a file the store still fills in" "5h 42% 7d 43%" "$(gauges s2 '')"
+# The same reset with a higher percent in the store is the same window read later
+# by another session: the file's older value does not replace it.
+rm -rf "$CLAUDE_CONFIG_DIR/coralline"; mkdir -p "$S5/$(printf '%010d' "$R5")_080.000" "$S7/$(printf '%010d' "$R7")_005.000"
+check "sync=1: same window, the store's higher reading is kept" "5h 80% 7d 10%" "$(gauges s1 '')"
+rm -rf "$CLAUDE_CONFIG_DIR/coralline"
 # a 5h line further out than a 5h window can be is not one
 limits s3 "5h\t61\t$(( NOW + 90000 ))\n"
-rm -rf "$CLAUDE_CONFIG_DIR/coralline"
 check "a 5h reset further out than its window" "" "$(gauges s3 '')"
+
+# ── the reader ─────────────────────────────────────────────────────────────────
+printf 'VL_CLOCK=off\nVL_SEGMENTS="model fable"\n' > "$TMP/conf"
+printf '5h\t6\t%s\n7d_oi\t30\t%s' "$R5" "$AHEAD" > "$SDIR/s4.limits"
+check "a last line without a newline is read"   "fable 30% ↺1d01h"  "$(render s4)"
+limits s4 "7d_oi\t150\t$AHEAD\n"
+check "a percent past 100 is drawn as 100"      "fable 100% ↺1d01h" "$(render s4)"
+limits s4 "7d_oi\t250\t$AHEAD\n"
+check "a percent past 200 is not a percent"     ""                  "$(render s4)"
+limits s4 "junk\n7d_oi\tx\t$AHEAD\n7d_oi\t31\t$AHEAD\n"
+check "a bad line does not end the read"        "fable 31% ↺1d01h"  "$(render s4)"
+if [ "$(id -u)" != 0 ]; then
+  limits s5 "7d_oi\t30\t$AHEAD\n"; chmod 000 "$SDIR/s5.limits"
+  ERR=$(printf '{"session_id":"s5","model":{"display_name":"Opus"}}' | CORALLINE_CONFIG="$TMP/conf" COLUMNS=200 "$BASH" "$SCRIPT" 2>&1 >/dev/null)
+  chmod 644 "$SDIR/s5.limits"
+  check "an unreadable file leaves stderr empty" "" "$ERR"
+fi
+# the wizard preview has no file: it names a percent
+printf 'VL_CLOCK=off\nVL_SEGMENTS="model fable"\nVL_FABLE_PREVIEW=30\n' > "$TMP/conf"
+OUTP=$(printf '{"session_id":"nofile","model":{"display_name":"Opus"}}' | CORALLINE_CONFIG="$TMP/conf" COLUMNS=200 "$BASH" "$SCRIPT" | perl -pe 's/\e\[[0-9;]*m//g')
+case "$OUTP" in (*"fable "*"30%"*) check "preview stand-in shown" x x ;; (*) check "preview stand-in shown" "fable 30%" "$OUTP" ;; esac
 
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "SOME FAILED"; exit 1; }
