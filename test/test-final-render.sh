@@ -31,7 +31,7 @@ run_install() { # $1 = sandbox HOME, $2 = CONFIG_FILE path
     CORALLINE_HOME="$1/.claude/coralline" \
     CLAUDE_SETTINGS="$1/.claude/settings.json" \
     CORALLINE_CONFIG="$2" \
-    bash "$REPO/configure.sh" --install --default 2>&1
+    "$BASH" "$REPO/configure.sh" --install --default 2>&1
 }
 
 # --- Case 1: fresh install, float OFF (the default) -> render must print ------

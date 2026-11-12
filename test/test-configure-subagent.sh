@@ -148,22 +148,25 @@ SPACE_SETTINGS="$TMPD/space-settings.json"
 TARGET_DIR="$SPACE_DIR"; SETTINGS_FILE="$SPACE_SETTINGS"
 update_settings >/dev/null
 MAIN_COMMAND=$(jq -r '.statusLine.command' "$SPACE_SETTINGS")
-MAIN_RENDER=$(CORALLINE_CONFIG=/dev/null bash -c "$MAIN_COMMAND" < "$HERE/sample-input.json")
+MAIN_RENDER=$(CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG=/dev/null "$BASH" -c "$MAIN_COMMAND" < "$HERE/sample-input.json")
 [ -n "$MAIN_RENDER" ] && ok "statusLine command quotes spaced path" || bad "statusLine command quotes spaced path"
 enable_subagent_statusline >/dev/null
 SUB_COMMAND=$(jq -r '.subagentStatusLine.command' "$SPACE_SETTINGS")
 SUB_RENDER=$(printf '%s\n' '{"tasks":[{"id":"space","type":"local_agent","label":"space path"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash -c "$SUB_COMMAND")
+  | CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG=/dev/null "$BASH" -c "$SUB_COMMAND")
 printf '%s\n' "$SUB_RENDER" | jq -e '.id == "space"' >/dev/null 2>&1 \
   && ok "subagent command quotes spaced path" || bad "subagent command quotes spaced path"
 TARGET_DIR="$HOME/.claude/coralline"; SETTINGS_FILE="$MAIN_SETTINGS"
 
 # (4b) the non-interactive flag drives the same toggle (AI-install path)
+# The CLI runs get a HOME of their own: without it the preview render would read
+# the developer's real ~/.claude/coralline install and config.
+mkdir -p "$TMPD/clihome"
 rm -f "$SETTINGS_FILE" "$SETTINGS_FILE".bak.*
-CLAUDE_SETTINGS="$SETTINGS_FILE" bash "$CONF" --subagent-rows=on >/dev/null 2>&1
+HOME="$TMPD/clihome" CORALLINE_NO_SAMPLE=1 CLAUDE_SETTINGS="$SETTINGS_FILE" "$BASH" "$CONF" --subagent-rows=on >/dev/null 2>&1
 jq -e '.subagentStatusLine.command | endswith("--subagent")' "$SETTINGS_FILE" >/dev/null 2>&1 \
   && ok "--subagent-rows=on registers" || bad "--subagent-rows=on registers"
-CLAUDE_SETTINGS="$SETTINGS_FILE" bash "$CONF" --subagent-rows=off >/dev/null 2>&1
+HOME="$TMPD/clihome" CORALLINE_NO_SAMPLE=1 CLAUDE_SETTINGS="$SETTINGS_FILE" "$BASH" "$CONF" --subagent-rows=off >/dev/null 2>&1
 jq -e 'has("subagentStatusLine") | not' "$SETTINGS_FILE" >/dev/null 2>&1 \
   && ok "--subagent-rows=off removes" || bad "--subagent-rows=off removes"
 
@@ -190,10 +193,10 @@ enable_subagent_statusline >/dev/null 2>&1 && bad "enable refuses another tool's
 cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "enable leaves another tool's entry" || bad "enable leaves another tool's entry"
 disable_subagent_statusline >/dev/null 2>&1
 cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "disable leaves another tool's entry" || bad "disable leaves another tool's entry"
-ONERR=$(CLAUDE_SETTINGS="$SETTINGS_FILE" bash "$CONF" --subagent-rows=on 2>&1 >/dev/null); ONRC=$?
+ONERR=$(HOME="$TMPD/clihome" CORALLINE_NO_SAMPLE=1 CLAUDE_SETTINGS="$SETTINGS_FILE" "$BASH" "$CONF" --subagent-rows=on 2>&1 >/dev/null); ONRC=$?
 [ "$ONRC" = 1 ] && ok "--subagent-rows=on exits 1 on another tool's entry" || bad "--subagent-rows=on exits 1 on another tool's entry (rc=$ONRC)"
 case "$ONERR" in (*"another tool"*) ok "--subagent-rows=on says why" ;; (*) bad "--subagent-rows=on says why" ;; esac
-CLAUDE_SETTINGS="$SETTINGS_FILE" bash "$CONF" --subagent-rows=off >/dev/null 2>&1
+HOME="$TMPD/clihome" CORALLINE_NO_SAMPLE=1 CLAUDE_SETTINGS="$SETTINGS_FILE" "$BASH" "$CONF" --subagent-rows=off >/dev/null 2>&1
 cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "the flags leave another tool's entry byte for byte" || bad "the flags leave another tool's entry byte for byte"
 # an entry that is ours but not in the installer's shape is still ours: a trailing
 # wrapper after --subagent, or a broken value, can be removed and repaired
@@ -278,7 +281,7 @@ SETTINGS_FILE="$MAIN_SETTINGS"
 # (4c) explicit no-menu setup modes must not ask the closing wizard question
 DEFAULTD="$TMPD/default-mode"; mkdir -p "$DEFAULTD/home"
 DEFOUT=$(HOME="$DEFAULTD/home" CORALLINE_CONFIG="$DEFAULTD/coralline.conf" \
-  CLAUDE_SETTINGS="$DEFAULTD/settings.json" bash "$CONF" --default </dev/null 2>&1)
+  CLAUDE_SETTINGS="$DEFAULTD/settings.json" "$BASH" "$CONF" --default </dev/null 2>&1)
 DEFRC=$?
 [ "$DEFRC" = 0 ] && ok "--default exits successfully" || bad "--default exits: rc=$DEFRC"
 case "$DEFOUT" in
