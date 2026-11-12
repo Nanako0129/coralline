@@ -2227,9 +2227,15 @@ function Get-Burn5Estimate($Snapshot, $Current, [long]$NowValue, [int]$Window) {
     if (-not $Snapshot.Complete) { return $warming }
     # Rows arrive deduplicated per (reset, sample) with their maximum pct, so only
     # the current reading can repeat a key, and a per-second maximum absorbs it.
+    # Our own reading names the window, as in statusline.sh's burn_eta_5h: a later
+    # reset in the shared history belongs to another account (a relay fallback
+    # account or a /login switch in this config directory), since one account has
+    # no later window while ours is still open. Without a reading the latest
+    # stored window is used. The cost matches the gauges' since #112: after an
+    # early upstream reset an idle session keeps projecting its old window.
     $maxReset = 0L
-    foreach ($row in $Snapshot.Rows) { if ($row[0] -gt $maxReset) { $maxReset = $row[0] } }
-    if ($Current.Valid -and [long]$Current.Reset -gt $maxReset) { $maxReset = [long]$Current.Reset }
+    if ($Current.Valid) { $maxReset = [long]$Current.Reset }
+    else { foreach ($row in $Snapshot.Rows) { if ($row[0] -gt $maxReset) { $maxReset = $row[0] } } }
     if ($maxReset -le 0) { return $warming }
     $perSecond = [System.Collections.Generic.Dictionary[long,int]]::new()
     $best = 0

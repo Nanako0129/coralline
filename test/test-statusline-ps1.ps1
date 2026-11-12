@@ -2809,6 +2809,36 @@ fi
     $ownBashState = [IO.File]::ReadAllText($ownBashDump, $StrictUtf8).Trim()
     Check 'WIN-02 own reading beats a newer stored window' ([string]$ownState.Limit5Pct -eq '61000' -and [string]$ownState.Limit5Reset -eq [string]$reset5 -and $ownBashState.Contains('Limit5Pct=61000') -and $ownPs.Stdout.Contains('61%'))
 
+    # #115 parity, burn binds to the own window: the shared history also holds a
+    # LATER window (another account in this config directory) with a steep slope.
+    # The projection has to come from our own reset and our own samples, in both
+    # renderers, with the sync off.
+    $ownBurnRoot = Join-Path $stateRoot 'burn-own-window'
+    $ownBurnConfig = New-StateConfig 'win02-burn-own-window' $ownBurnRoot 'burn' $false
+    $laterReset = $reset5 + 1100L
+    $ownBurnRows = @(
+        ('{0}`t006.000`t{1}' -f ($fixedNow - 360L), $reset5),
+        ('{0}`t007.000`t{1}' -f ($fixedNow - 300L), $reset5),
+        ('{0}`t008.000`t{1}' -f ($fixedNow - 60L), $reset5),
+        ('{0}`t050.000`t{1}' -f ($fixedNow - 260L), $laterReset),
+        ('{0}`t052.000`t{1}' -f ($fixedNow - 10L), $laterReset)
+    ) -join "`n"
+    Write-Utf8 (Join-Path $ownBurnRoot 'burn.tsv') ($ownBurnRows.Replace('`t', "`t") + "`n")
+    $ownBurnPayload = Clone-Object $statePayload
+    $ownBurnPayload.rate_limits.five_hour.used_percentage = '8'
+    $ownBurnDump = Join-Path $ownBurnRoot 'ps.json'
+    $ownBurnBashDump = Join-Path $ownBurnRoot 'bash.txt'
+    $ownBurnPs = Invoke-Statusline (Json $ownBurnPayload) $ownBurnConfig @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW=[string]$fixedNow; CORALLINE_TEST_STATE_DUMP=$ownBurnDump } '' 10000
+    $ownBurnBash = Invoke-BashStatusline (Json $ownBurnPayload) $ownBurnConfig @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW=[string]$fixedNow; CORALLINE_TEST_STATE_DUMP=(Forward-Path $ownBurnBashDump) }
+    Check-Run 'WIN-02 PowerShell burn own window vs later store' $ownBurnPs
+    Check-Run 'WIN-02 Bash burn own window vs later store' $ownBurnBash
+    Check-Exact 'WIN-02 burn own window vs later store differential' $ownBurnPs $ownBurnBash
+    $ownBurnState = [IO.File]::ReadAllText($ownBurnDump, $StrictUtf8) | ConvertFrom-Json
+    $ownBurnBashState = [IO.File]::ReadAllText($ownBurnBashDump, $StrictUtf8).Trim()
+    $ownTtr = [string]($reset5 - $fixedNow)
+    Check 'WIN-02 burn projects from the own window, not a later stored one' ([string]$ownBurnState.FiveTtr -eq $ownTtr -and $ownBurnState.FiveState -eq 'active' -and $ownBurnBashState.Contains('FiveState=active') -and $ownBurnBashState.Contains('FiveTtr=' + $ownTtr))
+    if ([string]$ownBurnState.FiveTtr -ne $ownTtr) { [Console]::Out.WriteLine('DIAG  burn own window ps=' + ([IO.File]::ReadAllText($ownBurnDump, $StrictUtf8).Trim()) + ' bash=' + $ownBurnBashState) }
+
     # #112 parity, no 5h window: a payload with a live seven_day and no five_hour
     # hides limit5h instead of borrowing the stored 5h entry, and burn makes no 5h
     # projection with sync on or off, binding to 7d or resting idle.
