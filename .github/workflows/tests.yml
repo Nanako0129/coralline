@@ -141,9 +141,10 @@ jobs:
           "payload bytes: $($json.Length), first byte: $($json[0]), last byte: $($json[$json.Length - 1])"
           "console input code page: $([Console]::InputEncoding.CodePage), preamble bytes: $([Console]::InputEncoding.GetPreamble().Length)"
           $script:CloseRaw = $true
-          Launch 'closing the raw stream'              @{} (Get-Location).Path $true (Join-Path (Get-Location).Path 'statusline.ps1')
-          $script:CloseRaw = $false
-          Launch 'closing the StandardInput writer'    @{} (Get-Location).Path $true (Join-Path (Get-Location).Path 'statusline.ps1')
+          Launch 'runner default encoding'             @{} (Get-Location).Path $true (Join-Path (Get-Location).Path 'statusline.ps1')
+          try { [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false); "set a preamble-free input encoding" } catch { "could not set the input encoding: $_" }
+          "console input code page: $([Console]::InputEncoding.CodePage), preamble bytes: $([Console]::InputEncoding.GetPreamble().Length)"
+          Launch 'preamble-free input encoding'        @{} (Get-Location).Path $true (Join-Path (Get-Location).Path 'statusline.ps1')
           $script = Join-Path $repo 'statusline.ps1'
           $rt = Join-Path ([IO.Path]::GetTempPath()) 'coralline-diag-home'
           Launch 'plain, window allowed'               @{} $repo $false $script

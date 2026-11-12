@@ -17,6 +17,13 @@ $script:StateBashScript = $BashScript
 $Configure = Join-Path $Repo 'configure.sh'
 $PowerShellExe = (Get-Process -Id $PID).Path
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+# .NET Framework's Process.Start hands the child's stdin to a writer that takes
+# its encoding from [Console]::InputEncoding and emits that encoding's preamble
+# as soon as it is created. Under a UTF-8 console code page (65001, as on hosted
+# CI runners) a BOM therefore reaches the child BEFORE anything this suite writes,
+# and the renderer rightly refuses a payload that does not start with "{". An
+# encoding without a preamble avoids it; Claude Code writes through its own pipe.
+try { [Console]::InputEncoding = $Utf8NoBom } catch { }
 $StrictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
 $Invariant = [System.Globalization.CultureInfo]::InvariantCulture
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ('coralline-win01-test-' + [guid]::NewGuid().ToString('N'))
@@ -77,10 +84,8 @@ function Invoke-CapturedProcess(
         $outTask = $process.StandardOutput.BaseStream.CopyToAsync($stdout)
         $errTask = $process.StandardError.BaseStream.CopyToAsync($stderr)
         if ($null -eq $InputBytes) { $InputBytes = $Utf8NoBom.GetBytes($InputText) }
-        # Write and close the raw stream, never the StandardInput writer: on .NET
-        # Framework that writer emits its encoding's preamble when it is closed, so
-        # under a UTF-8 console code page (65001) a BOM lands AFTER the payload and
-        # the renderer sees invalid JSON. Claude Code writes through its own pipe.
+        # Bytes go to the raw stream so no text encoding touches the payload (see
+        # the [Console]::InputEncoding note at the top for the writer's preamble).
         if ($InputBytes.Length -gt 0) { $process.StandardInput.BaseStream.Write($InputBytes, 0, $InputBytes.Length) }
         $process.StandardInput.BaseStream.Close()
         $timedOut = -not $process.WaitForExit($TimeoutMs)

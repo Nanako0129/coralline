@@ -14,6 +14,13 @@ $Repo = Split-Path -Path $Here -Parent
 $Installer = Join-Path $Repo 'install.ps1'
 $PowerShellExe = (Get-Process -Id $PID).Path
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+# .NET Framework's Process.Start hands the child's stdin to a writer that takes
+# its encoding from [Console]::InputEncoding and emits that encoding's preamble
+# as soon as it is created. Under a UTF-8 console code page (65001, as on hosted
+# CI runners) a BOM therefore reaches the child BEFORE anything this suite writes,
+# and the renderer rightly refuses a payload that does not start with "{". An
+# encoding without a preamble avoids it; Claude Code writes through its own pipe.
+try { [Console]::InputEncoding = $Utf8NoBom } catch { }
 $StrictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ('c 雪&(p)-' + [guid]::NewGuid().ToString('N'))
 $script:Pass = 0
