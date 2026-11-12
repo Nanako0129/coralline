@@ -245,6 +245,34 @@ eq '7d exact rate' "$_B7_RATE" '0.0001157407'
 eq '7d ttr' "$_B7_TTR" 345600
 burn_eta_7d 0 1345600; eq '7d zero pct is infinite' "$_B7_ETA" inf
 
+# state_abs_path: a path that is already canonical is returned as it is, and
+# every other spelling still takes the walk to the same answer.
+ap() { state_abs_path "$1"; eq "abs path $1" "$?:$_SAP" "$2"; }
+ap /a/b/c '0:/a/b/c'
+ap /a '0:/a'
+ap / '0:/'
+ap /a//b '0:/a/b'
+ap /a/./b '0:/a/b'
+ap /a/b/../c '0:/a/c'
+ap /a/b/ '0:/a/b'
+ap /a/b/. '0:/a/b'
+ap /a/.. '0:/'
+ap /a/../b '0:/b'
+ap /a/b/../../c '0:/c'
+ap /a/../.. '1:'
+ap /.. '1:'
+ap //server/share '1:'
+ap '/a\b' '0:/a/b'
+ap 'C:/Users/x' '0:/c/Users/x'
+ap '' '1:'
+# look-alikes of "." and ".." are ordinary names and stay on the fast path
+ap /a/..b '0:/a/..b'
+ap /a/... '0:/a/...'
+ap /a/b.. '0:/a/b..'
+ap /.a '0:/.a'
+ap '/a/b\' '0:/a/b'
+( cd / && state_abs_path tmp/x; [ "$_SAP" = /tmp/x ] ) && ok 'abs path relative to PWD' || bad 'abs path relative to PWD' "$_SAP"
+
 # Compact limit directory high-water: reset first, pct second, malformed entries ignored.
 CASE="$TMPD/highwater"; mkdir -p "$CASE"
 unit_gate "$CASE" 1000000 15 1015900 30 1345600 0

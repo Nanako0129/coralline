@@ -35,4 +35,22 @@ check 2  emoji            "🚀"                # 4-byte wide = 2 columns
 check 7  icon-bar-pct     "⬡ ▰▱ 9%"           # hexagon + bars treated as narrow
 check 5  ansi-stripped    "${ESC}[1m${ESC}[38;5;231mhello${ESC}[0m"
 
+# Printable ASCII is counted in one step and only the rest is walked: every
+# printable ASCII character is one column, including the ones a bracket
+# expression or a quote could trip on, and it mixes with wide and zero-width text.
+check 32 ascii-punctuation '!"#$%&'"'"'()*+,-./:;<=>?@[\]^_`{|}~'
+check 95 ascii-all         " !\"#\$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_\`abcdefghijklmnopqrstuvwxyz{|}~"
+check 10 ascii-around-cjk  "[a] 中文 ~"          # 3+1+4+1+1
+check 3  combining-in-ascii "$(printf 'e\xcc\x81-x')"  # e + combining acute = 1 column
+check 1  control-byte      "$(printf '\001')"   # a stray control byte is still one column
+# Malformed UTF-8: a lone lead byte is one column and no longer swallows the
+# ASCII character after it (the terminal draws both).
+check 3  lone-lead-byte    "$(printf 'a\xc2b')"
+# Past 256 bytes the plain walk is used (bash 3.2 expands in quadratic time);
+# both paths must agree at the boundary and beyond it.
+_l255=$(printf 'x%.0s' $(seq 1 253))中
+check 255 at-the-fast-path-limit "$_l255"        # 253 + one wide char: 256 bytes
+check 256 past-the-fast-path-limit "x$_l255"     # 257 bytes
+check 600 long-ascii       "$(printf 'y%.0s' $(seq 1 600))"
+
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi
