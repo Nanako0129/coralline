@@ -1373,7 +1373,7 @@ settings_runs_coralline() {  # $1=settings key; exit 0 when its command runs thi
   case "$raw" in ("$HOME"/*) tilde="~${raw#"$HOME"}"; var="\$HOME${raw#"$HOME"}"; brace="\${HOME}${raw#"$HOME"}" ;; esac
   jq -e --arg k "$1" --arg raw "$raw" --arg quoted "$quoted" --arg tilde "$tilde" --arg var "$var" --arg brace "$brace" '
     .[$k] as $s
-    | ($s | type) == "object" and $s.type == "command" and ($s.command | type) == "string"
+    | ($s | type) == "object" and ($s.command | type) == "string"
       and any([$raw, $quoted, $tilde, $var, $brace][] | select(length > 0);
               . as $p | ($s.command | split($p)) as $parts
               | any(range(1; $parts | length);
@@ -1387,6 +1387,12 @@ update_settings() {
   # user has it: refreshInterval, padding, a wrapped command. Only a first install,
   # or a statusLine that runs something else, gets the fresh entry.
   if settings_runs_coralline statusLine; then
+    # Ours but without "type": "command", which Claude Code needs: add only that.
+    if ! jq -e '.statusLine.type == "command"' "$SETTINGS_FILE" >/dev/null 2>&1; then
+      settings_merge '.statusLine.type = "command"'
+      printf 'Updated %s (statusLine type set; the rest left as it is)\n' "$SETTINGS_FILE"
+      return 0
+    fi
     printf '%s already runs coralline; statusLine left as it is\n' "$SETTINGS_FILE"
     return 0
   fi
@@ -1396,44 +1402,33 @@ update_settings() {
   printf 'Updated %s\n' "$SETTINGS_FILE"
 }
 
-subagent_enabled() {  # exit 0 when settings.json registers the subagent renderer
-  # Any command ending in " --subagent": the install path is not compared, since a
-  # documented custom entry runs a copy elsewhere or wraps it in an env prefix.
-  [ -f "$SETTINGS_FILE" ] || return 1
-  jq -e '
-    .subagentStatusLine as $s |
-    if ($s | type) != "object" then false
-    elif $s.type != "command" then false
-    elif ($s.command | type) != "string" then false
-    else ($s.command | endswith(" --subagent"))
-    end
-  ' "$SETTINGS_FILE" >/dev/null 2>&1
-}
-
-subagent_state() {  # → _SUB_STATE: absent | ours | broken | foreign | unreadable, in one jq call
-  # ours: a command that runs a script named statusline.sh with --subagent as its
-  # first argument (any copy, an env prefix, a trailing redirection). The install
-  # path is not compared, since a documented custom entry runs a copy elsewhere;
-  # the flag right after that file name is what marks the renderer. enable leaves
-  # it exactly as it is and disable removes it. broken: nothing anyone could run
-  # (not an object, an object with nothing but "type", a blank command, or our
-  # command without type "command"); enable repairs it and disable removes it.
-  # foreign: any other command, or an object in a shape that is not ours (no
-  # command but other keys); neither touches it. unreadable: settings.json does not parse; the caller goes on
+subagent_state() {  # → _SUB_STATE: absent | ours | untyped | broken | foreign | unreadable, in one jq call
+  # ours: a command that runs a script named statusline.sh (or the native
+  # statusline.ps1) with --subagent as its first argument: any copy, an env prefix,
+  # a trailing redirection, a Windows path. The install path is not compared,
+  # since a documented custom entry runs a copy elsewhere; the flag right after
+  # that file name is what marks the renderer. enable leaves it exactly as it is
+  # and disable removes it. untyped: the same command without "type": "command";
+  # enable adds only the type. broken: nothing anyone could run (true, a number,
+  # an empty object or one with nothing but our type, a blank command or string);
+  # enable replaces it and disable removes it. foreign: any other command or
+  # string, or an object in a shape that is not ours; neither touches it. unreadable: settings.json does not parse; the caller goes on
   # to settings_merge, which stops with the parse error and a backup.
   _SUB_STATE=absent
   [ -s "$SETTINGS_FILE" ] || return 0
   _SUB_STATE=$(jq -r '
     .subagentStatusLine as $s
     | if $s == null then "absent"
+      elif ($s | type) == "string" then (if ($s | test("^\\s*$")) then "broken" else "foreign" end)
       elif ($s | type) != "object" then "broken"
-      elif ($s.command | type) != "string" then (if ($s | del(.type) | length) == 0 then "broken" else "foreign" end)
+      elif ($s.command | type) != "string" then
+        (if ($s | del(.type) | length) == 0 and ($s.type == null or $s.type == "command") then "broken" else "foreign" end)
       elif ($s.command | test("^\\s*$")) then "broken"
-      elif ($s.command | test("(^|[/\\s\"\u0027])statusline\\.sh[\"\u0027]?\\s+[\"\u0027]?--subagent($|[\\s\"\u0027><|;&)])"))
-        then (if $s.type == "command" then "ours" else "broken" end)
+      elif ($s.command | test("(^|[/\\\\\\s\"\u0027])statusline\\.(sh|ps1)[\"\u0027]?\\s+[\"\u0027]?--subagent($|[\\s\"\u0027><|;&)])"))
+        then (if $s.type == "command" then "ours" else "untyped" end)
       else "foreign" end
   ' "$SETTINGS_FILE" 2>/dev/null) || _SUB_STATE=unreadable
-  case "$_SUB_STATE" in (absent|ours|broken|foreign) ;; (*) _SUB_STATE=unreadable ;; esac
+  case "$_SUB_STATE" in (absent|ours|untyped|broken|foreign) ;; (*) _SUB_STATE=unreadable ;; esac
 }
 
 enable_subagent_statusline() {
@@ -1449,6 +1444,11 @@ enable_subagent_statusline() {
   fi
   if [ "$_SUB_STATE" = ours ]; then
     printf '%s already has the coralline subagent panel rows; left as it is\n' "$SETTINGS_FILE"
+    return 0
+  fi
+  if [ "$_SUB_STATE" = untyped ]; then
+    settings_merge '.subagentStatusLine.type = "command"'
+    printf 'Updated %s (subagentStatusLine type set; the rest left as it is)\n' "$SETTINGS_FILE"
     return 0
   fi
   printf -v command 'bash %q --subagent' "$TARGET_DIR/statusline.sh"
@@ -1497,7 +1497,7 @@ offer_subagent_rows() {  # opt-in toggle; default answer = current state (no cha
     printf '%s has a subagentStatusLine from another tool; coralline leaves the subagent rows to it.\n' "$SETTINGS_FILE"
     return 0
   fi
-  [ "$_SUB_STATE" = ours ] && cur=y
+  case "$_SUB_STATE" in (ours|untyped) cur=y ;; esac
   if yes_no "Render subagent panel rows in your coralline theme (Claude Code >= 2.1.205)" "$cur"; then
     [ "$cur" = "y" ] || enable_subagent_statusline || return 0
     verify_subagent_render

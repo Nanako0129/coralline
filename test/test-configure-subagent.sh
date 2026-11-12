@@ -11,7 +11,8 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 CONF="$HERE/../configure.sh"
 
 eval "$(sed -n '/^settings_merge() {/,/^}/p' "$CONF")"
-eval "$(sed -n '/^subagent_enabled() {/,/^}/p' "$CONF")"
+# "enabled" in these cases is the classification production acts on
+subagent_enabled() { subagent_state; [ "$_SUB_STATE" = ours ]; }
 eval "$(sed -n '/^subagent_state() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^settings_runs_coralline() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^update_settings() {/,/^}/p' "$CONF")"
@@ -253,8 +254,19 @@ printf '{"statusLine":{"type":"command","command":"bash %s/statusline.sh\\n"}}\n
 settings_runs_coralline statusLine && ok "ours: a trailing newline after the path" || bad "ours: a trailing newline after the path"
 printf '{"statusLine":{"type":"command","command":"bash %s/statusline.sh.bak.20261101"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
 settings_runs_coralline statusLine && bad "a .bak path is not this install" || ok "a .bak path is not this install"
-printf '{"statusLine":{"command":"bash %s/statusline.sh"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
-settings_runs_coralline statusLine && bad "an entry without type command is rewritten" || ok "an entry without type command is rewritten"
+# ours without "type": only the type is added, the wrapper and other keys stay
+printf '{"statusLine":{"command":"CORALLINE_CONFIG=/x.conf bash %s/statusline.sh","padding":3}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
+update_settings >/dev/null
+jq -e '.statusLine.type == "command" and .statusLine.padding == 3 and (.statusLine.command | startswith("CORALLINE_CONFIG=/x.conf ")) and (.statusLine | has("refreshInterval") | not)' "$SETTINGS_FILE" >/dev/null 2>&1 \
+  && ok "a type-less statusLine of ours only gets its type" || bad "a type-less statusLine of ours only gets its type"
+printf '{"subagentStatusLine":{"command":"CORALLINE_CONFIG=/x.conf bash /p/statusline.sh --subagent","padding":3}}\n' > "$SETTINGS_FILE"
+enable_subagent_statusline >/dev/null 2>&1
+jq -e '.subagentStatusLine == {"command":"CORALLINE_CONFIG=/x.conf bash /p/statusline.sh --subagent","padding":3,"type":"command"}' "$SETTINGS_FILE" >/dev/null 2>&1 \
+  && ok "a type-less subagent entry of ours only gets its type" || bad "a type-less subagent entry of ours only gets its type"
+_st '{"subagentStatusLine":"other-tool --rows"}' foreign 'a string value from another tool'
+_st '{"subagentStatusLine":{"type":"builtin"}}' foreign 'an object with a type that is not ours'
+_st '{"subagentStatusLine":{"type":"command","command":"\"pwsh\" -NoProfile -File \"C:\\Users\\x\\.claude\\coralline\\statusline.ps1\" --subagent"}}' ours 'the native Windows row'
+_st '{"subagentStatusLine":{"type":"command","command":"bash C:\\Users\\x\\coralline\\statusline.sh --subagent"}}' ours 'a backslash path'
 TARGET_DIR=$TARGET_SAVE
 # our own entry, wrapped: enabling again changes nothing
 printf '{"subagentStatusLine":{"type":"command","command":"CORALLINE_CONFIG=/tmp/s.conf bash /tmp/statusline.sh --subagent"}}\n' > "$SETTINGS_FILE"
