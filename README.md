@@ -31,7 +31,7 @@ Pure Bash on macOS, Linux, and Git Bash, plus a native PowerShell renderer for W
 <td valign="top"><b>Fits the window.</b><br><code>VL_LAYOUT="auto"</code> wraps the bar over as many as <code>VL_MAX_LINES</code> rows as the terminal narrows.</td>
 </tr>
 <tr>
-<td valign="top"><b>Costs nothing to run.</b><br>Local only: no network, no API calls, no tokens. The Bash bar parses each payload with one <code>jq</code> call, and a render runs at most one <code>git</code> call.</td>
+<td valign="top"><b>Costs nothing to run.</b><br>Local only: no network, no API calls, no tokens. The Bash bar parses each payload with one <code>jq</code> call, and the default bar runs one <code>git</code> call per render (the opt-in <code>project</code> and <code>stash</code> each add one).</td>
 <td valign="top"><b>Runs where Claude Code runs.</b><br>Stock macOS Bash 3.2, Linux Bash 4+, Git Bash, and a native Windows PowerShell 5.1 renderer.</td>
 </tr>
 </table>
@@ -257,7 +257,7 @@ The [quick start](#quick-start) covers Bash installs. This section covers PowerS
 
 ### Windows without Git Bash
 
-`statusline.ps1` is the native Windows PowerShell 5.1 renderer. It needs no Bash, `jq`, WSL, archive extractor, or Git; `git.exe` is optional and only enables `git`, `stash`, and `project`. It supports the same main segments, styles, layouts, state-backed features, float output, and themed subagent rows as Bash.
+`statusline.ps1` is the native Windows PowerShell 5.1 renderer. It needs no Bash, `jq`, WSL, archive extractor, or Git; `git.exe` is optional and only enables `git`, `stash`, and `project`. It supports the same styles, layouts, state-backed features, float output, and themed subagent rows as Bash, and the same main segments except `relay`. `VL_HEAD_SEGMENTS` and `VL_GIT_CACHE_TTL` are Bash only too; the native renderer ignores them.
 
 The following bootstrap follows mutable `main`, resolves it to a commit before downloading executable installer code, then passes the same commit to `install.ps1`:
 

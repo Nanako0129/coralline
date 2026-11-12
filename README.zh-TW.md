@@ -31,7 +31,7 @@ macOS、Linux 與 Git Bash 上是純 Bash，Windows 另有原生 PowerShell rend
 <td valign="top"><b>跟著視窗寬度走。</b><br><code>VL_LAYOUT="auto"</code> 會在終端機變窄時，把狀態列折成最多 <code>VL_MAX_LINES</code> 行。</td>
 </tr>
 <tr>
-<td valign="top"><b>執行零成本。</b><br>全程在本機：不連網、不呼叫 API、不用 token。Bash 主列每個 payload 只用一次 <code>jq</code> 解析，每次 render 最多一次 <code>git</code> 呼叫。</td>
+<td valign="top"><b>執行零成本。</b><br>全程在本機：不連網、不呼叫 API、不用 token。Bash 主列每個 payload 只用一次 <code>jq</code> 解析，預設主列每次 render 只呼叫一次 <code>git</code>（選用的 <code>project</code> 與 <code>stash</code> 各多一次）。</td>
 <td valign="top"><b>Claude Code 能跑的地方都能跑。</b><br>macOS 內建的 Bash 3.2、Linux Bash 4+、Git Bash，以及原生 Windows PowerShell 5.1 renderer。</td>
 </tr>
 </table>
@@ -257,7 +257,7 @@ Bash 讀取 `~/.claude/coralline.conf`，原生 renderer 也能讀同一個檔�
 
 ### Windows 無 Git Bash
 
-`statusline.ps1` 是原生 Windows PowerShell 5.1 renderer。它不需要 Bash、`jq`、WSL、archive 解壓工具或 Git；`git.exe` 是選用項目，只用來啟用 `git`、`stash` 與 `project`。它支援和 Bash 相同的主列區段、風格、版面、state-backed 功能、float 輸出與套用主題的 subagent 列。
+`statusline.ps1` 是原生 Windows PowerShell 5.1 renderer。它不需要 Bash、`jq`、WSL、archive 解壓工具或 Git；`git.exe` 是選用項目，只用來啟用 `git`、`stash` 與 `project`。它支援和 Bash 相同的風格、版面、state-backed 功能、float 輸出與套用主題的 subagent 列；主列區段除了 `relay` 以外也都相同。`VL_HEAD_SEGMENTS` 與 `VL_GIT_CACHE_TTL` 同樣只有 Bash 支援，原生 renderer 會略過它們。
 
 以下 bootstrap 會跟隨可變的 `main`，在下載可執行 installer 前先解析成 commit，再把同一個 commit 傳給 `install.ps1`：
 
