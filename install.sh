@@ -112,7 +112,6 @@ download_theme_archive() {
   done <<THEMES
 $(find "$extract" -type f -path '*/themes/*.conf' | sort)
 THEMES
-  rm -rf "$archive" "$extract"
   [ "$count" -gt 0 ] || die "no themes found for $REPO@$REF"
 }
 
@@ -268,18 +267,15 @@ else
 fi
 # Run configure.sh as a child, not through exec: exec replaces this shell, the
 # EXIT trap never fires, and every remote install left its whole payload behind
-# in the temp dir.
-if [ "$CONFIGURE_MODE" = "--install-only" ]; then
-  if [ -r /dev/tty ] && [ -t 1 ]; then
-    bash "$WORK_DIR/configure.sh" --install-only < /dev/tty
-    exit $?
-  fi
-  bash "$WORK_DIR/configure.sh" --install-only
-  exit $?
-fi
+# in the temp dir. TERM and HUP get a handler so that one sent to this shell
+# alone is held until the child returns: without it the shell exits at once, the
+# trap removes the temp dir, and configure.sh is left running from files that
+# are gone. Ctrl-C reaches both and ends both.
+trap ':' TERM HUP
+if [ "$CONFIGURE_MODE" = "--install-only" ]; then set -- --install-only; else set -- --install $CONFIGURE_MODE; fi
 if [ -r /dev/tty ] && [ -t 1 ]; then
-  bash "$WORK_DIR/configure.sh" --install $CONFIGURE_MODE < /dev/tty
-  exit $?
+  bash "$WORK_DIR/configure.sh" "$@" < /dev/tty
+else
+  bash "$WORK_DIR/configure.sh" "$@"
 fi
-bash "$WORK_DIR/configure.sh" --install $CONFIGURE_MODE
 exit $?
