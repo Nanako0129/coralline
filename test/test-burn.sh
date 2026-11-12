@@ -270,6 +270,12 @@ true_case 'limit publish: skipped below the latest entry' test ! -e "$_SL5_ROOT/
 rmdir "$_SL5_ROOT/0001016900_010.000"; mkdir -p "$_SL5_ROOT/0001015800_090.000" "$_SL5_ROOT/not-an-entry-zzzzzz"
 rl_sample "$_SL5_BASE" "$_CUR5_PCT" "$_CUR5_RST"
 true_case 'limit publish: written above the latest valid entry' test -d "$_SL5_ROOT/0001015900_015.000"
+# Only an entry the reader would take as the winner suppresses publishing: a
+# stray file, a non-empty directory or a reset beyond the horizon does not.
+rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001016000_010.000/x" "$_SL5_ROOT/9999999999_000.000"; : > "$_SL5_ROOT/0001016100_010.000"
+rl_sample "$_SL5_BASE" "$_CUR5_PCT" "$_CUR5_RST"
+true_case 'limit publish: not silenced by entries the reader refuses' test -d "$_SL5_ROOT/0001015900_015.000"
+rm -rf "$_SL5_ROOT"
 
 # A drop inside one window is followed.
 rm -rf "$_SL5_ROOT"; mkdir -p "$_SL5_ROOT/0001015900_090.000"

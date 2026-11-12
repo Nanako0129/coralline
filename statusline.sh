@@ -888,16 +888,16 @@ state_limit_entry_ok() {  # $1=base $2=root $3=path $4=name
 }
 
 rl_sample() {  # $1=canonical base $2=pct_milli $3=reset
-  local base="$1" pct="$2" rst="$3" root name path other LC_ALL=C
+  local base="$1" pct="$2" rst="$3" root name path other seen=0 max LC_ALL=C
   [ "${_STATE_MUTATE:-0}" = 1 ] || return 0
   if [ "$base" = "${_SL5_BASE:-}" ]; then
     [ "${_STATE_RL5_SAFE:-0}" = 1 ] && [ "${_CUR5_VALID:-0}" = 1 ] \
       && [ "$pct" = "$_CUR5_PCT" ] && [ "$rst" = "$_CUR5_RST" ] || return 0
-    root=$_SL5_ROOT
+    root=$_SL5_ROOT; max=$RL_MAX_5H
   elif [ "$base" = "${_SL7_BASE:-}" ]; then
     [ "${_STATE_RL7_SAFE:-0}" = 1 ] && [ "${_CUR7_VALID:-0}" = 1 ] \
       && [ "$pct" = "$_CUR7_PCT" ] && [ "$rst" = "$_CUR7_RST" ] || return 0
-    root=$_SL7_ROOT
+    root=$_SL7_ROOT; max=$RL_MAX_7D
   else return 0; fi
   state_limit_root_ok "$base" "$root" || return 0
   if [ ! -d "$root" ]; then
@@ -916,10 +916,16 @@ rl_sample() {  # $1=canonical base $2=pct_milli $3=reset
   # An entry below the latest one is removed by rl_latest's GC in this same
   # render, and since a session's own reading always wins its own window nobody
   # reads it: skip it instead of paying a mkdir and an rmdir on every render.
-  # Names are fixed-width digits, so the string order is the numeric one.
+  # Only an entry rl_latest would itself take as the winner counts (a real, empty
+  # directory with a reset inside the horizon), so a stray file or a planted
+  # far-future name cannot silence the store. Names are fixed-width digits, so
+  # the string order is the numeric one, and it is rl_latest's order (reset,
+  # then pct): change one and the other has to follow. Bounded like its scan.
   for other in "$root"/*; do
+    seen=$(( seen + 1 )); [ "$seen" -le 512 ] || break
     other="${other##*/}"
-    [[ "$other" > "$name" ]] && state_limit_name "$other" && return 0
+    [[ "$other" > "$name" ]] || continue
+    state_limit_entry_ok "$base" "$root" "$root/$other" "$other" && [ "$_SLN_RST" -le $(( NOW + max )) ] && return 0
   done
   state_paths_revalidate || return 0
   state_no_symlink_path "$path" && [ "$_SNP" = "$path" ] && [ ! -e "$path" ] && [ ! -L "$path" ] || return 0
@@ -1156,13 +1162,16 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
         close(tmp)
       }
       if (curvalid) add_obs(crst + 0, csamp + 0, cpct + 0)
-      maxrst = 0
-      for (i = 1; i <= n; i++) if (rs[i] > maxrst) maxrst = rs[i]
-      # Our own reading names the window. A later reset in the store belongs to
+      # Our own reading names the window. A later reset in the store is taken as
       # another account (a relay fallback account or a /login switch in this
-      # config dir): one account has no later window while ours is still open.
+      # config dir), as the gauges do since #112. The cost is the same as theirs:
+      # after an early upstream reset an idle session keeps projecting its old
+      # window, whose samples stop arriving, until its next response or until
+      # that reset passes; the bar and the gauge at least describe one window.
       # (No apostrophes here: this comment sits inside the single-quoted awk.)
+      maxrst = 0
       if (curvalid) maxrst = crst + 0
+      else for (i = 1; i <= n; i++) if (rs[i] > maxrst) maxrst = rs[i]
       if (maxrst <= 0) { print "warming 0 0 0 0"; exit }
       m = 0
       for (i = 1; i <= n; i++) if (rs[i] == maxrst) {
