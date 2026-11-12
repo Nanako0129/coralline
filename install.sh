@@ -92,8 +92,14 @@ download() {
 download_theme_archive() {
   local archive extract src rel dst count=0
   need_cmd tar
-  archive=$(mktemp "${TMPDIR:-/tmp}/coralline-themes.XXXXXX.tar.gz") || exit 1
-  extract=$(mktemp -d "${TMPDIR:-/tmp}/coralline-themes.XXXXXX") || exit 1
+  # Inside the install's own temp dir, which the EXIT trap removes on every path.
+  # A mktemp template has to end in its X's: BSD mktemp does not replace them
+  # before a suffix, so "themes.XXXXXX.tar.gz" was created under that literal
+  # name, a failed download left it behind, and every later run stopped here on
+  # "File exists".
+  archive="$TEMP_DIR/.themes.tar.gz"
+  extract="$TEMP_DIR/.themes"
+  mkdir -p "$extract" || die "could not create $extract"
   download "https://codeload.github.com/$REPO/tar.gz/$REF" "$archive"
   tar -xzf "$archive" -C "$extract" || die "failed to extract theme archive"
   while IFS= read -r src; do
@@ -106,7 +112,6 @@ download_theme_archive() {
   done <<THEMES
 $(find "$extract" -type f -path '*/themes/*.conf' | sort)
 THEMES
-  rm -rf "$archive" "$extract"
   [ "$count" -gt 0 ] || die "no themes found for $REPO@$REF"
 }
 
@@ -260,13 +265,17 @@ if [ "$CONFIGURE_MODE" = "--install-only" ]; then
 else
   ok "starting setup"
 fi
-if [ "$CONFIGURE_MODE" = "--install-only" ]; then
-  if [ -r /dev/tty ] && [ -t 1 ]; then
-    exec bash "$WORK_DIR/configure.sh" --install-only < /dev/tty
-  fi
-  exec bash "$WORK_DIR/configure.sh" --install-only
-fi
+# Run configure.sh as a child, not through exec: exec replaces this shell, the
+# EXIT trap never fires, and every remote install left its whole payload behind
+# in the temp dir. TERM and HUP get a handler so that one sent to this shell
+# alone is held until the child returns: without it the shell exits at once, the
+# trap removes the temp dir, and configure.sh is left running from files that
+# are gone. Ctrl-C reaches both and ends both.
+trap ':' TERM HUP
+if [ "$CONFIGURE_MODE" = "--install-only" ]; then set -- --install-only; else set -- --install $CONFIGURE_MODE; fi
 if [ -r /dev/tty ] && [ -t 1 ]; then
-  exec bash "$WORK_DIR/configure.sh" --install $CONFIGURE_MODE < /dev/tty
+  bash "$WORK_DIR/configure.sh" "$@" < /dev/tty
+else
+  bash "$WORK_DIR/configure.sh" "$@"
 fi
-exec bash "$WORK_DIR/configure.sh" --install $CONFIGURE_MODE
+exit $?

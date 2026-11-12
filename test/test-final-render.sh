@@ -87,4 +87,29 @@ set -- "$hb/.claude"/coralline.conf.bak.*
 [ -e "$1" ] && check "a declined overwrite writes no backup" 0 || check "a declined overwrite writes no backup" 1
 rm -rf "$hb"
 
+# --- Case 5: a symlinked coralline.conf stays a symlink ----------------------
+# The new config lands in the link's target (a dotfiles copy), replaced by
+# rename so it is never half-written; the link itself is not turned into a file.
+hl=$(mktemp -d "${TMPDIR:-/tmp}/coralline-final-render.XXXXXX") || exit 1
+mkdir -p "$hl/.claude" "$hl/dotfiles"
+printf 'VL_SEGMENTS="dir"\nMY_HAND_KNOB=1\n' > "$hl/dotfiles/coralline.conf"
+ln -s "$hl/dotfiles/coralline.conf" "$hl/.claude/coralline.conf"
+printf 'y\n' | run_install "$hl" "$hl/.claude/coralline.conf" >/dev/null
+[ -L "$hl/.claude/coralline.conf" ] && check "a symlinked config is still a symlink" 1 || check "a symlinked config is still a symlink" 0
+grep -q 'MY_HAND_KNOB' "$hl/dotfiles/coralline.conf" && check "the link target holds the new config" 0 || check "the link target holds the new config" 1
+set -- "$hl/dotfiles"/*.new.*; [ -e "$1" ] && check "no temp file left beside the target" 0 || check "no temp file left beside the target" 1
+# a dangling link into an existing directory is refused too: nothing is created
+rm -f "$hl/.claude/coralline.conf"; ln -s "$hl/dotfiles/absent.conf" "$hl/.claude/coralline.conf"
+run_install "$hl" "$hl/.claude/coralline.conf" >/dev/null; rca=$?
+[ "$rca" -ne 0 ] && [ ! -e "$hl/dotfiles/absent.conf" ] && check "a dangling link into an existing directory creates nothing" 1 || check "a dangling link into an existing directory creates nothing" 0
+# a dangling link whose target directory does not exist: fail loudly, leak nothing
+rm -f "$hl/.claude/coralline.conf"; ln -s "$hl/nowhere/coralline.conf" "$hl/.claude/coralline.conf"
+before=$(ls "${TMPDIR:-/tmp}" 2>/dev/null | grep -c '^coralline-config\.')
+outd=$(run_install "$hl" "$hl/.claude/coralline.conf"); rcd=$?
+[ "$rcd" -ne 0 ] && check "a dangling config link exits non-zero" 1 || check "a dangling config link exits non-zero" 0
+[ -L "$hl/.claude/coralline.conf" ] && check "the dangling link is left as it is" 1 || check "the dangling link is left as it is" 0
+after=$(ls "${TMPDIR:-/tmp}" 2>/dev/null | grep -c '^coralline-config\.')
+[ "$after" -le "$before" ] && check "no config temp file leaked" 1 || check "no config temp file leaked" 0
+rm -rf "$hl"
+
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi

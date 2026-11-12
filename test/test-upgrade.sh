@@ -174,9 +174,11 @@ out4=$(CORALLINE_HOME="$home4/coralline" CLAUDE_SETTINGS="$home4/settings.json" 
 printf '%s\n' "$out4" | grep -q 'new since your installed copy' && check "E4 bugfix-only: no report" 0 || check "E4 bugfix-only: no report" 1
 ls "$home4"/coralline/statusline.sh.bak.* >/dev/null 2>&1 && check "E4 bugfix-only: backup taken" 1 || check "E4 bugfix-only: backup taken" 0
 
-# (E5) unreadable old statusline.sh → installer FAILS LOUDLY (the overwrite cp
-# cannot replace a mode-000 file) and prints NO flood "everything is new" report.
-# Previously it silently exited 0 while the runtime was never actually replaced.
+# (E5) unreadable old statusline.sh → the upgrade still replaces it (the new file
+# is renamed over the mode-000 one, which needs the directory, not the old file)
+# and prints NO flood "everything is new" report. Before the rename, an in-place
+# cp could not replace it and the install had to fail loudly; before that it
+# silently exited 0 while the runtime was never actually replaced.
 home5="$tmp/h5/.claude"; mk_old_install "$home5"; chmod 000 "$home5/coralline/statusline.sh"
 out5=$(CORALLINE_HOME="$home5/coralline" CORALLINE_CONFIG="$home5/coralline.conf" CLAUDE_SETTINGS="$home5/settings.json" "$BASH" "$CONF" --install-only 2>&1)
 rc=$?; chmod 644 "$home5/coralline/statusline.sh" 2>/dev/null
@@ -185,12 +187,19 @@ if [ "$IS_ROOT" = "1" ]; then
   { [ "$rc" = "0" ] && grep -q 'seg_burn' "$home5/coralline/statusline.sh"; } \
     && check "E5 (root) unreadable old: upgrade still installs" 1 || check "E5 (root) unreadable old: upgrade still installs" 0
 else
-  [ "$rc" != "0" ] && check "E5 unreadable old: install fails loudly" 1 || check "E5 unreadable old: install fails loudly" 0
+  { [ "$rc" = "0" ] && grep -q 'seg_burn' "$home5/coralline/statusline.sh"; } \
+    && check "E5 unreadable old: the upgrade replaces it" 1 || check "E5 unreadable old: the upgrade replaces it" 0
+  set -- "$home5"/coralline/*.new.*; [ -e "$1" ] && check "E5 unreadable old: no temp file left" 0 || check "E5 unreadable old: no temp file left" 1
   printf '%s\n' "$out5" | grep -q 'new since your installed copy' && check "E5 unreadable old: no flood report" 0 || check "E5 unreadable old: no flood report" 1
 fi
 
-# (E6) unwritable backup target → install still succeeds, no backup line (fail-open)
+# (E6) unwritable backup target → install still succeeds, no backup line (fail-open).
+# The old install is complete, so every file can be rewritten in place although
+# the directory itself takes no new file (no backup, no rename).
 home6="$tmp/h6/.claude"; mk_old_install "$home6"
+cp "$HERE/../configure.sh" "$home6/coralline/configure.sh"
+cp "$HERE/sample-input.json" "$home6/coralline/sample-input.json"
+mkdir -p "$home6/coralline/themes"
 chmod 500 "$home6/coralline"   # dir read+exec only → cp of new bak fails
 out6=$(CORALLINE_HOME="$home6/coralline" CLAUDE_SETTINGS="$home6/settings.json" "$BASH" "$CONF" --install-only 2>&1)
 rc6=$?; chmod 700 "$home6/coralline" 2>/dev/null
@@ -199,7 +208,33 @@ if [ "$IS_ROOT" != "1" ]; then
   # root bypasses the unwritable dir and would create the backup, so only assert
   # the "no backup line" fail-open behavior when the mode bits actually apply.
   printf '%s\n' "$out6" | grep -q 'backup at' && check "E6 unwritable backup: no backup line" 0 || check "E6 unwritable backup: no backup line" 1
+  grep -q 'seg_burn' "$home6/coralline/statusline.sh" && check "E6 unwritable dir: runtime rewritten in place" 1 || check "E6 unwritable dir: runtime rewritten in place" 0
 fi
+
+# (E7) a file that cannot be written stops the install loudly, before settings.json
+# is registered and before the running statusline.sh is replaced. An in-place cp
+# used to go unchecked for everything but statusline.sh, so a half install still
+# reported success and registered itself.
+home7="$tmp/h7/.claude"; mk_old_install "$home7"
+chmod 500 "$home7/coralline"   # an old install with files missing, and no new file can be created
+out7=$(CORALLINE_HOME="$home7/coralline" CLAUDE_SETTINGS="$home7/settings.json" "$BASH" "$CONF" --install-only 2>&1)
+rc7=$?; chmod 700 "$home7/coralline" 2>/dev/null
+if [ "$IS_ROOT" != "1" ]; then
+  [ "$rc7" != "0" ] && check "E7 unwritable file: install fails loudly" 1 || check "E7 unwritable file: install fails loudly" 0
+  printf '%s\n' "$out7" | grep -q 'could not' && check "E7 unwritable file: names what it could not write" 1 || check "E7 unwritable file: names what it could not write" 0
+  [ ! -e "$home7/settings.json" ] && check "E7 unwritable file: settings.json not registered" 1 || check "E7 unwritable file: settings.json not registered" 0
+  grep -q 'seg_burn' "$home7/coralline/statusline.sh" && check "E7 unwritable file: the old runtime is still in place" 0 || check "E7 unwritable file: the old runtime is still in place" 1
+fi
+# (E8) a directory where statusline.sh belongs stops the install before
+# settings.json: mv and cp would both put the file inside it and report success.
+home8="$tmp/h8/.claude"; mkdir -p "$home8/coralline/statusline.sh"
+out8=$(CORALLINE_HOME="$home8/coralline" CLAUDE_SETTINGS="$home8/settings.json" "$BASH" "$CONF" --install-only 2>&1); rc8=$?
+[ "$rc8" != "0" ] && check "E8 directory at the destination: install fails loudly" 1 || check "E8 directory at the destination: install fails loudly" 0
+[ ! -e "$home8/settings.json" ] && check "E8 directory at the destination: settings.json not registered" 1 || check "E8 directory at the destination: settings.json not registered" 0
+[ -z "$(ls -A "$home8/coralline/statusline.sh")" ] && check "E8 directory at the destination: nothing put inside it" 1 || check "E8 directory at the destination: nothing put inside it" 0
+
+# A normal upgrade leaves no temp file behind and replaces the runtime by rename.
+set -- "$home"/coralline/*.new.* "$home"/coralline/themes/*.new.*; [ -e "$1" ] || [ -e "$2" ] && check "upgrade leaves no temp file" 0 || check "upgrade leaves no temp file" 1
 
 # ---- Section F: UPGRADE.md structure -------------------------------------
 UP="$REPO/UPGRADE.md"

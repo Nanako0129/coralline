@@ -1268,7 +1268,7 @@ write_final_config() {
     cp -p "$CONFIG_FILE" "$backup" || { rm -f "$tmp"; die "could not back up $CONFIG_FILE; left unchanged"; }
     printf 'Previous config kept at %s\n' "$backup"
   fi
-  mv "$tmp" "$CONFIG_FILE" || die "could not write $CONFIG_FILE"
+  publish_file "$tmp" "$CONFIG_FILE" || die "could not write $CONFIG_FILE"
   printf '%sWrote%s %s\n' "$T_GREEN" "$T_RESET" "$CONFIG_FILE"
   [ "$float_enabled" = "1" ] && print_float_help
   # Return success explicitly: the trailing float test above is 1 when float is
@@ -1276,6 +1276,74 @@ write_final_config() {
   # `write_final_config || exit 0` bail before the verification render. The only
   # intentional non-zero exit is the "user declined overwrite" path above.
   return 0
+}
+
+link_target() {  # → _LT: what a symlink finally points at (the path itself when it is none)
+  local p="$1" t n=0
+  _LT=""
+  while [ -L "$p" ]; do
+    n=$((n + 1)); [ "$n" -le 8 ] || return 1
+    t=$(readlink "$p") || return 1
+    case "$t" in (/*) p="$t" ;; (*) p="$(dirname "$p")/$t" ;; esac
+  done
+  _LT="$p"
+}
+
+publish_file() {  # $1=finished temp file $2=the user's file; non-zero on failure, $1 is gone either way
+  # A regular file is replaced by rename (atomic). A symlink is followed and its
+  # target replaced the same way, through a temp file beside the target: renaming
+  # over the link itself would turn it into a regular file and cut a config kept
+  # in a dotfiles repo off from the live one, and writing through it with a
+  # redirect could leave it empty if the write failed.
+  local dst="$2" beside
+  if [ -L "$dst" ]; then
+    link_target "$dst" || { rm -f "$1"; return 1; }
+    dst="$_LT"
+    # the link has to end at an existing regular file: a dangling link or one to
+    # a directory is refused before anything is written
+    [ -f "$dst" ] || { rm -f "$1"; return 1; }
+    beside="$dst.new.$$"
+    if cp "$1" "$beside" && mv -f "$beside" "$dst"; then rm -f "$1"; return 0; fi
+    rm -f "$beside" "$1"
+    return 1
+  fi
+  mv "$1" "$dst" && return 0
+  rm -f "$1"
+  return 1
+}
+
+install_one() {  # $1=source $2=destination $3=x to make it executable
+  # Copy beside the destination and rename over it: Claude Code runs the installed
+  # statusline.sh every second, and an in-place cp lets it read a half-written
+  # file. Every copy is checked; a failure stops the install before settings.json
+  # is touched. Two cases still write in place, as the installer always did: a
+  # directory that takes no new file (a read-only install dir whose files are
+  # writable), and a rename the system refuses (a file held open on Windows). A
+  # destination that is a symlink is written through, so the link survives.
+  local src="$1" dst="$2" dir tmp
+  dir=$(dirname "$dst"); tmp="$dst.new.$$"
+  mkdir -p "$dir" || die "could not create $dir"
+  # A directory where the file belongs (or a link to one) would swallow the copy:
+  # mv and cp both put the file inside it and report success.
+  [ ! -d "$dst" ] || die "$dst is a directory, expected a file"
+  if [ -L "$dst" ] || [ ! -w "$dir" ]; then
+    cp "$src" "$dst" || die "could not write $dst (check permissions on the existing file)"
+    [ "${3:-}" != x ] || chmod +x "$dst" 2>/dev/null
+    return 0
+  fi
+  _INSTALL_TMP="$tmp"
+  if ! cp "$src" "$tmp"; then
+    rm -f "$tmp"; _INSTALL_TMP=""
+    die "could not write $dst (check free space and permissions on $dir)"
+  fi
+  [ "${3:-}" != x ] || chmod +x "$tmp" || { rm -f "$tmp"; _INSTALL_TMP=""; die "could not make $dst executable"; }
+  if ! mv -f "$tmp" "$dst" 2>/dev/null; then
+    # the complete temp copy is the source now, so a refused rename still ends
+    # with a whole file or with the old one
+    cp "$tmp" "$dst" || { rm -f "$tmp"; _INSTALL_TMP=""; die "could not replace $dst (check permissions on the existing file)"; }
+    rm -f "$tmp"
+  fi
+  _INSTALL_TMP=""
 }
 
 install_files() {
@@ -1300,23 +1368,27 @@ install_files() {
       report_upgrade_delta "$TARGET_DIR/statusline.sh" "$SCRIPT_DIR/statusline.sh" "$_bak"
     fi
   fi
-  mkdir -p "$TARGET_DIR/themes"
-  # Fail loud if the runtime overwrite cannot happen (e.g. an unreadable/unwritable
-  # old statusline.sh) instead of reporting a successful, feature-adding upgrade
-  # that never replaced the file.
-  cp "$SCRIPT_DIR/statusline.sh" "$TARGET_DIR/statusline.sh" \
-    || die "could not write $TARGET_DIR/statusline.sh (check permissions on the existing file)"
-  cp "$SCRIPT_DIR/configure.sh" "$TARGET_DIR/configure.sh"
-  cp "$SCRIPT_DIR/test/sample-input.json" "$TARGET_DIR/sample-input.json"
+  mkdir -p "$TARGET_DIR/themes" || die "could not create $TARGET_DIR/themes"
+  # An interrupt between a copy and its rename would leave <file>.new.<pid>
+  # behind for good (the pid differs on every run); the script's own traps are
+  # installed only after the argument loop that calls this.
+  _INSTALL_TMP=""
+  trap '[ -z "$_INSTALL_TMP" ] || rm -f "$_INSTALL_TMP"; exit 130' INT TERM HUP
+  # Fail loud on any file that cannot be written, instead of reporting a
+  # successful upgrade over a half-replaced install. The runtime goes last: if an
+  # earlier copy fails, the statusline that is running stays the old, whole one.
   theme_dir="$SCRIPT_DIR/themes"
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
-    mkdir -p "$TARGET_DIR/themes/$(dirname "$rel")"
-    cp "$theme_dir/$rel" "$TARGET_DIR/themes/$rel"
+    install_one "$theme_dir/$rel" "$TARGET_DIR/themes/$rel"
   done <<THEMES
 $(cd "$theme_dir" && find . -type f -name '*.conf' | sed 's#^\./##')
 THEMES
-  chmod +x "$TARGET_DIR/statusline.sh" "$TARGET_DIR/configure.sh"
+  install_one "$SCRIPT_DIR/test/sample-input.json" "$TARGET_DIR/sample-input.json"
+  # Copying configure.sh onto itself (a wizard run from the install dir) is a no-op.
+  [ "$SCRIPT_DIR/configure.sh" -ef "$TARGET_DIR/configure.sh" ] || install_one "$SCRIPT_DIR/configure.sh" "$TARGET_DIR/configure.sh" x
+  [ "$SCRIPT_DIR/statusline.sh" -ef "$TARGET_DIR/statusline.sh" ] || install_one "$SCRIPT_DIR/statusline.sh" "$TARGET_DIR/statusline.sh" x
+  trap - INT TERM HUP
   installed=1
 }
 
@@ -1353,8 +1425,7 @@ settings_merge() {  # apply jq filter $1 (plus any --arg pairs after it) to sett
     rm -f "$tmp"
     die "failed to create $SETTINGS_FILE"
   fi
-  if ! mv "$tmp" "$SETTINGS_FILE"; then
-    rm -f "$tmp"
+  if ! publish_file "$tmp" "$SETTINGS_FILE"; then
     die "could not replace $SETTINGS_FILE; original left unchanged${backup:+, backup written to $backup}"
   fi
 }

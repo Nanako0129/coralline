@@ -10,6 +10,8 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 CONF="$HERE/../configure.sh"
 
+eval "$(sed -n '/^link_target() {/,/^}/p' "$CONF")"
+eval "$(sed -n '/^publish_file() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^settings_merge() {/,/^}/p' "$CONF")"
 # "enabled" in these cases is the classification production acts on
 subagent_enabled() { subagent_state; [ "$_SUB_STATE" = ours ]; }
@@ -276,6 +278,29 @@ printf '{"subagentStatusLine":{"type":"command","command":"CORALLINE_CONFIG=/tmp
 cp "$SETTINGS_FILE" "$KEEPD/before"
 enable_subagent_statusline >/dev/null 2>&1
 cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "enable keeps an existing wrapped entry" || bad "enable keeps an existing wrapped entry"
+SETTINGS_FILE="$MAIN_SETTINGS"
+
+# (4b4) a symlinked settings.json stays a symlink: the write goes through it
+LINKD="$TMPD/linked"; mkdir -p "$LINKD/dotfiles"
+printf '{"other":1}\n' > "$LINKD/dotfiles/settings.json"
+ln -s "$LINKD/dotfiles/settings.json" "$LINKD/settings.json"
+SETTINGS_FILE="$LINKD/settings.json"
+update_settings >/dev/null
+[ -L "$LINKD/settings.json" ] && ok "a symlinked settings.json is still a symlink" || bad "a symlinked settings.json is still a symlink"
+jq -e '.other == 1 and .statusLine.type == "command"' "$LINKD/dotfiles/settings.json" >/dev/null 2>&1 \
+  && ok "the write went through the link" || bad "the write went through the link"
+set -- "$LINKD"/.coralline-settings.*; [ ! -e "$1" ] && ok "no temp file left beside the link" || bad "no temp file left beside the link"
+set -- "$LINKD/dotfiles"/*.new.*; [ ! -e "$1" ] && ok "no temp file left beside the target" || bad "no temp file left beside the target"
+# a relative link, and a link to a link, are followed to the same file
+( cd "$LINKD" && rm -f settings.json && ln -s dotfiles/settings.json mid.json && ln -s mid.json settings.json )
+printf '{"other":2}\n' > "$LINKD/dotfiles/settings.json"
+update_settings >/dev/null
+{ [ -L "$LINKD/settings.json" ] && [ -L "$LINKD/mid.json" ] && jq -e '.other == 2 and .statusLine.type == "command"' "$LINKD/dotfiles/settings.json" >/dev/null 2>&1; } \
+  && ok "a relative chain of links is followed" || bad "a relative chain of links is followed"
+# a link to a directory is refused and the original is reported unchanged
+rm -f "$LINKD/settings.json" "$LINKD/mid.json"; mkdir -p "$LINKD/adir"; ln -s "$LINKD/adir" "$LINKD/settings.json"
+( update_settings >/dev/null 2>&1 ) && bad "a link to a directory is refused" || ok "a link to a directory is refused"
+[ -L "$LINKD/settings.json" ] && [ -z "$(ls -A "$LINKD/adir")" ] && ok "nothing written into the directory" || bad "nothing written into the directory"
 SETTINGS_FILE="$MAIN_SETTINGS"
 
 # (4c) explicit no-menu setup modes must not ask the closing wizard question
