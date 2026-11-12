@@ -72,3 +72,42 @@ jobs:
             echo "::endgroup::"
           done
           exit "$fail"
+
+  windows:
+    # The native PowerShell renderer and installer. test-statusline-ps1.ps1 runs
+    # differential checks against statusline.sh with Git Bash as the oracle, so
+    # this leg also puts the Bash renderer on Git Bash.
+    name: PowerShell suites (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      # Git for Windows converts line endings by default; the Bash scripts and
+      # the byte-exact fixtures need the files as they are in the repository.
+      - name: Keep line endings
+        shell: bash
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - name: Versions
+        shell: powershell
+        run: |
+          "Windows PowerShell $($PSVersionTable.PSVersion)"
+          & "C:\Program Files\Git\bin\bash.exe" --version | Select-Object -First 1
+          & "C:\Program Files\Git\bin\bash.exe" -c 'command -v jq && jq --version'
+          git --version
+          if ($PSVersionTable.PSVersion.Major -ne 5) { Write-Output "::error::this leg must run Windows PowerShell 5.1"; exit 1 }
+      # The suite's git segment case needs a repository on a branch named main; a
+      # pull-request checkout is a detached HEAD. Snapshot the tree into one.
+      - name: Snapshot into a repository on branch main
+        shell: bash
+        run: |
+          rm -rf .git
+          git init -q -b main
+          git add -A
+          git -c user.name=ci -c user.email=ci@example.invalid commit -qm snapshot
+      - name: test-statusline-ps1
+        shell: cmd
+        run: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-statusline-ps1.ps1
+      - name: test-install-ps1
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-install-ps1.ps1
