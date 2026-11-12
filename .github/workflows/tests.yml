@@ -104,24 +104,53 @@ jobs:
           git init -q -b main
           git add -A
           git -c user.name=ci -c user.email=ci@example.invalid commit -qm snapshot
-      # TEMPORARY diagnostic: the first hosted run rendered nothing from
-      # statusline.ps1 in the suite, while a direct run did. Remove once explained.
-      - name: Diagnose temp path (temporary)
+      # TEMPORARY diagnostic: in the suite every launch of statusline.ps1 returns
+      # exit 0 with empty stdout on the hosted runner, while a direct run renders.
+      # This launches it the way the suite does and changes one factor at a time.
+      # Remove once explained.
+      - name: Diagnose the suite's launch (temporary)
         continue-on-error: true
         shell: powershell
         run: |
-          $tmp = [IO.Path]::GetTempPath()
-          "GetTempPath():  $tmp"
-          "long form:      $((Get-Item $tmp).FullName)"
-          "runner.temp:    ${{ runner.temp }}"
-          $short = Join-Path $tmp 'coralline-diag'
-          New-Item -ItemType Directory -Force $short | Out-Null
-          Set-Content -Path (Join-Path $short 'c.conf') -Value 'VL_SEGMENTS="model"' -Encoding ascii
-          foreach ($conf in @((Join-Path $short 'c.conf'), (Join-Path (Get-Item $short).FullName 'c.conf'))) {
-            [Environment]::SetEnvironmentVariable('CORALLINE_CONFIG', $conf)
-            cmd /c "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File statusline.ps1 < test\sample-input.json > out.txt 2> err.txt"
-            "config=$conf -> exit=$LASTEXITCODE stdout_bytes=$((Get-Item out.txt).Length)"
+          $repo = (Get-Location).Path
+          $json = [IO.File]::ReadAllBytes((Join-Path $repo 'test\sample-input.json'))
+          $exe = (Get-Process -Id $PID).Path
+          "host exe: $exe"
+          function Launch([string]$label, [hashtable]$vars, [string]$cwd, [bool]$noWindow, [string]$script) {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $exe
+            $psi.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $script + '"'
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+            $psi.CreateNoWindow = $noWindow
+            if ($cwd) { $psi.WorkingDirectory = $cwd }
+            foreach ($k in $vars.Keys) { if ($null -eq $vars[$k]) { [void]$psi.EnvironmentVariables.Remove($k) } else { $psi.EnvironmentVariables[$k] = [string]$vars[$k] } }
+            $p = New-Object System.Diagnostics.Process; $p.StartInfo = $psi; [void]$p.Start()
+            $o = $p.StandardOutput.BaseStream; $e = $p.StandardError.BaseStream
+            $om = New-Object IO.MemoryStream; $em = New-Object IO.MemoryStream
+            $ot = $o.CopyToAsync($om); $et = $e.CopyToAsync($em)
+            $p.StandardInput.BaseStream.Write($json, 0, $json.Length); $p.StandardInput.Close()
+            [void]$p.WaitForExit(20000); [void]$ot.Wait(2000); [void]$et.Wait(2000)
+            "{0,-44} exit={1} stdout={2} stderr={3}" -f $label, $p.ExitCode, $om.Length, $em.Length
+            if ($em.Length -gt 0) { [Text.Encoding]::UTF8.GetString($em.ToArray()).Substring(0, [Math]::Min(600, $em.Length)) }
           }
+          $script = Join-Path $repo 'statusline.ps1'
+          $rt = Join-Path ([IO.Path]::GetTempPath()) 'coralline-diag-home'
+          Launch 'plain, window allowed'               @{} $repo $false $script
+          Launch 'plain, CreateNoWindow'               @{} $repo $true  $script
+          Launch 'NO_SAMPLE=1'                         @{ CORALLINE_NO_SAMPLE='1' } $repo $true $script
+          Launch 'profile dir missing'                 @{ HOME=($rt -replace '\\','/'); USERPROFILE=$rt } $repo $true $script
+          New-Item -ItemType Directory -Force $rt | Out-Null
+          Launch 'profile dir present'                 @{ HOME=($rt -replace '\\','/'); USERPROFILE=$rt } $repo $true $script
+          Launch 'suite vars, all of them'             @{ HOME=($rt -replace '\\','/'); USERPROFILE=$rt; CORALLINE_CONFIG=$null; CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW=$null; REMORA_ACTIVE=$null; VIRTUAL_ENV=$null; CONDA_DEFAULT_ENV=$null } $repo $true $script
+          "--- the renderer's own view when it is launched that way"
+          $probe = Join-Path $repo 'probe.ps1'
+          Set-Content -Path $probe -Encoding ascii -Value @'
+          try { $s = [Console]::OpenStandardInput(); $r = New-Object IO.StreamReader($s); $t = $r.ReadToEnd(); "stdin chars: $($t.Length)" } catch { "stdin failed: $_" }
+          try { "out encoding: $([Console]::OutputEncoding.WebName) redirected: $([Console]::IsOutputRedirected)" } catch { "console failed: $_" }
+          try { $o = [Console]::OpenStandardOutput(); $b = [Text.Encoding]::UTF8.GetBytes("raw write ok`n"); $o.Write($b, 0, $b.Length); $o.Flush() } catch { "raw write failed: $_" }
+          '@
+          Launch 'probe script' @{} $repo $true $probe
       - name: test-statusline-ps1
         # A long-form temp directory: the runner's own one is suspected to be an
         # 8.3 short path (C:\Users\RUNNER~1\...), which the renderer's config path
