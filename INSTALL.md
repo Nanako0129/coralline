@@ -354,7 +354,7 @@ cd /path/to/your/coralline/clone
 bash configure.sh --install
 ```
 
-Run it from the clone, not from `~/.claude/coralline`: the installer takes its files from the directory it is started in and needs `test/sample-input.json` and `themes/` there.
+Use the clone's `configure.sh`, not the copy in `~/.claude/coralline`: the installer takes its files from the directory `configure.sh` itself is in, and needs `test/sample-input.json` and `themes/` beside it.
 
 ## Verification
 

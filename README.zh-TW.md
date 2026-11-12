@@ -375,7 +375,7 @@ Remove-Item -LiteralPath (Join-Path $HOME '.claude\coralline.conf') -Force -Erro
 | Windows with Git Bash | Bash renderer |
 | Windows without Git Bash | 原生 Windows PowerShell 5.1 renderer |
 
-Renderer 全程在本機執行：不呼叫網路或 API，也不使用 token。Bash 主列只用一次 `jq` 解析 payload；兩種 renderer 每次 render 最多呼叫一次 `git status --porcelain=v2 --branch`，不會為每個欄位啟動 process。可重現的量測方法見 [BENCHMARK.zh-TW.md](./BENCHMARK.zh-TW.md)，來源是 [PR #65](https://github.com/Nanako0129/coralline/pull/65)。
+Renderer 全程在本機執行：不呼叫網路或 API，也不使用 token。Bash 主列只用一次 `jq` 解析 payload；兩種 renderer 每次 render 最多呼叫一次 `git status --porcelain=v2 --branch`，預設區段不會啟動其他 process；選用的 `project` 與 `stash` 會另外呼叫 git。可重現的量測方法見 [BENCHMARK.zh-TW.md](./BENCHMARK.zh-TW.md)，來源是 [PR #65](https://github.com/Nanako0129/coralline/pull/65)。
 
 ## 支持、致謝與授權
 

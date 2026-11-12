@@ -375,7 +375,7 @@ Remove-Item -LiteralPath (Join-Path $HOME '.claude\coralline.conf') -Force -Erro
 | Windows with Git Bash | Bash renderer |
 | Windows without Git Bash | native Windows PowerShell 5.1 renderer |
 
-The renderer is local: no network or API calls and zero token use. The Bash main bar parses its payload with one `jq` call; both renderers use at most one `git status --porcelain=v2 --branch` call per render and no per-field subprocesses. Reproducible measurement guidance is in [BENCHMARK.md](./BENCHMARK.md), introduced in [PR #65](https://github.com/Nanako0129/coralline/pull/65).
+The renderer is local: no network or API calls and zero token use. The Bash main bar parses its payload with one `jq` call; both renderers use at most one `git status --porcelain=v2 --branch` call per render, and the default segments start no other process; the opt-in `project` and `stash` run git calls of their own. Reproducible measurement guidance is in [BENCHMARK.md](./BENCHMARK.md), introduced in [PR #65](https://github.com/Nanako0129/coralline/pull/65).
 
 ## Support, acknowledgements, and license
 
