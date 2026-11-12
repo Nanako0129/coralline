@@ -31,7 +31,7 @@ run_install() { # $1 = sandbox HOME, $2 = CONFIG_FILE path
     CORALLINE_HOME="$1/.claude/coralline" \
     CLAUDE_SETTINGS="$1/.claude/settings.json" \
     CORALLINE_CONFIG="$2" \
-    bash "$REPO/configure.sh" --install --default 2>&1
+    "$BASH" "$REPO/configure.sh" --install --default 2>&1
 }
 
 # --- Case 1: fresh install, float OFF (the default) -> render must print ------
@@ -68,5 +68,23 @@ case "$out3" in
   *)                        check "no verification render for a directory config path" 1 ;;
 esac
 rm -rf "$h3"
+
+# --- Case 4: overwriting an existing config keeps the old file beside it ------
+# The wizard builds the new config from its own answers, so anything added by
+# hand is dropped by the overwrite; the previous file must survive as a backup.
+hb=$(mktemp -d "${TMPDIR:-/tmp}/coralline-final-render.XXXXXX") || exit 1
+mkdir -p "$hb/.claude"
+printf 'VL_SEGMENTS="dir"\nMY_HAND_KNOB=1\n' > "$hb/.claude/coralline.conf"
+outb=$(printf 'y\n' | run_install "$hb" "$hb/.claude/coralline.conf")
+set -- "$hb/.claude"/coralline.conf.bak.*
+if [ -f "$1" ] && grep -q '^MY_HAND_KNOB=1$' "$1"; then check "overwritten config is kept as a backup" 1; else check "overwritten config is kept as a backup" 0; fi
+grep -q 'MY_HAND_KNOB' "$hb/.claude/coralline.conf" && check "the new config is the wizard's" 0 || check "the new config is the wizard's" 1
+case "$outb" in (*"Previous config kept at"*) check "the backup path is printed" 1 ;; (*) check "the backup path is printed" 0 ;; esac
+# declining the overwrite writes no backup
+printf 'VL_SEGMENTS="dir"\nMY_HAND_KNOB=1\n' > "$hb/.claude/coralline.conf"; rm -f "$hb/.claude"/coralline.conf.bak.*
+printf 'n\n' | run_install "$hb" "$hb/.claude/coralline.conf" >/dev/null
+set -- "$hb/.claude"/coralline.conf.bak.*
+[ -e "$1" ] && check "a declined overwrite writes no backup" 0 || check "a declined overwrite writes no backup" 1
+rm -rf "$hb"
 
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi

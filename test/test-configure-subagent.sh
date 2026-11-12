@@ -11,7 +11,10 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 CONF="$HERE/../configure.sh"
 
 eval "$(sed -n '/^settings_merge() {/,/^}/p' "$CONF")"
-eval "$(sed -n '/^subagent_enabled() {/,/^}/p' "$CONF")"
+# "enabled" in these cases is the classification production acts on
+subagent_enabled() { subagent_state; [ "$_SUB_STATE" = ours ]; }
+eval "$(sed -n '/^subagent_state() {/,/^}/p' "$CONF")"
+eval "$(sed -n '/^settings_runs_coralline() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^update_settings() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^enable_subagent_statusline() {/,/^}/p' "$CONF")"
 eval "$(sed -n '/^disable_subagent_statusline() {/,/^}/p' "$CONF")"
@@ -145,29 +148,140 @@ SPACE_SETTINGS="$TMPD/space-settings.json"
 TARGET_DIR="$SPACE_DIR"; SETTINGS_FILE="$SPACE_SETTINGS"
 update_settings >/dev/null
 MAIN_COMMAND=$(jq -r '.statusLine.command' "$SPACE_SETTINGS")
-MAIN_RENDER=$(CORALLINE_CONFIG=/dev/null bash -c "$MAIN_COMMAND" < "$HERE/sample-input.json")
+MAIN_RENDER=$(CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG=/dev/null "$BASH" -c "$MAIN_COMMAND" < "$HERE/sample-input.json")
 [ -n "$MAIN_RENDER" ] && ok "statusLine command quotes spaced path" || bad "statusLine command quotes spaced path"
 enable_subagent_statusline >/dev/null
 SUB_COMMAND=$(jq -r '.subagentStatusLine.command' "$SPACE_SETTINGS")
 SUB_RENDER=$(printf '%s\n' '{"tasks":[{"id":"space","type":"local_agent","label":"space path"}]}' \
-  | CORALLINE_CONFIG=/dev/null bash -c "$SUB_COMMAND")
+  | CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG=/dev/null "$BASH" -c "$SUB_COMMAND")
 printf '%s\n' "$SUB_RENDER" | jq -e '.id == "space"' >/dev/null 2>&1 \
   && ok "subagent command quotes spaced path" || bad "subagent command quotes spaced path"
 TARGET_DIR="$HOME/.claude/coralline"; SETTINGS_FILE="$MAIN_SETTINGS"
 
 # (4b) the non-interactive flag drives the same toggle (AI-install path)
+# The CLI runs get a HOME of their own: without it the preview render would read
+# the developer's real ~/.claude/coralline install and config.
+mkdir -p "$TMPD/clihome"
 rm -f "$SETTINGS_FILE" "$SETTINGS_FILE".bak.*
-CLAUDE_SETTINGS="$SETTINGS_FILE" bash "$CONF" --subagent-rows=on >/dev/null 2>&1
+HOME="$TMPD/clihome" CORALLINE_NO_SAMPLE=1 CLAUDE_SETTINGS="$SETTINGS_FILE" "$BASH" "$CONF" --subagent-rows=on >/dev/null 2>&1
 jq -e '.subagentStatusLine.command | endswith("--subagent")' "$SETTINGS_FILE" >/dev/null 2>&1 \
   && ok "--subagent-rows=on registers" || bad "--subagent-rows=on registers"
-CLAUDE_SETTINGS="$SETTINGS_FILE" bash "$CONF" --subagent-rows=off >/dev/null 2>&1
+HOME="$TMPD/clihome" CORALLINE_NO_SAMPLE=1 CLAUDE_SETTINGS="$SETTINGS_FILE" "$BASH" "$CONF" --subagent-rows=off >/dev/null 2>&1
 jq -e 'has("subagentStatusLine") | not' "$SETTINGS_FILE" >/dev/null 2>&1 \
   && ok "--subagent-rows=off removes" || bad "--subagent-rows=off removes"
+
+# (4b2) an update leaves a statusLine that already runs this install as the user
+# has it: refreshInterval, padding and a wrapped command survive, byte for byte,
+# and no backup is written. A statusLine that runs something else is replaced.
+KEEPD="$TMPD/keep"; mkdir -p "$KEEPD"; SETTINGS_FILE="$KEEPD/settings.json"
+printf '{"statusLine":{"type":"command","command":"CORALLINE_CONFIG=/tmp/x.conf bash %s/statusline.sh","refreshInterval":5,"padding":2},"other":1}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
+cp "$SETTINGS_FILE" "$KEEPD/before"
+KEEPOUT=$(update_settings)
+cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "update keeps an existing coralline statusLine byte for byte" || bad "update keeps an existing coralline statusLine byte for byte"
+ls "$SETTINGS_FILE".bak.* >/dev/null 2>&1 && bad "update without a change writes no backup" || ok "update without a change writes no backup"
+case "$KEEPOUT" in (*"left as it is"*) ok "update says it left statusLine alone" ;; (*) bad "update says it left statusLine alone" ;; esac
+printf '{"statusLine":{"type":"command","command":"bash /opt/other/prompt.sh","refreshInterval":9}}\n' > "$SETTINGS_FILE"
+update_settings >/dev/null
+jq -e --arg p "$TARGET_DIR/statusline.sh" '(.statusLine.command | contains($p)) and .statusLine.refreshInterval == 1' "$SETTINGS_FILE" >/dev/null 2>&1 \
+  && ok "a statusLine that runs something else is replaced" || bad "a statusLine that runs something else is replaced"
+ls "$SETTINGS_FILE".bak.* >/dev/null 2>&1 && ok "the replaced statusLine is backed up" || bad "the replaced statusLine is backed up"
+
+# (4b3) a subagentStatusLine from another tool is never replaced or removed
+printf '{"subagentStatusLine":{"type":"command","command":"other-tool --rows"}}\n' > "$SETTINGS_FILE"
+cp "$SETTINGS_FILE" "$KEEPD/before"
+enable_subagent_statusline >/dev/null 2>&1 && bad "enable refuses another tool's entry" || ok "enable refuses another tool's entry"
+cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "enable leaves another tool's entry" || bad "enable leaves another tool's entry"
+disable_subagent_statusline >/dev/null 2>&1
+cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "disable leaves another tool's entry" || bad "disable leaves another tool's entry"
+ONERR=$(HOME="$TMPD/clihome" CORALLINE_NO_SAMPLE=1 CLAUDE_SETTINGS="$SETTINGS_FILE" "$BASH" "$CONF" --subagent-rows=on 2>&1 >/dev/null); ONRC=$?
+[ "$ONRC" = 1 ] && ok "--subagent-rows=on exits 1 on another tool's entry" || bad "--subagent-rows=on exits 1 on another tool's entry (rc=$ONRC)"
+case "$ONERR" in (*"another tool"*) ok "--subagent-rows=on says why" ;; (*) bad "--subagent-rows=on says why" ;; esac
+HOME="$TMPD/clihome" CORALLINE_NO_SAMPLE=1 CLAUDE_SETTINGS="$SETTINGS_FILE" "$BASH" "$CONF" --subagent-rows=off >/dev/null 2>&1
+cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "the flags leave another tool's entry byte for byte" || bad "the flags leave another tool's entry byte for byte"
+# an entry that is ours but not in the installer's shape is still ours: a trailing
+# wrapper after --subagent, or a broken value, can be removed and repaired
+printf '{"subagentStatusLine":{"type":"command","command":"bash /tmp/statusline.sh --subagent 2>/dev/null"}}\n' > "$SETTINGS_FILE"
+disable_subagent_statusline >/dev/null 2>&1
+jq -e 'has("subagentStatusLine") | not' "$SETTINGS_FILE" >/dev/null 2>&1 && ok "disable removes our entry with a trailing wrapper" || bad "disable removes our entry with a trailing wrapper"
+printf '{"subagentStatusLine":true}\n' > "$SETTINGS_FILE"
+enable_subagent_statusline >/dev/null 2>&1
+subagent_enabled && ok "enable repairs a broken entry" || bad "enable repairs a broken entry"
+# enabling keeps an own entry with a config override and a trailing redirection
+printf '{"subagentStatusLine":{"type":"command","command":"CORALLINE_CONFIG=/tmp/custom.conf bash /tmp/statusline.sh --subagent 2>/dev/null"}}\n' > "$SETTINGS_FILE"
+cp "$SETTINGS_FILE" "$KEEPD/before"
+enable_subagent_statusline >/dev/null 2>&1
+cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "enable keeps an own entry with a trailing redirection" || bad "enable keeps an own entry with a trailing redirection"
+# both words merely mentioned, the flag not following the script, another tool's
+# object without a command, or a tab where a space is expected
+_st() { printf '%s\n' "$1" > "$SETTINGS_FILE"; subagent_state; [ "$_SUB_STATE" = "$2" ] && ok "$2: $3" || bad "$2: $3 ($_SUB_STATE)"; }
+_st '{"subagentStatusLine":{"type":"command","command":"other-tool --rows # not statusline.sh --subagent2"}}' foreign 'a comment mentioning the script'
+_st '{"subagentStatusLine":{"type":"command","command":"other-tool --subagent --config /x/statusline.sh"}}' foreign 'the flag before the script'
+_st '{"subagentStatusLine":{"type":"script","path":"/opt/tool/rows"}}' foreign 'an object in another shape'
+_st '{"subagentStatusLine":{"type":"command"}}' broken 'an object with only a type'
+_st '{"subagentStatusLine":{"type":"command","command":"bash /x/statusline.sh\t--subagent"}}' ours 'a tab before the flag'
+# a quoted flag is still the flag
+printf '{"subagentStatusLine":{"type":"command","command":"bash /tmp/statusline.sh \\"--subagent\\""}}\n' > "$SETTINGS_FILE"
+subagent_state; [ "$_SUB_STATE" = ours ] && ok "ours: a quoted --subagent" || bad "ours: a quoted --subagent ($_SUB_STATE)"
+# an empty or blank command is nobody's renderer: disable removes it, enable repairs it
+for _cmd in '' '   '; do
+  printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$_cmd" > "$SETTINGS_FILE"
+  subagent_state; [ "$_SUB_STATE" = broken ] && ok "broken: command [$_cmd]" || bad "broken: command [$_cmd] ($_SUB_STATE)"
+done
+enable_subagent_statusline >/dev/null 2>&1
+subagent_enabled && ok "enable repairs a blank command" || bad "enable repairs a blank command"
+printf '{"subagentStatusLine":{"type":"command","command":""}}\n' > "$SETTINGS_FILE"
+disable_subagent_statusline >/dev/null 2>&1
+jq -e 'has("subagentStatusLine") | not' "$SETTINGS_FILE" >/dev/null 2>&1 && ok "disable removes an empty command" || bad "disable removes an empty command"
+# a longer file name, or a longer flag, is another tool
+for _cmd in 'bash /opt/other/statusline.sh-helper --subagent' 'bash /opt/other/statusline.sh --subagents'; do
+  printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$_cmd" > "$SETTINGS_FILE"
+  subagent_state; [ "$_SUB_STATE" = foreign ] && ok "another tool: $_cmd" || bad "another tool: $_cmd ($_SUB_STATE)"
+done
+# a script whose name merely ends in statusline.sh is another tool
+printf '{"subagentStatusLine":{"type":"command","command":"npx ccstatusline.sh --subagent"}}\n' > "$SETTINGS_FILE"
+subagent_state; [ "$_SUB_STATE" = foreign ] && ok "ccstatusline.sh --subagent is another tool" || bad "ccstatusline.sh --subagent is another tool ($_SUB_STATE)"
+# a settings.json that does not parse stops with the error instead of reporting success
+printf '{"subagentStatusLine":{"type":"command",}\n' > "$SETTINGS_FILE"
+( disable_subagent_statusline >/dev/null 2>&1 ) && bad "disable fails on unparseable settings" || ok "disable fails on unparseable settings"
+# statusLine spelled with ~ or $HOME is this install too; a .bak path or a wrong type is not
+TARGET_SAVE=$TARGET_DIR; TARGET_DIR="$HOME/.claude/coralline"
+for _cmd in 'bash ~/.claude/coralline/statusline.sh' 'bash \"$HOME/.claude/coralline/statusline.sh\"' 'bash ${HOME}/.claude/coralline/statusline.sh'; do
+  printf '{"statusLine":{"type":"command","command":"%s","refreshInterval":5}}\n' "$_cmd" > "$SETTINGS_FILE"
+  settings_runs_coralline statusLine && ok "ours: $_cmd" || bad "ours: $_cmd"
+done
+printf '{"statusLine":{"type":"command","command":"bash %s/statusline.sh>/tmp/statusline.log"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
+settings_runs_coralline statusLine && ok "ours: a redirection right after the path" || bad "ours: a redirection right after the path"
+printf '{"statusLine":{"type":"command","command":"bash /Volumes/bk%s/statusline.sh"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
+settings_runs_coralline statusLine && bad "a longer path that ends with ours is not this install" || ok "a longer path that ends with ours is not this install"
+printf '{"statusLine":{"type":"command","command":"bash %s/statusline.sh\\n"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
+settings_runs_coralline statusLine && ok "ours: a trailing newline after the path" || bad "ours: a trailing newline after the path"
+printf '{"statusLine":{"type":"command","command":"bash %s/statusline.sh.bak.20261101"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
+settings_runs_coralline statusLine && bad "a .bak path is not this install" || ok "a .bak path is not this install"
+# ours without "type": only the type is added, the wrapper and other keys stay
+printf '{"statusLine":{"command":"CORALLINE_CONFIG=/x.conf bash %s/statusline.sh","padding":3}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
+update_settings >/dev/null
+jq -e '.statusLine.type == "command" and .statusLine.padding == 3 and (.statusLine.command | startswith("CORALLINE_CONFIG=/x.conf ")) and (.statusLine | has("refreshInterval") | not)' "$SETTINGS_FILE" >/dev/null 2>&1 \
+  && ok "a type-less statusLine of ours only gets its type" || bad "a type-less statusLine of ours only gets its type"
+printf '{"subagentStatusLine":{"command":"CORALLINE_CONFIG=/x.conf bash /p/statusline.sh --subagent","padding":3}}\n' > "$SETTINGS_FILE"
+enable_subagent_statusline >/dev/null 2>&1
+jq -e '.subagentStatusLine == {"command":"CORALLINE_CONFIG=/x.conf bash /p/statusline.sh --subagent","padding":3,"type":"command"}' "$SETTINGS_FILE" >/dev/null 2>&1 \
+  && ok "a type-less subagent entry of ours only gets its type" || bad "a type-less subagent entry of ours only gets its type"
+_st '{"subagentStatusLine":"other-tool --rows"}' foreign 'a string value from another tool'
+_st '{"subagentStatusLine":{"type":"builtin"}}' foreign 'an object with a type that is not ours'
+_st '{"subagentStatusLine":{"type":"command","command":"\"pwsh\" -NoProfile -File \"C:\\Users\\x\\.claude\\coralline\\statusline.ps1\" --subagent"}}' ours 'the native Windows row'
+_st '{"subagentStatusLine":{"type":"command","command":"bash C:\\Users\\x\\coralline\\statusline.sh --subagent"}}' ours 'a backslash path'
+TARGET_DIR=$TARGET_SAVE
+# our own entry, wrapped: enabling again changes nothing
+printf '{"subagentStatusLine":{"type":"command","command":"CORALLINE_CONFIG=/tmp/s.conf bash /tmp/statusline.sh --subagent"}}\n' > "$SETTINGS_FILE"
+cp "$SETTINGS_FILE" "$KEEPD/before"
+enable_subagent_statusline >/dev/null 2>&1
+cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "enable keeps an existing wrapped entry" || bad "enable keeps an existing wrapped entry"
+SETTINGS_FILE="$MAIN_SETTINGS"
 
 # (4c) explicit no-menu setup modes must not ask the closing wizard question
 DEFAULTD="$TMPD/default-mode"; mkdir -p "$DEFAULTD/home"
 DEFOUT=$(HOME="$DEFAULTD/home" CORALLINE_CONFIG="$DEFAULTD/coralline.conf" \
-  CLAUDE_SETTINGS="$DEFAULTD/settings.json" bash "$CONF" --default </dev/null 2>&1)
+  CLAUDE_SETTINGS="$DEFAULTD/settings.json" "$BASH" "$CONF" --default </dev/null 2>&1)
 DEFRC=$?
 [ "$DEFRC" = 0 ] && ok "--default exits successfully" || bad "--default exits: rc=$DEFRC"
 case "$DEFOUT" in

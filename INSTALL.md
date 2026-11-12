@@ -273,7 +273,9 @@ Ask concise questions. If the user says "you decide", choose the defaults.
    registers `subagentStatusLine` in `~/.claude/settings.json` (with the same
    backup-then-merge as the installer) and prints a preview. To disable it, run
    `bash ~/.claude/coralline/configure.sh --subagent-rows=off`; this removes only that
-   settings entry. On PowerShell-only Windows, rerun the native installer with
+   settings entry. Neither command touches a `subagentStatusLine` that belongs to
+   another tool (anything but a `statusline.sh` run with `--subagent` as its first argument): `on`
+   stops with a message and a non-zero exit, `off` leaves it. On PowerShell-only Windows, rerun the native installer with
    `-SubagentRows on` or `-SubagentRows off`; `preserve` remains the ordinary default.
    Explain that model comes from Claude Code's per-task payload, missing
    fields degrade their own segments (`tokenCount` still shows without a context window),
