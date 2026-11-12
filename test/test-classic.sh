@@ -34,7 +34,7 @@ render() {
     printf 'VL_CLOCK="24h"\nVL_CLOCK_SECONDS=0\n'
     printf '%s' "$extra"
   } > "$conf"
-  out=$(CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$conf" bash "$SCRIPT" < "$SAMPLE")
+  out=$(CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$conf" "$BASH" "$SCRIPT" < "$SAMPLE")
   rm -f "$conf"
 }
 

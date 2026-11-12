@@ -1,0 +1,56 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bash:
+    name: bash suites (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Versions
+        run: |
+          bash --version | head -1
+          /bin/bash --version | head -1
+          jq --version
+          git --version
+      - name: Syntax
+        run: |
+          bash -n statusline.sh configure.sh install.sh
+          /bin/bash -n statusline.sh configure.sh install.sh
+      # Every suite exits non-zero on a failed case. One loop per shell so a
+      # failure names the suite; the loop keeps going to report all of them.
+      - name: Suites on the PATH bash
+        run: |
+          fail=0
+          for t in test/*.sh; do
+            echo "::group::$t"
+            bash "$t" || { fail=1; echo "::error file=$t::suite failed"; }
+            echo "::endgroup::"
+          done
+          exit "$fail"
+      # macOS ships bash 3.2 as /bin/bash, the oldest shell the renderer supports.
+      - name: Suites on /bin/bash 3.2
+        if: runner.os == 'macOS'
+        run: |
+          fail=0
+          for t in test/*.sh; do
+            echo "::group::$t"
+            /bin/bash "$t" || { fail=1; echo "::error file=$t::suite failed on bash 3.2"; }
+            echo "::endgroup::"
+          done
+          exit "$fail"
