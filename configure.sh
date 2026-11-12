@@ -1362,7 +1362,8 @@ settings_merge() {  # apply jq filter $1 (plus any --arg pairs after it) to sett
 settings_runs_coralline() {  # $1=settings key; exit 0 when its command runs this install's statusline.sh
   # The path as typed, shell-quoted the way this installer writes it, or spelled
   # with ~, $HOME or ${HOME}; a wrapper around the script (an env prefix, extra flags)
-  # still counts. The path has to end there: statusline.sh.bak-... is not it.
+  # still counts. The path has to end there, at the end of the command or before
+  # a space, a quote or a shell operator: statusline.sh.bak-... is not it.
   local raw="$TARGET_DIR/statusline.sh" quoted tilde="" var="" brace=""
   [ -s "$SETTINGS_FILE" ] || return 1
   printf -v quoted '%q' "$raw"
@@ -1371,7 +1372,7 @@ settings_runs_coralline() {  # $1=settings key; exit 0 when its command runs thi
     .[$k] as $s
     | ($s | type) == "object" and $s.type == "command" and ($s.command | type) == "string"
       and any([$raw, $quoted, $tilde, $var, $brace][] | select(length > 0);
-              . as $p | ($s.command | endswith($p) or contains($p + " ") or contains($p + "\"") or contains($p + "\u0027")))
+              . as $p | ($s.command | split($p)[1:] | any(. == "" or test("^[ \"\u0027><|;&)]"))))
   ' "$SETTINGS_FILE" >/dev/null 2>&1
 }
 
@@ -1404,22 +1405,26 @@ subagent_enabled() {  # exit 0 when settings.json registers the subagent rendere
   ' "$SETTINGS_FILE" >/dev/null 2>&1
 }
 
-subagent_state() {  # → _SUB_STATE: absent | ours | foreign | unreadable, in one jq call
-  # ours: a command that runs a statusline.sh with --subagent (any copy, any
-  # wrapper), or an entry too broken to be anyone's renderer (no command string),
-  # which enable may repair and disable may remove. foreign: a command that is
-  # something else. unreadable: settings.json does not parse; the caller goes on
+subagent_state() {  # → _SUB_STATE: absent | ours | broken | foreign | unreadable, in one jq call
+  # ours: a command that runs a statusline.sh with --subagent as whole words (any
+  # copy, an env prefix, a trailing redirection); enable leaves it exactly as it
+  # is and disable removes it. broken: no usable command (not an object, no
+  # command string, or our command without type "command"); enable repairs it
+  # and disable removes it. foreign: a command that is something else, which
+  # neither touches. unreadable: settings.json does not parse; the caller goes on
   # to settings_merge, which stops with the parse error and a backup.
   _SUB_STATE=absent
   [ -s "$SETTINGS_FILE" ] || return 0
   _SUB_STATE=$(jq -r '
     .subagentStatusLine as $s
     | if $s == null then "absent"
-      elif ($s | type) != "object" or ($s.command | type) != "string" then "ours"
-      elif ($s.command | test("(^|[/ \"\u0027])statusline\\.sh")) and ($s.command | contains("--subagent")) then "ours"
+      elif ($s | type) != "object" or ($s.command | type) != "string" then "broken"
+      elif ($s.command | test("(^|[/ \"\u0027])statusline\\.sh($|[ \"\u0027><|;&)])"))
+           and ($s.command | test("(^| )--subagent($|[ \"\u0027><|;&)])"))
+        then (if $s.type == "command" then "ours" else "broken" end)
       else "foreign" end
   ' "$SETTINGS_FILE" 2>/dev/null) || _SUB_STATE=unreadable
-  case "$_SUB_STATE" in (absent|ours|foreign) ;; (*) _SUB_STATE=unreadable ;; esac
+  case "$_SUB_STATE" in (absent|ours|broken|foreign) ;; (*) _SUB_STATE=unreadable ;; esac
 }
 
 enable_subagent_statusline() {
@@ -1433,7 +1438,7 @@ enable_subagent_statusline() {
     printf '%s has a subagentStatusLine from another tool; left unchanged. Remove it to let coralline draw the rows.\n' "$SETTINGS_FILE" >&2
     return 1
   fi
-  if [ "$_SUB_STATE" = ours ] && subagent_enabled; then
+  if [ "$_SUB_STATE" = ours ]; then
     printf '%s already has the coralline subagent panel rows; left as it is\n' "$SETTINGS_FILE"
     return 0
   fi

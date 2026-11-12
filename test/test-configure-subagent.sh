@@ -202,6 +202,16 @@ jq -e 'has("subagentStatusLine") | not' "$SETTINGS_FILE" >/dev/null 2>&1 && ok "
 printf '{"subagentStatusLine":true}\n' > "$SETTINGS_FILE"
 enable_subagent_statusline >/dev/null 2>&1
 subagent_enabled && ok "enable repairs a broken entry" || bad "enable repairs a broken entry"
+# enabling keeps an own entry with a config override and a trailing redirection
+printf '{"subagentStatusLine":{"type":"command","command":"CORALLINE_CONFIG=/tmp/custom.conf bash /tmp/statusline.sh --subagent 2>/dev/null"}}\n' > "$SETTINGS_FILE"
+cp "$SETTINGS_FILE" "$KEEPD/before"
+enable_subagent_statusline >/dev/null 2>&1
+cmp -s "$SETTINGS_FILE" "$KEEPD/before" && ok "enable keeps an own entry with a trailing redirection" || bad "enable keeps an own entry with a trailing redirection"
+# a longer file name, or a longer flag, is another tool
+for _cmd in 'bash /opt/other/statusline.sh-helper --subagent' 'bash /opt/other/statusline.sh --subagents'; do
+  printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$_cmd" > "$SETTINGS_FILE"
+  subagent_state; [ "$_SUB_STATE" = foreign ] && ok "another tool: $_cmd" || bad "another tool: $_cmd ($_SUB_STATE)"
+done
 # a script whose name merely ends in statusline.sh is another tool
 printf '{"subagentStatusLine":{"type":"command","command":"npx ccstatusline.sh --subagent"}}\n' > "$SETTINGS_FILE"
 subagent_state; [ "$_SUB_STATE" = foreign ] && ok "ccstatusline.sh --subagent is another tool" || bad "ccstatusline.sh --subagent is another tool ($_SUB_STATE)"
@@ -214,6 +224,8 @@ for _cmd in 'bash ~/.claude/coralline/statusline.sh' 'bash \"$HOME/.claude/coral
   printf '{"statusLine":{"type":"command","command":"%s","refreshInterval":5}}\n' "$_cmd" > "$SETTINGS_FILE"
   settings_runs_coralline statusLine && ok "ours: $_cmd" || bad "ours: $_cmd"
 done
+printf '{"statusLine":{"type":"command","command":"bash %s/statusline.sh>/tmp/statusline.log"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
+settings_runs_coralline statusLine && ok "ours: a redirection right after the path" || bad "ours: a redirection right after the path"
 printf '{"statusLine":{"type":"command","command":"bash %s/statusline.sh.bak.20261101"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
 settings_runs_coralline statusLine && bad "a .bak path is not this install" || ok "a .bak path is not this install"
 printf '{"statusLine":{"command":"bash %s/statusline.sh"}}\n' "$TARGET_DIR" > "$SETTINGS_FILE"
