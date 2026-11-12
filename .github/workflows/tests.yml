@@ -8,14 +8,21 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request replaces the older run. Runs on main are never
+# cancelled: each merge commit keeps its own result, so a break is attributed
+# to the commit that caused it.
 concurrency:
   group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   bash:
+    # ubuntu-latest has bash 5 on PATH; macos-latest has only the stock bash 3.2,
+    # the oldest shell the renderer supports. The Versions step fails if that
+    # stops being true, so the macOS leg cannot silently stop covering 3.2.
     name: bash suites (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -25,37 +32,33 @@ jobs:
       - name: Versions
         run: |
           bash --version | head -1
-          /bin/bash --version | head -1
           jq --version
           git --version
+          if [ "$RUNNER_OS" = macOS ]; then
+            case "$(bash -c 'printf %s "$BASH_VERSION"')" in
+              3.2.*) ;;
+              *) echo "::error::the macOS runner's bash is no longer 3.2; this leg must run the suites under /bin/bash"; exit 1 ;;
+            esac
+          fi
       # One file per invocation: `bash -n a b c` checks only a and passes the
       # rest to it as arguments.
       - name: Syntax
         run: |
-          for f in statusline.sh configure.sh install.sh; do
-            bash -n "$f"
-            /bin/bash -n "$f"
-          done
-      # Every suite exits non-zero on a failed case. One loop per shell so a
-      # failure names the suite; the loop keeps going to report all of them.
-      - name: Suites on the PATH bash
-        run: |
           fail=0
-          for t in test/*.sh; do
-            echo "::group::$t"
-            bash "$t" || { fail=1; echo "::error file=$t::suite failed"; }
-            echo "::endgroup::"
+          for f in statusline.sh configure.sh install.sh example/float-display-iterm2/coralline-float test/*.sh; do
+            bash -n "$f" || { fail=1; echo "::error file=$f::syntax error"; }
           done
           exit "$fail"
-      # macOS ships bash 3.2 as /bin/bash, the oldest shell the renderer supports.
-      - name: Suites on /bin/bash 3.2
-        # still runs after a failure in the step above, so one run reports both shells
-        if: ${{ !cancelled() && runner.os == 'macOS' }}
+      # Every suite exits non-zero on a failed case. The loop keeps going so one
+      # run names every failing suite. Each suite gets an empty HOME of its own:
+      # nothing reads or leaves state in ~/.claude, so the result does not depend
+      # on the order of the suites.
+      - name: Suites
         run: |
           fail=0
           for t in test/*.sh; do
             echo "::group::$t"
-            /bin/bash "$t" || { fail=1; echo "::error file=$t::suite failed on bash 3.2"; }
+            HOME="$(mktemp -d)" bash "$t" || { fail=1; echo "::error file=$t::suite failed"; }
             echo "::endgroup::"
           done
           exit "$fail"
