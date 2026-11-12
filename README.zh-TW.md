@@ -260,7 +260,7 @@ Bash 讀取 `~/.claude/coralline.conf`，原生 renderer 也能讀同一個檔�
 
 ### Windows 無 Git Bash
 
-`statusline.ps1` 是原生 Windows PowerShell 5.1 renderer。它不需要 Bash、`jq`、WSL、archive 解壓工具或 Git；`git.exe` 是選用項目，只用來啟用 `git`、`stash` 與 `project`。它支援和 Bash 相同的風格、版面、state-backed 功能、float 輸出與套用主題的 subagent 列；主列區段除了 `relay` 以外也都相同。`VL_HEAD_SEGMENTS` 與 `VL_GIT_CACHE_TTL` 同樣只有 Bash 支援，原生 renderer 會略過它們。
+`statusline.ps1` 是原生 Windows PowerShell 5.1 renderer。它不需要 Bash、`jq`、WSL、archive 解壓工具或 Git；`git.exe` 是選用項目，只用來啟用 `git`、`stash` 與 `project`。它支援和 Bash 相同的風格、版面、state-backed 功能、float 輸出與套用主題的 subagent 列；主列區段除了 `relay` 與 `fable` 以外也都相同。`VL_HEAD_SEGMENTS`、`VL_GIT_CACHE_TTL` 與 `VL_RELAY_LIMITS` 同樣只有 Bash 支援，原生 renderer 會略過它們。
 
 以下 bootstrap 會跟隨可變的 `main`，在下載可執行 installer 前先解析成 commit，再把同一個 commit 傳給 `install.ps1`：
 

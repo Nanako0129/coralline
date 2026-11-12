@@ -260,7 +260,7 @@ The [quick start](#quick-start) covers Bash installs. This section covers PowerS
 
 ### Windows without Git Bash
 
-`statusline.ps1` is the native Windows PowerShell 5.1 renderer. It needs no Bash, `jq`, WSL, archive extractor, or Git; `git.exe` is optional and only enables `git`, `stash`, and `project`. It supports the same styles, layouts, state-backed features, float output, and themed subagent rows as Bash, and the same main segments except `relay`. `VL_HEAD_SEGMENTS` and `VL_GIT_CACHE_TTL` are Bash only too; the native renderer ignores them.
+`statusline.ps1` is the native Windows PowerShell 5.1 renderer. It needs no Bash, `jq`, WSL, archive extractor, or Git; `git.exe` is optional and only enables `git`, `stash`, and `project`. It supports the same styles, layouts, state-backed features, float output, and themed subagent rows as Bash, and the same main segments except `relay` and `fable`. `VL_HEAD_SEGMENTS`, `VL_GIT_CACHE_TTL` and `VL_RELAY_LIMITS` are Bash only too; the native renderer ignores them.
 
 The following bootstrap follows mutable `main`, resolves it to a commit before downloading executable installer code, then passes the same commit to `install.ps1`:
 
