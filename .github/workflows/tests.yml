@@ -129,11 +129,15 @@ jobs:
             $o = $p.StandardOutput.BaseStream; $e = $p.StandardError.BaseStream
             $om = New-Object IO.MemoryStream; $em = New-Object IO.MemoryStream
             $ot = $o.CopyToAsync($om); $et = $e.CopyToAsync($em)
-            $p.StandardInput.BaseStream.Write($json, 0, $json.Length); $p.StandardInput.Close()
+            if ($script:DelayMs -gt 0) { Start-Sleep -Milliseconds $script:DelayMs }
+            $p.StandardInput.BaseStream.Write($json, 0, $json.Length); $p.StandardInput.BaseStream.Flush(); $p.StandardInput.Close()
             [void]$p.WaitForExit(20000); [void]$ot.Wait(2000); [void]$et.Wait(2000)
             "{0,-44} exit={1} stdout={2} stderr={3}" -f $label, $p.ExitCode, $om.Length, $em.Length
             if ($em.Length -gt 0) { [Text.Encoding]::UTF8.GetString($em.ToArray()).Substring(0, [Math]::Min(600, $em.Length)) }
+            if ($script:ShowOut) { ([Text.Encoding]::UTF8.GetString($om.ToArray())).Replace([string][char]27, '<ESC>').Trim() }
           }
+          $script:DelayMs = 0; $script:ShowOut = $false
+          "payload bytes: $($json.Length), first byte: $($json[0]), last byte: $($json[$json.Length - 1])"
           $script = Join-Path $repo 'statusline.ps1'
           $rt = Join-Path ([IO.Path]::GetTempPath()) 'coralline-diag-home'
           Launch 'plain, window allowed'               @{} $repo $false $script
@@ -147,10 +151,21 @@ jobs:
           $probe = Join-Path $repo 'probe.ps1'
           Set-Content -Path $probe -Encoding ascii -Value @'
           try { $s = [Console]::OpenStandardInput(); $r = New-Object IO.StreamReader($s); $t = $r.ReadToEnd(); "stdin chars: $($t.Length)" } catch { "stdin failed: $_" }
-          try { "out encoding: $([Console]::OutputEncoding.WebName) redirected: $([Console]::IsOutputRedirected)" } catch { "console failed: $_" }
-          try { $o = [Console]::OpenStandardOutput(); $b = [Text.Encoding]::UTF8.GetBytes("raw write ok`n"); $o.Write($b, 0, $b.Length); $o.Flush() } catch { "raw write failed: $_" }
+          try { "pipeline input items: $(@($input).Count)" } catch { "input failed: $_" }
+          try { "in redirected: $([Console]::IsInputRedirected) out encoding: $([Console]::OutputEncoding.WebName)" } catch { "console failed: $_" }
           '@
-          Launch 'probe script' @{} $repo $true $probe
+          $script:ShowOut = $true
+          Launch 'probe, write at once' @{} $repo $true $probe
+          $script:DelayMs = 3000
+          Launch 'probe, write after 3 s' @{} $repo $true $probe
+          Launch 'renderer, write after 3 s' @{} $repo $true $script
+          $script:DelayMs = 0
+          "--- the same payload from a file handle instead of a pipe"
+          cmd /c "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File probe.ps1 < test\sample-input.json"
+          "--- and through a cmd pipe"
+          cmd /c "type test\sample-input.json | powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File probe.ps1"
+          cmd /c "type test\sample-input.json | powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File statusline.ps1 > piped.txt"
+          "renderer through a cmd pipe: stdout=$((Get-Item piped.txt).Length)"
       - name: test-statusline-ps1
         # A long-form temp directory: the runner's own one is suspected to be an
         # 8.3 short path (C:\Users\RUNNER~1\...), which the renderer's config path
