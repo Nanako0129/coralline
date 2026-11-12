@@ -106,7 +106,7 @@ function Invoke-CapturedProcess(
         if ($inputBytes.Length -gt 0) {
             $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
         }
-        $process.StandardInput.Close()
+        $process.StandardInput.BaseStream.Close()
         $timedOut = -not $process.WaitForExit($TimeoutMs)
         if ($timedOut) {
             try { $process.Kill() } catch { }

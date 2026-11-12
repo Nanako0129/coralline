@@ -130,14 +130,20 @@ jobs:
             $om = New-Object IO.MemoryStream; $em = New-Object IO.MemoryStream
             $ot = $o.CopyToAsync($om); $et = $e.CopyToAsync($em)
             if ($script:DelayMs -gt 0) { Start-Sleep -Milliseconds $script:DelayMs }
-            $p.StandardInput.BaseStream.Write($json, 0, $json.Length); $p.StandardInput.BaseStream.Flush(); $p.StandardInput.Close()
+            $p.StandardInput.BaseStream.Write($json, 0, $json.Length); $p.StandardInput.BaseStream.Flush()
+            if ($script:CloseRaw) { $p.StandardInput.BaseStream.Close() } else { $p.StandardInput.Close() }
             [void]$p.WaitForExit(20000); [void]$ot.Wait(2000); [void]$et.Wait(2000)
             "{0,-44} exit={1} stdout={2} stderr={3}" -f $label, $p.ExitCode, $om.Length, $em.Length
             if ($em.Length -gt 0) { [Text.Encoding]::UTF8.GetString($em.ToArray()).Substring(0, [Math]::Min(600, $em.Length)) }
             if ($script:ShowOut) { ([Text.Encoding]::UTF8.GetString($om.ToArray())).Replace([string][char]27, '<ESC>').Trim() }
           }
-          $script:DelayMs = 0; $script:ShowOut = $false
+          $script:DelayMs = 0; $script:ShowOut = $false; $script:CloseRaw = $false
           "payload bytes: $($json.Length), first byte: $($json[0]), last byte: $($json[$json.Length - 1])"
+          "console input code page: $([Console]::InputEncoding.CodePage), preamble bytes: $([Console]::InputEncoding.GetPreamble().Length)"
+          $script:CloseRaw = $true
+          Launch 'closing the raw stream'              @{} (Get-Location).Path $true (Join-Path (Get-Location).Path 'statusline.ps1')
+          $script:CloseRaw = $false
+          Launch 'closing the StandardInput writer'    @{} (Get-Location).Path $true (Join-Path (Get-Location).Path 'statusline.ps1')
           $script = Join-Path $repo 'statusline.ps1'
           $rt = Join-Path ([IO.Path]::GetTempPath()) 'coralline-diag-home'
           Launch 'plain, window allowed'               @{} $repo $false $script

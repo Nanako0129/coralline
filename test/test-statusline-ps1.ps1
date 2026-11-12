@@ -77,8 +77,12 @@ function Invoke-CapturedProcess(
         $outTask = $process.StandardOutput.BaseStream.CopyToAsync($stdout)
         $errTask = $process.StandardError.BaseStream.CopyToAsync($stderr)
         if ($null -eq $InputBytes) { $InputBytes = $Utf8NoBom.GetBytes($InputText) }
+        # Write and close the raw stream, never the StandardInput writer: on .NET
+        # Framework that writer emits its encoding's preamble when it is closed, so
+        # under a UTF-8 console code page (65001) a BOM lands AFTER the payload and
+        # the renderer sees invalid JSON. Claude Code writes through its own pipe.
         if ($InputBytes.Length -gt 0) { $process.StandardInput.BaseStream.Write($InputBytes, 0, $InputBytes.Length) }
-        $process.StandardInput.Close()
+        $process.StandardInput.BaseStream.Close()
         $timedOut = -not $process.WaitForExit($TimeoutMs)
         if ($timedOut) {
             try { $process.Kill() } catch { }
@@ -147,7 +151,7 @@ function Start-CapturedProcessAsync(
     $errTask = $process.StandardError.BaseStream.CopyToAsync($stderr)
     $inputBytes = $Utf8NoBom.GetBytes($InputText)
     if ($inputBytes.Length -gt 0) { $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length) }
-    $process.StandardInput.Close()
+    $process.StandardInput.BaseStream.Close()
     return [pscustomobject]@{ Process=$process; Stdout=$stdout; Stderr=$stderr; OutTask=$outTask; ErrTask=$errTask }
 }
 
