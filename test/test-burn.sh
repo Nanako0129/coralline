@@ -265,6 +265,13 @@ ap //server/share '1:'
 ap '/a\b' '0:/a/b'
 ap 'C:/Users/x' '0:/c/Users/x'
 ap '' '1:'
+# look-alikes of "." and ".." are ordinary names and stay on the fast path
+ap /a/..b '0:/a/..b'
+ap /a/... '0:/a/...'
+ap /a/b.. '0:/a/b..'
+ap /.a '0:/.a'
+ap '/a/b\' '0:/a/b'
+( cd / && state_abs_path tmp/x; [ "$_SAP" = /tmp/x ] ) && ok 'abs path relative to PWD' || bad 'abs path relative to PWD' "$_SAP"
 
 # Compact limit directory high-water: reset first, pct second, malformed entries ignored.
 CASE="$TMPD/highwater"; mkdir -p "$CASE"

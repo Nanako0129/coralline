@@ -564,7 +564,6 @@ state_abs_path() {  # → _SAP; lexical absolute path, including MSYS drive form
     rest="${rest#*/}"
   done
   _SAP="/${out}"
-  [ "$_SAP" != "/" ] || _SAP="/"
 }
 
 state_no_symlink_path() {  # → _SNP; every existing ancestor and target is non-link
@@ -1631,10 +1630,17 @@ text_width() {
   plain+="$s"
   # Printable ASCII is one column each and is most of every segment: count it in
   # one expansion and walk only what is left (glyphs, CJK, stray bytes). Under
-  # the local LC_ALL=C one character is one byte and [[:print:]] is exactly
-  # 0x20-0x7E, on bash 3.2 too; a range would follow the collation there.
-  s="${plain//[[:print:]]/}"
-  w=$(( ${#plain} - ${#s} )) ; plain="$s"
+  # the local LC_ALL=C one character is one byte and [[:print:]] matched exactly
+  # 0x20-0x7E on macOS (bash 3.2 and 5.3) and Linux; test-width's CJK cases fail
+  # if a C locale ever counts a high byte as printable. A range would follow the
+  # collation on 3.2. Only up to 256 bytes: bash 3.2 does this expansion in
+  # quadratic time, and past a few hundred bytes the plain walk is faster there.
+  # Malformed UTF-8 is measured approximately either way; with the ASCII gone, a
+  # truncated sequence can also take bytes of the next non-ASCII character.
+  if [ "${#plain}" -le 256 ]; then
+    s="${plain//[[:print:]]/}"
+    w=$(( ${#plain} - ${#s} )) ; plain="$s"
+  fi
   n=${#plain} ; i=0
   while [ "$i" -lt "$n" ]; do
     printf -v b '%d' "'${plain:i:1}" ; [ "$b" -lt 0 ] && b=$((b + 256))
