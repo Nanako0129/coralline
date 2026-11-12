@@ -202,12 +202,15 @@ jq -e 'has("subagentStatusLine") | not' "$SETTINGS_FILE" >/dev/null 2>&1 && ok "
 printf '{"subagentStatusLine":true}\n' > "$SETTINGS_FILE"
 enable_subagent_statusline >/dev/null 2>&1
 subagent_enabled && ok "enable repairs a broken entry" || bad "enable repairs a broken entry"
+# a script whose name merely ends in statusline.sh is another tool
+printf '{"subagentStatusLine":{"type":"command","command":"npx ccstatusline.sh --subagent"}}\n' > "$SETTINGS_FILE"
+subagent_state; [ "$_SUB_STATE" = foreign ] && ok "ccstatusline.sh --subagent is another tool" || bad "ccstatusline.sh --subagent is another tool ($_SUB_STATE)"
 # a settings.json that does not parse stops with the error instead of reporting success
 printf '{"subagentStatusLine":{"type":"command",}\n' > "$SETTINGS_FILE"
 ( disable_subagent_statusline >/dev/null 2>&1 ) && bad "disable fails on unparseable settings" || ok "disable fails on unparseable settings"
 # statusLine spelled with ~ or $HOME is this install too; a .bak path or a wrong type is not
 TARGET_SAVE=$TARGET_DIR; TARGET_DIR="$HOME/.claude/coralline"
-for _cmd in 'bash ~/.claude/coralline/statusline.sh' 'bash \"$HOME/.claude/coralline/statusline.sh\"'; do
+for _cmd in 'bash ~/.claude/coralline/statusline.sh' 'bash \"$HOME/.claude/coralline/statusline.sh\"' 'bash ${HOME}/.claude/coralline/statusline.sh'; do
   printf '{"statusLine":{"type":"command","command":"%s","refreshInterval":5}}\n' "$_cmd" > "$SETTINGS_FILE"
   settings_runs_coralline statusLine && ok "ours: $_cmd" || bad "ours: $_cmd"
 done

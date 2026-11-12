@@ -1361,16 +1361,16 @@ settings_merge() {  # apply jq filter $1 (plus any --arg pairs after it) to sett
 
 settings_runs_coralline() {  # $1=settings key; exit 0 when its command runs this install's statusline.sh
   # The path as typed, shell-quoted the way this installer writes it, or spelled
-  # with ~ or $HOME; a wrapper around the script (an env prefix, extra flags)
+  # with ~, $HOME or ${HOME}; a wrapper around the script (an env prefix, extra flags)
   # still counts. The path has to end there: statusline.sh.bak-... is not it.
-  local raw="$TARGET_DIR/statusline.sh" quoted tilde="" var=""
+  local raw="$TARGET_DIR/statusline.sh" quoted tilde="" var="" brace=""
   [ -s "$SETTINGS_FILE" ] || return 1
   printf -v quoted '%q' "$raw"
-  case "$raw" in ("$HOME"/*) tilde="~${raw#"$HOME"}"; var="\$HOME${raw#"$HOME"}" ;; esac
-  jq -e --arg k "$1" --arg raw "$raw" --arg quoted "$quoted" --arg tilde "$tilde" --arg var "$var" '
+  case "$raw" in ("$HOME"/*) tilde="~${raw#"$HOME"}"; var="\$HOME${raw#"$HOME"}"; brace="\${HOME}${raw#"$HOME"}" ;; esac
+  jq -e --arg k "$1" --arg raw "$raw" --arg quoted "$quoted" --arg tilde "$tilde" --arg var "$var" --arg brace "$brace" '
     .[$k] as $s
     | ($s | type) == "object" and $s.type == "command" and ($s.command | type) == "string"
-      and any([$raw, $quoted, $tilde, $var][] | select(length > 0);
+      and any([$raw, $quoted, $tilde, $var, $brace][] | select(length > 0);
               . as $p | ($s.command | endswith($p) or contains($p + " ") or contains($p + "\"") or contains($p + "\u0027")))
   ' "$SETTINGS_FILE" >/dev/null 2>&1
 }
@@ -1416,7 +1416,7 @@ subagent_state() {  # → _SUB_STATE: absent | ours | foreign | unreadable, in o
     .subagentStatusLine as $s
     | if $s == null then "absent"
       elif ($s | type) != "object" or ($s.command | type) != "string" then "ours"
-      elif ($s.command | contains("statusline.sh")) and ($s.command | contains("--subagent")) then "ours"
+      elif ($s.command | test("(^|[/ \"\u0027])statusline\\.sh")) and ($s.command | contains("--subagent")) then "ours"
       else "foreign" end
   ' "$SETTINGS_FILE" 2>/dev/null) || _SUB_STATE=unreadable
   case "$_SUB_STATE" in (absent|ours|foreign) ;; (*) _SUB_STATE=unreadable ;; esac
