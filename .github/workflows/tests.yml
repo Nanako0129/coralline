@@ -104,6 +104,24 @@ jobs:
           git init -q -b main
           git add -A
           git -c user.name=ci -c user.email=ci@example.invalid commit -qm snapshot
+      # TEMPORARY diagnostic: the first hosted run rendered nothing from
+      # statusline.ps1 (exit 0, empty stdout and stderr). Remove once explained.
+      - name: Diagnose native render (temporary)
+        continue-on-error: true
+        shell: powershell
+        run: |
+          "--- as Claude Code runs it (stdin redirected from a file)"
+          cmd /c "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File statusline.ps1 < test\sample-input.json > out.txt 2> err.txt"
+          "exit=$LASTEXITCODE stdout_bytes=$((Get-Item out.txt).Length) stderr_bytes=$((Get-Item err.txt).Length)"
+          Get-Content err.txt -TotalCount 20
+          "--- in-process, errors kept"
+          $Error.Clear()
+          try { Get-Content test\sample-input.json -Raw | & .\statusline.ps1 | Out-File out2.txt } catch { "THROWN: " + ($_ | Out-String) }
+          "stdout_bytes=$((Get-Item out2.txt -ErrorAction SilentlyContinue).Length) errors=$($Error.Count)"
+          $Error | Select-Object -First 5 | ForEach-Object { ($_ | Out-String).Trim(); $_.ScriptStackTrace }
+          "--- environment facts"
+          "USERPROFILE set: $([bool]$env:USERPROFILE) HOME set: $([bool]$env:HOME) CLAUDE_CONFIG_DIR set: $([bool]$env:CLAUDE_CONFIG_DIR) CI set: $([bool]$env:CI)"
+          "cwd: $(Get-Location) culture: $([Globalization.CultureInfo]::CurrentCulture.Name) codepage: $([Console]::OutputEncoding.CodePage)"
       - name: test-statusline-ps1
         shell: cmd
         run: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-statusline-ps1.ps1
