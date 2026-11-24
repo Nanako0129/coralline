@@ -173,6 +173,7 @@ $Defaults = [ordered]@{
     VL_BG_CACHE = ''
     VL_BG_TOKS = ''
     VL_BG_TTFT = ''
+    VL_BG_SUBAGENTS = ''
     VL_BG_BAR = ''
     VL_NODE_GLYPH = (Glyph 0xE718)
     VL_PY_GLYPH = (Glyph 0xE73C)
@@ -838,6 +839,7 @@ $G = @{
     Reset = Glyph 0x21BA
     Check = Glyph 0x2713
     BurnTo = Glyph 0x21E2
+    Sub = Glyph 0x21C9
 }
 
 function Get-Fg([string]$Spec) {
@@ -2644,7 +2646,7 @@ $toksTranscript = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('tr
 # third-party models. A bucket with no live window (fraction 1, 1970 reset) stays
 # empty. agy gets its own store namespace per bucket, and its transcript is not
 # Claude's format, so toks/ttft stay silent.
-function Get-AgyWindow($Quota, [string]$Key) {  # → @(used pct, reset epoch) or $null
+function Get-AgyWindow($Quota, [string]$Key) {  # -> @(used pct, reset epoch) or $null
     $q = Get-JsonMember $Quota $Key
     if (-not ($q -is [pscustomobject] -or $q -is [System.Collections.IDictionary])) { return $null }
     $f = Get-JsonMember $q 'remaining_fraction'
@@ -2672,7 +2674,7 @@ function Get-AgyWindow($Quota, [string]$Key) {  # → @(used pct, reset epoch) o
     return @((To-InvariantString $pct), (To-InvariantString $dto.ToUnixTimeSeconds()))
 }
 $agy = ''
-if ((Get-JsonMember $J 'product') -is [string] -and (Get-JsonMember $J 'product') -ceq 'antigravity') {
+if ((Get-JsonMember $J 'product') -is [string] -and [string]::Equals((Get-JsonMember $J 'product'), 'antigravity', [System.StringComparison]::Ordinal)) {
     $agy = 'gemini'
     if ((To-InvariantString (Get-JsonPath $J @('model', 'display_name'))) -cmatch '^(Claude|GPT)') { $agy = '3p' }
     if ($null -eq (Get-JsonMember $J 'rate_limits')) {
@@ -2691,6 +2693,23 @@ if ((Get-JsonMember $J 'product') -is [string] -and (Get-JsonMember $J 'product'
     }
     # No cost in an agy payload means unknown, not $0.00: VL_COST_ALWAYS_SHOW stays out.
     if ($costKind -eq 'missing') { $costKind = 'invalid' }
+}
+# agy lists the conversation's subagents; finished ones stay listed until the
+# turn ends, so only the running ones are counted (statusline.sh: subrun).
+# Names match ordinally (exact code units), as jq does; Get-JsonMember ignores case
+# and -ceq compares by culture, which skips characters such as a soft hyphen.
+function Get-ExactMember($Object, [string]$Name) {
+    foreach ($p in $Object.PSObject.Properties) { if ([string]::Equals($p.Name, $Name, [System.StringComparison]::Ordinal)) { return ,$p.Value } }
+    return $null
+}
+$subRunning = 0
+$subList = Get-ExactMember $J 'subagents'
+if ($subList -is [System.Array]) {
+    foreach ($s in $subList) {
+        if ($s -isnot [pscustomobject]) { continue }
+        $st = Get-ExactMember $s 'status'
+        if ($st -is [string] -and [string]::Equals($st, 'running', [System.StringComparison]::Ordinal)) { $subRunning++ }
+    }
 }
 $effortNode = Get-JsonPath $J @('effort', 'level')
 if ($null -eq $effortNode -or ($effortNode -is [bool] -and -not $effortNode)) {   # jq //: agy puts effort on the model
@@ -3503,6 +3522,14 @@ function Add-ModelSegment {
     Push-Segment $Cfg.VL_BG_MODEL "${Bold}${fg} $($G.Diamond) $shown ${Norm}"
 }
 
+function Add-SubagentsSegment {
+    if ($subRunning -le 0) { return }
+    $bg = $Cfg.VL_BG_SUBAGENTS
+    if ([string]::IsNullOrEmpty($bg)) { $bg = $Cfg.VL_BG_DURATION }
+    $fg = Get-Fg $Cfg.VL_FG_TEXT
+    Push-Segment $bg "${fg} $($G.Sub) $subRunning "
+}
+
 function Add-EffortSegment {
     if ([string]::IsNullOrEmpty($effort)) { return }
     $label = $effort
@@ -3821,6 +3848,7 @@ $SegmentBuilders = [ordered]@{
     dir = { Add-DirSegment }
     duration = { Add-DurationSegment }
     effort = { Add-EffortSegment }
+    subagents = { Add-SubagentsSegment }
     git = { Add-GitSegment }
     limit5h = { Add-Limit5Segment }
     limit7d = { Add-Limit7Segment }

@@ -5,6 +5,10 @@
   "model": { "display_name": "Claude Fable 5" },
   "output_style": { "name": "Explanatory" },
   "effort": { "level": "high" },
+  "subagents": [
+    { "name": "scout", "role": "Count the lines", "model": "Gemini 4 Hydrogen (High)", "status": "running" },
+    { "name": "scout", "role": "Read the README", "model": "Gemini 4 Hydrogen (High)", "status": "completed" }
+  ],
   "context_window": {
     "used_percentage": 62.4,
     "total_input_tokens": 1234567,

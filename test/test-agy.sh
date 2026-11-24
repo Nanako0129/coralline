@@ -106,6 +106,23 @@ printf 'a68a158b-d5c0-444f-9c11-81a0ffb67c68 5000 10:10 4321 10:10 5000 4321 250
 check "control: a Claude payload shows the seeded toks state" "tok/s 0.3s" "$(agyt '' | grep -o 'tok/s\|0\.3s' | tr '\n' ' ' | sed 's/ $//')"
 check "agy ignores a seeded toks state" "" "$(agyt antigravity | grep -o 'tok/s\|0\.3s')"
 
+# subagents: only running entries count (agy keeps finished ones listed).
+printf 'VL_CLOCK=off\nVL_SEGMENTS="model subagents"\n' > "$TMP/subconf"
+sub() {  # $1=subagents JSON → the segment's text ("" = hidden)
+  printf '{"product":"antigravity","model":{"display_name":"Gemini 4 Neon (High)"},"subagents":%s}' "$1" |
+    CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$TMP/subconf" COLUMNS=200 "$BASH" "$SCRIPT" | sed 's/\x1b\[[0-9;]*m//g' | grep -o '⇉ [0-9]*'
+}
+R='{"name":"scout","role":"a","model":"Gemini 4 Hydrogen (High)","status":"running"}'
+C='{"name":"scout","role":"b","model":"Gemini 4 Hydrogen (High)","status":"completed"}'
+check "two running subagents"            "⇉ 2" "$(sub "[$R,$R,$C]")"
+check "finished subagents are not shown" ""    "$(sub "[$C,$C]")"
+check "empty list hidden"                ""    "$(sub '[]')"
+check "malformed list hidden"            ""    "$(sub '{"status":"running"}')"
+check "upper-case key counts nothing"    ""    "$(sub '[{"STATUS":"running"}]')"
+check "soft hyphen or NUL counts nothing" ""   "$(sub '[{"sta\u00adtus":"running"},{"status":"run\u0000ning"}]')"
+check "bad entries count nothing"         ""    "$(sub '["running",{"status":1},{"status":"Running"},null]')"
+check "Claude Code payload hidden"       ""    "$(printf '{"model":{"display_name":"Opus"}}' | CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$TMP/subconf" "$BASH" "$SCRIPT" | grep -o '⇉')"
+
 # reset_time is cut to whole-second UTC; any other offset drops the window.
 rt() {  # $1=reset_time → the 5h pill's "label pct", rendered with sync on and an empty store
   agy 'Gemini 4 Neon (High)' "{\"gemini-5h\":{\"remaining_fraction\":0.5,\"reset_time\":\"$1\",\"reset_in_seconds\":7200}}" |

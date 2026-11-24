@@ -145,6 +145,7 @@ The default bar is `dir git model ctx limit5h limit7d cost clock`; every other s
 | `model` | yes | active Claude model |
 | `relay` | no | which model this session talks to through [model-relay](https://github.com/cablate/model-relay): `↪ claude`, the model a `/provider` pin or a failover chose (`↪ glm-5.3`, `· failover`), `↪ claude · limit` when Claude's limit is reached with no failover, `↪ offline`, or `↪ claude · direct` when the relay is down. Reads the status file model-relay writes per session (`model-relay-status/<session_id>`, model-relay with status files); hidden without it. Bash renderer only; no extra fork |
 | `effort` | no | reasoning effort: `low`, `med`, `high`, `xhigh`, or `max` |
+| `subagents` | no | number of subagents running right now (`⇉ 2`); hidden when none run. Fed by agy, whose payload lists them; Claude Code sends no such list, so there it stays hidden (use the [subagent panel](#subagent-panel)) |
 | `ctx` | yes | context gauge and input, output, and cache token counts |
 | `cache` | no | prompt-cache hit ratio, and the countdown to the cache expiring or `cold` once it has |
 | `toks` | no | decode speed of the last response in output tokens per second, prefill excluded; `≥` marks the prefill-inclusive fallback |
@@ -294,6 +295,7 @@ On Windows, copy the `statusLine.command` the installer wrote into Claude Code's
 - `limit5h`, `limit7d`, and `burn` read agy's own quota: the Gemini 5h and weekly windows while a Gemini model is selected, the third-party ones for Claude and GPT models. A window agy has not opened stays hidden, unless `VL_LIMIT_SYNC=1` borrows one another agy session recorded, as it does for Claude Code sessions with no reading of their own.
 - agy keeps its limit and burn stores apart from Claude Code's, one set per quota (`limit-5h-agy-gemini.d`, `burn-5h-agy-gemini.tsv`, and their `-agy-3p` twins), so with `VL_LIMIT_SYNC=1` agy sessions sync among themselves while Claude Code's windows never show in agy and agy's never show in Claude Code.
 - `effort` reads the model's effort. `cost`, `cache`, `toks`, and `ttft` stay hidden: agy sends no cost or prompt-cache data, and its transcript is not Claude Code's format.
+- `subagents` counts the subagents agy is running (agy draws their rows itself, so the Claude Code subagent panel has no agy counterpart).
 - agy redraws the status line when its state changes, not on a timer, so `clock` and the countdowns hold still while a session sits idle.
 
 ### Trust and security
