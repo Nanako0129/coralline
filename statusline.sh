@@ -949,10 +949,10 @@ rl_sample() {  # $1=canonical base $2=pct_milli $3=reset
   mkdir "$path" 2>/dev/null || true
 }
 
-rl_latest() {  # $1=canonical base $2=max secs ahead $3=mutate → _LL_*
-  local base="$1" max="$2" mutate="${3:-0}" root path name raw=0 complete=1 hi="" i cut gc=0 LC_ALL=C
+rl_latest() {  # $1=canonical base $2=max secs ahead $3=mutate $4=reset to match → _LL_*
+  local base="$1" max="$2" mutate="${3:-0}" want="${4:-}" root path name raw=0 complete=1 hi="" i cut gc=0 LC_ALL=C
   local names=() paths=() resets=() pcts=()
-  _LL_VALID=0; _LL_PCT=""; _LL_PCT_MILLI=0; _LL_RST=""
+  _LL_VALID=0; _LL_PCT=""; _LL_PCT_MILLI=0; _LL_RST=""; _LL_MATCH_MILLI=""
   case "$max" in (''|*[!0-9]*) return 0 ;; esac
   [ "${#max}" -le 6 ] && [ "$max" -ge 1 ] 2>/dev/null || return 0
   rl_dir "$base" || return 0; root=$_RLD
@@ -968,9 +968,15 @@ rl_latest() {  # $1=canonical base $2=max secs ahead $3=mutate → _LL_*
     i=${#names[@]}; names[$i]="$name"; paths[$i]="$path"; resets[$i]=$_SLN_RST; pcts[$i]=$_SLN_PCT
     if [ "$_SLN_RST" -gt "$NOW" ] && [ "$_SLN_RST" -le "$cut" ]; then
       [ -n "$hi" ] && [[ "$name" < "$hi" ]] || hi="$name"
+      # $4 (rl_choose's own-file reset): the highest stored reading for that very
+      # window, taken here because the latest entry may be a later window and the
+      # GC below removes every other one.
+      if [ "$_SLN_RST" = "$want" ] && { [ -z "$_LL_MATCH_MILLI" ] || [ "$_SLN_PCT" -gt "$_LL_MATCH_MILLI" ]; }; then
+        _LL_MATCH_MILLI=$_SLN_PCT
+      fi
     fi
   done
-  [ "$complete" = 1 ] || return 0
+  [ "$complete" = 1 ] || { _LL_MATCH_MILLI=""; return 0; }
   if [ -n "$hi" ]; then
     for ((i=0; i<${#names[@]}; i++)); do
       if [ "${names[$i]}" = "$hi" ] && state_limit_entry_ok "$base" "$root" "${paths[$i]}" "$hi"; then
@@ -1039,8 +1045,11 @@ rl_choose() {  # $1=5|7; this session's valid reading wins; the store fills in o
     # Only for a payload with no window: one that has 7d but no 5h has no 5h
     # window (_CUR5_NONE), and burn makes no 5h projection for it either.
     if [ "$which" = 5 ]; then crst=${own5_rst:-}; cpct=${own5_pct:-}; else crst=${own7_rst:-}; cpct=${own7_pct:-}; fi
-    if [ -n "$cpct" ] && ! { [ "$valid" = 1 ] && [ "$rst" = "$crst" ] && [ "$pct" -gt $(( cpct * 1000 )) ]; }; then
+    # rl_latest matched that reset over the whole store (_LL_MATCH_MILLI), not
+    # only against its latest entry, which may be another account's later window.
+    if [ -n "$cpct" ]; then
       valid=1; rst=$crst; pct=$(( cpct * 1000 ))
+      [ -n "${_LL_MATCH_MILLI:-}" ] && [ "$_LL_MATCH_MILLI" -gt "$pct" ] && pct=$_LL_MATCH_MILLI
     fi
   fi
   if [ "$which" = 5 ]; then _STATE_RL5_VALID=$valid; _STATE_RL5_RST=$rst; _STATE_RL5_PCT=$pct
@@ -2786,8 +2795,8 @@ if [ "$_STATE_BURN_GATE" = 1 ] || [ "$_STATE_RL5_GATE" = 1 ] || [ "$_STATE_RL7_G
     [ "$_STATE_RL7_GATE" != 1 ] || rl_sample "${_SL7_BASE:-}" "$_CUR7_PCT" "$_CUR7_RST"
   fi
   if [ "$VL_LIMIT_SYNC" = 1 ]; then
-    if [ "$_STATE_RL5_GATE" = 1 ]; then rl_latest "${_SL5_BASE:-}" "$RL_MAX_5H" "$_STATE_MUTATE"; rl_choose 5; fi
-    if [ "$_STATE_RL7_GATE" = 1 ]; then rl_latest "${_SL7_BASE:-}" "$RL_MAX_7D" "$_STATE_MUTATE"; rl_choose 7; fi
+    if [ "$_STATE_RL5_GATE" = 1 ]; then rl_latest "${_SL5_BASE:-}" "$RL_MAX_5H" "$_STATE_MUTATE" "${own5_rst:-}"; rl_choose 5; fi
+    if [ "$_STATE_RL7_GATE" = 1 ]; then rl_latest "${_SL7_BASE:-}" "$RL_MAX_7D" "$_STATE_MUTATE" "${own7_rst:-}"; rl_choose 7; fi
   fi
   case "$_SEG_SCAN" in (*" burn "*) burn_estimate ;; esac
 fi

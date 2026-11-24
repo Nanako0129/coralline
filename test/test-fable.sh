@@ -121,6 +121,9 @@ check "sync=1: without a file the store still fills in" "5h 42% 7d 43%" "$(gauge
 # by another session: the file's older value does not replace it.
 rm -rf "$CLAUDE_CONFIG_DIR/coralline"; mkdir -p "$S5/$(printf '%010d' "$R5")_080.000" "$S7/$(printf '%010d' "$R7")_005.000"
 check "sync=1: same window, the store's higher reading is kept" "5h 80% 7d 10%" "$(gauges s1 '')"
+# ...also when a later window (another account's) is the store's latest entry
+rm -rf "$CLAUDE_CONFIG_DIR/coralline"; mkdir -p "$S5/$(printf '%010d' "$R5")_080.000" "$S5/$(printf '%010d' $(( R5 + 1000 )))_001.000"
+check "sync=1: same window kept behind a later stored one" "5h 80% 7d 10%" "$(gauges s1 '')"
 rm -rf "$CLAUDE_CONFIG_DIR/coralline"
 # a 5h line further out than a 5h window can be is not one
 limits s3 "5h\t61\t$(( NOW + 90000 ))\n"
