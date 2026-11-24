@@ -81,6 +81,16 @@ printf 'VL_CLOCK=off\nVL_SEGMENTS="limit5h burn"\nVL_LIMIT_SYNC=1\n' > "$TMP/bur
 agy 'Gemini 4 Neon (High)' "$G" | CORALLINE_NO_SAMPLE=0 CORALLINE_CONFIG="$TMP/burnconf" "$BASH" "$SCRIPT" >/dev/null
 check "agy burn samples land in their own file" "burn-5h-agy-gemini.tsv" "$(cd "$CLAUDE_CONFIG_DIR/coralline" && ls burn-5h*.tsv)"
 
+# With sync off an unopened agy 5h gets no projection from burn history: seed a
+# steep 5h history in agy's burn file, then burn must bind to the weekly window.
+printf 'VL_CLOCK=off\nVL_SEGMENTS="burn"\n' > "$TMP/nosyncconf"
+i=0; while [ "$i" -lt 30 ]; do
+  printf '%s\t%s.000\t%s\n' $(( now - 300 + i * 10 )) $(( 10 + i )) $(( now + 3600 ))
+  i=$((i + 1))
+done > "$CLAUDE_CONFIG_DIR/coralline/burn-5h-agy-gemini.tsv"
+check "sync off: unopened agy 5h gets no burn projection" "7d" \
+  "$(agy 'Gemini 4 Neon (High)' "$W" | CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$TMP/nosyncconf" COLUMNS=200 "$BASH" "$SCRIPT" | sed 's/\x1b\[[0-9;]*m//g' | grep -o '[57][hd] ⇢' | cut -c1-2)"
+
 # toks/ttft never sample agy's transcript nor show a seeded state; cost never pads $0.00.
 # The payloads carry API time and token counts, so without the agy guard the
 # sampler would write and show state.

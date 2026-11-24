@@ -2316,9 +2316,10 @@ function Get-CorallineState([bool]$BurnGate, [bool]$Limit5Gate, [bool]$Limit7Gat
     # (below) both read this one flag. A session idle past its own 5h reset arrives
     # the same way and shows no 5h gauge until its next response, rather than a
     # stored window it cannot attribute to its own account.
-    # agy is the exception (every agy account has a 5h window; an unopened one says
-    # nothing about a live window another session recorded), as in statusline.sh.
-    $noFive = [string]::IsNullOrEmpty([string]$fhPct) -and $current7.Valid -and -not $agy
+    # agy under VL_LIMIT_SYNC=1 is the exception (every agy account has a 5h window;
+    # an unopened one says nothing about a live window another session recorded),
+    # as in statusline.sh. With sync off the unopened window stays hidden, burn included.
+    $noFive = [string]::IsNullOrEmpty([string]$fhPct) -and $current7.Valid -and (-not $agy -or $Cfg.VL_LIMIT_SYNC -ne '1')
     $currentBurn = [pscustomobject]@{ Valid=$false; Reset=0L; Sample=$Now; Pct=0 }
     if ($current5.Valid -and $current5.Reset -ge $Now) { $currentBurn = [pscustomobject]@{ Valid=$true; Reset=[long]$current5.Reset; Sample=$Now; Pct=[int]$current5.Pct } }
 

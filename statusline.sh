@@ -709,10 +709,12 @@ state_gate() {  # canonicalize one render's values and state namespaces
   # A live 7d window with an empty five_hour reading: no 5h window (see rl_choose).
   # Claude Code's builder emits five_hour only for a live window, always numeric. The
   # gauge (rl_choose) and the projection (burn_estimate) both read this one flag.
-  # agy is the exception: every agy account has a 5h window, and an unopened one
-  # (or this session's stale fetch) says nothing about whether another session
-  # has since recorded a live one, so agy borrows like a payload with no reading.
-  [ -z "${fh_pct:-}" ] && [ "$_CUR7_VALID" = 1 ] && [ -z "${agy:-}" ] && _CUR5_NONE=1
+  # agy under VL_LIMIT_SYNC=1 is the exception: every agy account has a 5h window,
+  # and an unopened one (or this session's stale fetch) says nothing about whether
+  # another session has since recorded a live one, so it borrows like a payload
+  # with no reading. With sync off the unopened window stays hidden, burn included.
+  [ -z "${fh_pct:-}" ] && [ "$_CUR7_VALID" = 1 ] \
+    && { [ -z "${agy:-}" ] || [ "$VL_LIMIT_SYNC" != 1 ]; } && _CUR5_NONE=1
   if [ "$_CUR5_VALID" = 1 ] && state_epoch "$NOW" 12; then
     _CUR_BURN_SAMP=$_SE_VALUE; _CUR_BURN_RST=$_CUR5_RST
     _CUR_BURN_PCT=$_CUR5_PCT; _CUR_BURN_TSV=$_CUR5_TSV; _CUR_BURN_VALID=1
