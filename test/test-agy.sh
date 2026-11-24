@@ -118,6 +118,7 @@ check "two running subagents"            "⇉ 2" "$(sub "[$R,$R,$C]")"
 check "finished subagents are not shown" ""    "$(sub "[$C,$C]")"
 check "empty list hidden"                ""    "$(sub '[]')"
 check "malformed list hidden"            ""    "$(sub '{"status":"running"}')"
+check "upper-case key counts nothing"    ""    "$(sub '[{"STATUS":"running"}]')"
 check "bad entries count nothing"         ""    "$(sub '["running",{"status":1},{"status":"Running"},null]')"
 check "Claude Code payload hidden"       ""    "$(printf '{"model":{"display_name":"Opus"}}' | CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$TMP/subconf" "$BASH" "$SCRIPT" | grep -o '⇉')"
 

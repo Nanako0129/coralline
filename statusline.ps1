@@ -2696,11 +2696,18 @@ if ((Get-JsonMember $J 'product') -is [string] -and (Get-JsonMember $J 'product'
 }
 # agy lists the conversation's subagents; finished ones stay listed until the
 # turn ends, so only the running ones are counted (statusline.sh: subrun).
+# Names match case-sensitively, as jq does (Get-JsonMember does not).
+function Get-ExactMember($Object, [string]$Name) {
+    foreach ($p in $Object.PSObject.Properties) { if ($p.Name -ceq $Name) { return ,$p.Value } }
+    return $null
+}
 $subRunning = 0
-$subList = Get-JsonMember $J 'subagents'
+$subList = Get-ExactMember $J 'subagents'
 if ($subList -is [System.Array]) {
     foreach ($s in $subList) {
-        if ($s -is [pscustomobject] -and (Get-JsonMember $s 'status') -is [string] -and (Get-JsonMember $s 'status') -ceq 'running') { $subRunning++ }
+        if ($s -isnot [pscustomobject]) { continue }
+        $st = Get-ExactMember $s 'status'
+        if ($st -is [string] -and $st -ceq 'running') { $subRunning++ }
     }
 }
 $effortNode = Get-JsonPath $J @('effort', 'level')
