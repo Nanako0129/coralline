@@ -2601,6 +2601,9 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
   if type != "object" then error("non-object root") else
   (member(.; "product") == "antigravity") as $agy |
   (if $agy and member(.; "rate_limits") == null then .rate_limits = agy_limits else . end) |
+  # agy reports spend as cost.total_usd (an estimate, absent until a cost is reported).
+  (if $agy and member(member(.; "cost"); "total_cost_usd") == null and member(member(.; "cost"); "total_usd") != null
+   then .cost.total_cost_usd = .cost.total_usd else . end) |
   [
     (member(member(.; "workspace"); "current_dir") // member(.; "cwd") // ""),
     (member(member(.; "model"); "display_name") // ""),
