@@ -2573,13 +2573,17 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
     if (member(member(.; "model"); "display_name") // "" | tostring | test("^(Claude|GPT)"))
     then "3p" else "gemini" end;
   def agy_limits:  # → Claude Code rate_limits; a bucket with no live window (agy
-    # sends fraction 1 with a 1970 reset) maps to null, as Claude Code omits it
+    # sends fraction 1 with a 1970 reset) maps to null, as Claude Code omits it.
+    # reset_time is cut to whole-second UTC, the one shape the stores accept;
+    # any other offset drops the window (statusline.ps1 applies the same rule).
     agy_bucket as $b | member(.; "quota") as $quota |
     def win($k): member($quota; "\($b)-\($k)") as $q |
-      if ($q|type) == "object" and ($q.remaining_fraction|type) == "number"
+      (if ($q|type) == "object" and ($q.reset_time|type) == "string" then
+         ($q.reset_time | capture("^(?<t>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\\.[0-9]+)?(Z|\\+00:00)$") // null)
+       else null end) as $rt |
+      if $rt != null and ($q.remaining_fraction|type) == "number"
          and ($q.reset_in_seconds|type) == "number" and $q.reset_in_seconds > 0
-         and ($q.reset_time|type) == "string"
-      then {used_percentage: ((1 - $q.remaining_fraction) * 100 | round), resets_at: $q.reset_time}
+      then {used_percentage: ((1 - $q.remaining_fraction) * 100 | round), resets_at: ($rt.t + "Z")}
       else null end;
     {five_hour: win("5h"), seven_day: win("weekly")};
   if type != "object" then error("non-object root") else
@@ -2637,9 +2641,10 @@ sid="${sid%$'\r'}"  # native Windows jq writes CRLF; the last field keeps the CR
 # per-bucket namespace beside them (agy sessions still sync with each other),
 # and its transcript is not Claude's format, so toks/ttft stay silent.
 if [ -n "$agy" ]; then
-  BURN_FILE="${BURN_FILE%.tsv}-agy-$agy.tsv"
-  RL5H_FILE="${RL5H_FILE%.tsv}-agy-$agy.tsv"
-  RL7D_FILE="${RL7D_FILE%.tsv}-agy-$agy.tsv"
+  # An empty path keeps its store off; a suffix would make it relative to cwd.
+  [ -z "$BURN_FILE" ] || BURN_FILE="${BURN_FILE%.tsv}-agy-$agy.tsv"
+  [ -z "$RL5H_FILE" ] || RL5H_FILE="${RL5H_FILE%.tsv}-agy-$agy.tsv"
+  [ -z "$RL7D_FILE" ] || RL7D_FILE="${RL7D_FILE%.tsv}-agy-$agy.tsv"
   transcript=""; api_ms=""   # toks_sample returns before touching its state file
 fi
 

@@ -72,5 +72,26 @@ check "agy sessions share their own store"              "5h 33% 7d 25%" "$(agy '
 check "agy's windows never reach Claude's store"        "5h 80% 7d 60%" "$(printf '{"model":{"display_name":"Opus"}}' | render | pills)"
 check "agy wrote only under its own namespace" "limit-5h-agy-gemini.d" "$(cd "$CLAUDE_CONFIG_DIR/coralline" && ls -d limit-5h*agy*)"
 check "agy writes no toks state" "" "$(cd "$CLAUDE_CONFIG_DIR/coralline" && ls -d toks-* 2>/dev/null)"
+agy 'Claude Opus 5.5 (High)' "$P" | render 1 >/dev/null
+check "third-party models get their own namespace" "limit-5h-agy-3p.d" "$(cd "$CLAUDE_CONFIG_DIR/coralline" && ls -d limit-5h*3p*)"
+printf 'VL_CLOCK=off\nVL_SEGMENTS="limit5h burn"\nVL_LIMIT_SYNC=1\n' > "$TMP/burnconf"
+agy 'Gemini 4 Neon (High)' "$G" | CORALLINE_NO_SAMPLE=0 CORALLINE_CONFIG="$TMP/burnconf" "$BASH" "$SCRIPT" >/dev/null
+check "agy burn samples land in their own file" "burn-5h-agy-gemini.tsv" "$(cd "$CLAUDE_CONFIG_DIR/coralline" && ls burn-5h*.tsv)"
+
+# reset_time is cut to whole-second UTC; any other offset drops the window.
+rt() {  # $1=reset_time → the 5h pill's "label pct", rendered with sync on and an empty store
+  agy 'Gemini 4 Neon (High)' "{\"gemini-5h\":{\"remaining_fraction\":0.5,\"reset_time\":\"$1\",\"reset_in_seconds\":7200}}" |
+    CLAUDE_CONFIG_DIR="$TMP/cfg-rt" render | pills
+}
+check "fractional seconds accepted"  "5h 50%" "$(rt "${R5%Z}.123456789Z")"
+check "+00:00 offset accepted"       "5h 50%" "$(rt "${R5%Z}+00:00")"
+check "no offset dropped"            ""       "$(rt "${R5%Z}")"
+check "other offset dropped"         ""       "$(rt "${R5%Z}+05:00")"
+
+# An empty store path keeps that store off instead of landing beside the cwd.
+mkdir -p "$TMP/cwd"
+printf 'VL_CLOCK=off\nVL_SEGMENTS="limit5h burn"\nVL_LIMIT_SYNC=1\nBURN_FILE=""\nRL5H_FILE=""\n' > "$TMP/emptyconf"
+( cd "$TMP/cwd" && agy 'Gemini 4 Neon (High)' "$G" | CORALLINE_NO_SAMPLE=0 CORALLINE_CONFIG="$TMP/emptyconf" "$BASH" "$SCRIPT" >/dev/null )
+check "empty store path writes nothing in cwd" "" "$(ls -A "$TMP/cwd")"
 
 exit "$fail"

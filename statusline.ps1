@@ -2651,12 +2651,19 @@ function Get-AgyWindow($Quota, [string]$Key) {  # → @(used pct, reset epoch) o
         if (-not ($n -is [double] -or $n -is [decimal] -or $n -is [long] -or $n -is [int])) { return $null }
     }
     if ([double]$s -le 0) { return $null }
+    # Same rule as the jq side: whole-second UTC ("Z" or "+00:00", any fraction
+    # dropped); anything else drops the window.
     $dto = [DateTimeOffset]::MinValue
     if ($t -is [datetime]) {
-        $dto = [DateTimeOffset]::new($t.ToUniversalTime())   # PowerShell 7 already parsed the ISO string
+        # PowerShell 7 already parsed the ISO string; no offset at all reads Unspecified.
+        if ($t.Kind -eq [DateTimeKind]::Unspecified) { return $null }
+        $u = $t.ToUniversalTime()
+        $dto = [DateTimeOffset]::new($u.AddTicks(-($u.Ticks % [TimeSpan]::TicksPerSecond)))
     } elseif ($t -is [string]) {
+        $m = [regex]::Match($t, '\A([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\.[0-9]+)?(Z|\+00:00)\z')
+        if (-not $m.Success) { return $null }
         $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
-        if (-not [DateTimeOffset]::TryParse($t, $Invariant, $styles, [ref]$dto)) { return $null }
+        if (-not [DateTimeOffset]::TryParseExact($m.Groups[1].Value + 'Z', "yyyy-MM-dd'T'HH:mm:ss'Z'", $Invariant, $styles, [ref]$dto)) { return $null }
     } else { return $null }
     $pct = [Math]::Round((1 - [double]$f) * 100, [MidpointRounding]::AwayFromZero)   # jq round
     return @((To-InvariantString $pct), (To-InvariantString $dto.ToUnixTimeSeconds()))
@@ -2675,12 +2682,18 @@ if ((Get-JsonMember $J 'product') -is [string] -and (Get-JsonMember $J 'product'
     }
     foreach ($key in @('BURN_FILE', 'RL5H_FILE', 'RL7D_FILE')) {
         $base = [string]$Cfg[$key]
+        if ([string]::IsNullOrEmpty($base)) { continue }   # an empty path keeps its store off
         if ($base.EndsWith('.tsv', [System.StringComparison]::Ordinal)) { $base = $base.Substring(0, $base.Length - 4) }
         $Cfg[$key] = "$base-agy-$agy.tsv"
     }
 }
-if ([string]::IsNullOrEmpty($effort)) {   # agy puts effort on the model
-    $effort = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('model', 'effort')))
+$effortNode = Get-JsonPath $J @('effort', 'level')
+if ($null -eq $effortNode -or ($effortNode -is [bool] -and -not $effortNode)) {   # jq //: agy puts effort on the model
+    $effortNode = Get-JsonPath $J @('model', 'effort')
+    $effort = ''
+    if ($null -ne $effortNode -and -not ($effortNode -is [bool] -and -not $effortNode)) {
+        $effort = Remove-ControlChars (To-InvariantString $effortNode)
+    }
 }
 
 function ConvertTo-ProbePath([string]$Path) {
