@@ -2674,7 +2674,7 @@ function Get-AgyWindow($Quota, [string]$Key) {  # -> @(used pct, reset epoch) or
     return @((To-InvariantString $pct), (To-InvariantString $dto.ToUnixTimeSeconds()))
 }
 $agy = ''
-if ((Get-JsonMember $J 'product') -is [string] -and (Get-JsonMember $J 'product') -ceq 'antigravity') {
+if ((Get-JsonMember $J 'product') -is [string] -and [string]::Equals((Get-JsonMember $J 'product'), 'antigravity', [System.StringComparison]::Ordinal)) {
     $agy = 'gemini'
     if ((To-InvariantString (Get-JsonPath $J @('model', 'display_name'))) -cmatch '^(Claude|GPT)') { $agy = '3p' }
     if ($null -eq (Get-JsonMember $J 'rate_limits')) {
@@ -2696,9 +2696,10 @@ if ((Get-JsonMember $J 'product') -is [string] -and (Get-JsonMember $J 'product'
 }
 # agy lists the conversation's subagents; finished ones stay listed until the
 # turn ends, so only the running ones are counted (statusline.sh: subrun).
-# Names match case-sensitively, as jq does (Get-JsonMember does not).
+# Names match ordinally (exact code units), as jq does; Get-JsonMember ignores case
+# and -ceq compares by culture, which skips characters such as a soft hyphen.
 function Get-ExactMember($Object, [string]$Name) {
-    foreach ($p in $Object.PSObject.Properties) { if ($p.Name -ceq $Name) { return ,$p.Value } }
+    foreach ($p in $Object.PSObject.Properties) { if ([string]::Equals($p.Name, $Name, [System.StringComparison]::Ordinal)) { return ,$p.Value } }
     return $null
 }
 $subRunning = 0
@@ -2707,7 +2708,7 @@ if ($subList -is [System.Array]) {
     foreach ($s in $subList) {
         if ($s -isnot [pscustomobject]) { continue }
         $st = Get-ExactMember $s 'status'
-        if ($st -is [string] -and $st -ceq 'running') { $subRunning++ }
+        if ($st -is [string] -and [string]::Equals($st, 'running', [System.StringComparison]::Ordinal)) { $subRunning++ }
     }
 }
 $effortNode = Get-JsonPath $J @('effort', 'level')

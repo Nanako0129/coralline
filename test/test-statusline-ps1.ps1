@@ -3577,7 +3577,9 @@ fi
         [pscustomobject]@{ Name='none running'; List=('[' + $agySubDone + ']'); Want='' },
         [pscustomobject]@{ Name='malformed'; List='{"status":"running"}'; Want='' },
         [pscustomobject]@{ Name='bad entries'; List='["running",{"status":1},{"status":"Running"},null]'; Want='' },
-        [pscustomobject]@{ Name='upper-case key'; List='[{"STATUS":"running"}]'; Want='' }
+        [pscustomobject]@{ Name='upper-case key'; List='[{"STATUS":"running"}]'; Want='' },
+        [pscustomobject]@{ Name='soft hyphen in key'; List='[{"sta\u00adtus":"running"}]'; Want='' },
+        [pscustomobject]@{ Name='NUL in value'; List='[{"status":"run\u0000ning"}]'; Want='' }
     )) {
         $subJson = '{"product":"antigravity","model":{"display_name":"Gemini 4 Neon (High)"},"subagents":' + $subCase.List + '}'
         $psRun = Invoke-Statusline $subJson $agySubConfig @{} '' 8000
