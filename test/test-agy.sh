@@ -78,6 +78,15 @@ printf 'VL_CLOCK=off\nVL_SEGMENTS="limit5h burn"\nVL_LIMIT_SYNC=1\n' > "$TMP/bur
 agy 'Gemini 4 Neon (High)' "$G" | CORALLINE_NO_SAMPLE=0 CORALLINE_CONFIG="$TMP/burnconf" "$BASH" "$SCRIPT" >/dev/null
 check "agy burn samples land in their own file" "burn-5h-agy-gemini.tsv" "$(cd "$CLAUDE_CONFIG_DIR/coralline" && ls burn-5h*.tsv)"
 
+# toks/ttft never sample agy's transcript nor show a seeded state; cost never pads $0.00.
+printf 'VL_CLOCK=off\nVL_SEGMENTS="model toks ttft cost"\nVL_COST_ALWAYS_SHOW=1\n' > "$TMP/toksconf"
+agyt() { agy 'Gemini 4 Neon (High)' "$G" | CORALLINE_NO_SAMPLE=0 CORALLINE_CONFIG="$TMP/toksconf" COLUMNS=200 "$BASH" "$SCRIPT" | sed 's/\x1b\[[0-9;]*m//g'; }
+out=$(agyt)
+check "agy with toks/ttft enabled writes no toks state" "" "$(cd "$CLAUDE_CONFIG_DIR/coralline" && ls -d toks-* 2>/dev/null)"
+check "agy shows no cost under VL_COST_ALWAYS_SHOW" "" "$(printf '%s' "$out" | grep -o '\$[0-9.]*')"
+printf 'a68a158b-d5c0-444f-9c11-81a0ffb67c68 5000 10:10 4321 10:10 5000 4321 250 0\n' > "$CLAUDE_CONFIG_DIR/coralline/toks-a68a158b-d5c0-444f-9c11-81a0ffb67c68"
+check "agy ignores a seeded toks state" "" "$(agyt | grep -o 'tok/s\|ttft')"
+
 # reset_time is cut to whole-second UTC; any other offset drops the window.
 rt() {  # $1=reset_time → the 5h pill's "label pct", rendered with sync on and an empty store
   agy 'Gemini 4 Neon (High)' "{\"gemini-5h\":{\"remaining_fraction\":0.5,\"reset_time\":\"$1\",\"reset_in_seconds\":7200}}" |

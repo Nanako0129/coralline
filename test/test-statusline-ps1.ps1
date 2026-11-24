@@ -3564,6 +3564,11 @@ fi
         if ($agyCase.Want.Count -eq 0) { Check ('agy ' + $agyCase.Name + ' hides the gauges') (-not ($plain -match '[0-9]%')) }
         Check ('agy ' + $agyCase.Name + ' parity') ((Strip-Countdown $psRun.Stdout) -ceq (Strip-Countdown $bashRun.Stdout))
     }
+    $agyCostConfig = New-Config 'agy-cost' @(('VL_SEGMENTS=' + (Quote-FromConfigure 'model cost')), 'VL_CLOCK=off', 'VL_COST_ALWAYS_SHOW=1')
+    $agyCostPs = Invoke-Statusline (New-AgyPayload 'Gemini 4 Neon (High)' $agyGemini) $agyCostConfig @{} '' 8000
+    $agyCostBash = Invoke-BashStatusline (New-AgyPayload 'Gemini 4 Neon (High)' $agyGemini) $agyCostConfig @{}
+    Check 'agy shows no cost under VL_COST_ALWAYS_SHOW' (-not (Plain $agyCostPs.Stdout).Contains('$'))
+    Check-Exact 'agy cost parity' $agyCostPs $agyCostBash
     # Store isolation: Claude Code's synced windows never show under agy, and agy's
     # land in their own namespace.
     $agyCfgDir = Join-Path $TempRoot 'agy-cfg'

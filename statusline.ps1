@@ -2686,6 +2686,8 @@ if ((Get-JsonMember $J 'product') -is [string] -and (Get-JsonMember $J 'product'
         if ($base.EndsWith('.tsv', [System.StringComparison]::Ordinal)) { $base = $base.Substring(0, $base.Length - 4) }
         $Cfg[$key] = "$base-agy-$agy.tsv"
     }
+    # No cost in an agy payload means unknown, not $0.00: VL_COST_ALWAYS_SHOW stays out.
+    if ($costKind -eq 'missing') { $costKind = 'invalid' }
 }
 $effortNode = Get-JsonPath $J @('effort', 'level')
 if ($null -eq $effortNode -or ($effortNode -is [bool] -and -not $effortNode)) {   # jq //: agy puts effort on the model

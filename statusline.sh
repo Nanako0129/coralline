@@ -2646,6 +2646,8 @@ if [ -n "$agy" ]; then
   [ -z "$RL5H_FILE" ] || RL5H_FILE="${RL5H_FILE%.tsv}-agy-$agy.tsv"
   [ -z "$RL7D_FILE" ] || RL7D_FILE="${RL7D_FILE%.tsv}-agy-$agy.tsv"
   transcript=""; api_ms=""   # toks_sample returns before touching its state file
+  # No cost in an agy payload means unknown, not $0.00: VL_COST_ALWAYS_SHOW stays out.
+  [ "$_COST_KIND" != missing ] || _COST_KIND=invalid
 fi
 
 # Every segment drawn in a row (seg_project reads it too); _SEG_SCAN adds float's.
