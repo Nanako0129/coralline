@@ -158,6 +158,8 @@ VL_FABLE_PREVIEW=""            # internal: percent the wizard preview shows for 
 VL_RELAY_LIMITS=0              # 1 = limit5h/limit7d take this session's own windows
                                # from model-relay's limits file while the payload
                                # has none yet (a session just started or resumed)
+VL_RELAY_MODEL=0               # 1 = model/effort show model-relay's active model and
+                               # effort for non-Claude routes (Bash renderer only)
 VL_BG_GIT_DIRTY=130
 VL_BG_MODEL=173
 VL_BG_CTX=238
@@ -1756,7 +1758,18 @@ seg_git() {  # branch with staged/modified/untracked and ahead/behind counts
   push "$bgc" "${BOLD}${_FG} ⎇ ${_TR}${GIT_MARKS}${GIT_AB} ${NORM}"
 }
 
-seg_model() {  # active Claude model
+seg_model() {  # active Claude model (or model-relay's active non-Claude model when VL_RELAY_MODEL=1)
+  if [ "$VL_RELAY_MODEL" = "1" ] && [ -n "${relay:-}" ]; then
+    case "${relay_kind:-}:$relay" in
+      (pinned:claude|pinned:claude/*|failover:claude|failover:claude/*) ;;
+      (pinned:*|failover:*)
+        trunc "$relay" "$VL_NAME_MAX"
+        fg "$VL_FG_TEXT"
+        push "$VL_BG_MODEL" "${BOLD}${_FG} ◆ ${_TR} ${NORM}"
+        return 0
+        ;;
+    esac
+  fi
   [ -n "$model" ] || return 0
   fg "$VL_FG_TEXT"
   push "$VL_BG_MODEL" "${BOLD}${_FG} ◆ ${model#Claude } ${NORM}"
@@ -2190,36 +2203,75 @@ seg_subagents() {  # number of subagents running right now (agy only; Claude Cod
 }
 
 seg_effort() {  # reasoning effort level (low/medium/high/xhigh/max); glyph ψ is editable
-  [ -n "$effort" ] || return 0
-  local label="$effort"
-  case "$effort" in (medium) label="med" ;; esac
+  local eff="$effort"
+  [ "$VL_RELAY_MODEL" = "1" ] && [ -n "${relay_effort:-}" ] && eff="$relay_effort"
+  [ -n "$eff" ] || return 0
+  local label="$eff"
+  case "$eff" in (medium) label="med" ;; esac
   fg "$VL_FG_TEXT"
   push "$VL_BG_EFFORT" "${_FG} ψ ${label} "
 }
 
 # model-relay's state for this session, from the status file its hook writes on
 # every change: <config dir>/model-relay-status/<session_id>, one line
-# "kind<TAB>label" (kind: claude, pinned, failover, limit, offline, direct). The read
-# builtin takes it, so the segment adds no fork. A missing file (model-relay not
-# installed, or not yet written) or a line without its newline reads as nothing.
-relay_sample() {  # → relay_kind, relay ("" = none)
-  relay_kind="" relay=""
+# "kind<TAB>label[<TAB>effort]" (kind: claude, pinned, failover, limit, offline,
+# direct). The read builtin takes it, so the segment adds no fork. A missing file
+# (model-relay not installed, or not yet written) or a line without its newline
+# reads as nothing.
+relay_sample() {  # → relay_kind, relay, relay_effort ("" = none)
+  local LC_ALL=C
+  relay_kind="" relay="" relay_effort=""
   # a plain file name only: the id comes from the payload and becomes a path
-  case "$sid" in (''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) return 0 ;; esac
-  local f="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/model-relay-status/$sid"
-  [ -f "$f" ] || return 0                   # -f: a FIFO here must not block
-  { IFS=$'\t' read -r relay_kind relay < "$f"; } 2>/dev/null || { relay_kind="" relay=""; }
-  case "$relay_kind" in (claude|pinned|failover|limit|offline|direct) ;; (*) relay_kind="" relay=""; return 0 ;; esac
-  relay="${relay%$'\r'}"
-  relay="${relay%\[*\]}"                   # a [1m]-style context hint is not part of the name
+  case "$sid" in (''|.*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) return 0 ;; esac
+  local f="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/model-relay-status/$sid" _line="" _rest=""
+  [ ! -L "$f" ] && [ -f "$f" ] || return 0   # -f: a FIFO must not block; ! -L: refuse symlinks
+  { IFS= read -r _line < "$f"; } 2>/dev/null || return 0
+  _line="${_line%$'\r'}"
+  case "$_line" in (*$'\t'*) ;; (*) return 0 ;; esac
+  relay_kind="${_line%%$'\t'*}"
+  _rest="${_line#*$'\t'}"
+  case "$_rest" in
+    (*$'\t'*)
+      relay="${_rest%%$'\t'*}"
+      _rest="${_rest#*$'\t'}"
+      relay_effort="${_rest%%$'\t'*}"
+      ;;
+    (*)
+      relay="$_rest"
+      relay_effort=""
+      ;;
+  esac
+  case "$relay_kind" in
+    (claude|pinned|failover|limit|offline|direct) ;;
+    (*) relay_kind="" relay="" relay_effort=""; return 0 ;;
+  esac
+  relay="${relay%\[*\]}"                     # a [1m]-style context hint is not part of the name
+  [ "${#relay}" -le 128 ] || relay="${relay:0:128}"
   # A model id is plain ASCII; anything else (an escape sequence planted in the
   # provider config) is dropped. The class is spelled out: bash 3.2 ranges follow
   # the locale's collation.
   relay="${relay//[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:\/@+ -]/}"
-  [ -n "$relay" ] || relay=provider        # a name with nothing left still shows its kind
+  [ -n "$relay" ] || relay=provider          # a name with nothing left still shows its kind
+  case "$relay_effort" in
+    (none|minimal|low|medium|med|high|xhigh|max|ultra) ;;
+    (*) relay_effort="" ;;
+  esac
+  case "$relay_kind:$relay" in
+    (pinned:claude|pinned:claude/*|failover:claude|failover:claude/*) relay_effort="" ;;
+    (pinned:*|failover:*) ;;
+    (*) relay_effort="" ;;
+  esac
 }
 
 seg_relay() {  # model-relay: which model this session talks to (claude, a pinned provider, offline)
+  if [ "$VL_RELAY_MODEL" = "1" ] && [ "${relay_kind:-}" = "pinned" ] && [ -n "${relay:-}" ]; then
+    case "$relay" in
+      (claude|claude/*) ;;
+      (*)
+        case "${_SEG_ROWS:-}" in (*" model "*) return 0 ;; esac
+        ;;
+    esac
+  fi
   local p="${relay:-$VL_RELAY_PREVIEW}" note=""
   [ -n "$p" ] || return 0
   case "$relay_kind" in
@@ -2761,7 +2813,15 @@ words_of "$VL_HEAD_SEGMENTS $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3"; _SEG_ROWS
 _SEG_SCAN="$_SEG_ROWS"
 if [ "$VL_FLOAT" = "1" ]; then words_of "$VL_FLOAT_SEGMENTS"; _SEG_SCAN="$_SEG_ROWS${_SW# }"; fi
 case "$_SEG_SCAN" in *" git "*|*" stash "*|*" project "*) read_git ;; esac
-case "$_SEG_SCAN" in (*" relay "*) relay_sample ;; esac
+relay_kind="" relay="" relay_effort=""
+case "$_SEG_SCAN" in
+  (*" relay "*) relay_sample ;;
+  (*)
+    if [ "$VL_RELAY_MODEL" = "1" ]; then
+      case "$_SEG_SCAN" in (*" model "*|*" effort "*) relay_sample ;; esac
+    fi
+    ;;
+esac
 # The session's own windows from model-relay. fable always reads the file. With
 # VL_RELAY_LIMITS=1 the limit gauges (and, under the sync, burn, which binds to
 # what they show) read it too, but only for a payload that carries no window at

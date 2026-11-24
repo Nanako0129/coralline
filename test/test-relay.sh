@@ -83,4 +83,110 @@ fi
 printf 'VL_CLOCK=off\nVL_SEGMENTS="model relay"\nVL_RELAY_PREVIEW=glm\n' > "$TMP/conf"
 check "preview stand-in shown" "↪ glm" "$(render s2)"
 
+# ── VL_RELAY_MODEL + SEC-04 hardening ────────────────────────────────────────
+render_plain() {  # $1=session_id $2=conf $3=effort(optional) → ANSI-stripped rows joined by " | "
+  local rsid="$1" rconf="$2" reff="${3:-}" payload
+  if [ -n "$reff" ]; then
+    payload="{\"session_id\":\"$rsid\",\"model\":{\"display_name\":\"Opus\"},\"effort\":{\"level\":\"$reff\"}}"
+  else
+    payload="{\"session_id\":\"$rsid\",\"model\":{\"display_name\":\"Opus\"}}"
+  fi
+  printf '%s' "$payload" |
+    CORALLINE_CONFIG="$rconf" COLUMNS=200 "$BASH" "$SCRIPT" |
+    perl -0777 -ne '
+      s/\e\[[0-9;]*m//g;
+      s/\xee\x82[\xb0\xb4\xb6]/ /g;
+      my @rows = map { s/^\s+|\s+$//g; s/\s+/ /g; $_ } grep { /\S/ } split /\n/;
+      print join(" | ", @rows);
+    '
+}
+
+# 1. Inherited relay/relay_kind/relay_effort env vars must never leak into output
+printf 'VL_CLOCK=off\nVL_RELAY_MODEL=1\nVL_SEGMENTS="model effort"\n' > "$TMP/conf_me"
+raw_clean=$(
+  printf '{"session_id":"s_none","model":{"display_name":"Opus"},"effort":{"level":"high"}}' |
+    CORALLINE_CONFIG="$TMP/conf_me" COLUMNS=200 "$BASH" "$SCRIPT"
+)
+raw_env=$(
+  printf '{"session_id":"s_none","model":{"display_name":"Opus"},"effort":{"level":"high"}}' |
+    relay=$'\033[31mINJ' relay_kind=pinned relay_effort=$'\033]0;X\007' \
+    CORALLINE_CONFIG="$TMP/conf_me" COLUMNS=200 "$BASH" "$SCRIPT"
+)
+env_ok="MATCH"
+[ "$raw_env" = "$raw_clean" ] || env_ok="DIFF"
+case "$raw_env" in (*INJ*|*$'\033]'*|*$'\007'*) env_ok="LEAK" ;; esac
+check "inherited relay env vars cleared (byte-identical, no escape leak)" "MATCH" "$env_ok"
+check "inherited relay env vars render Claude model/effort" "◆ Opus ψ high" \
+  "$(printf '%s' "$raw_env" | perl -0777 -ne '
+      s/\e\[[0-9;]*m//g; s/\xee\x82[\xb0\xb4\xb6]/ /g;
+      s/^\s+|\s+$//g; s/\s+/ /g; print;
+    ')"
+
+# 2. Empty 2nd field must not shift 3rd field into relay (no IFS whitespace collapsing)
+status s_empty2 'pinned\t\txhigh\n'
+check "empty 2nd field -> provider + xhigh (no shift)" "◆ provider ψ xhigh" \
+  "$(render_plain s_empty2 "$TMP/conf_me" low)"
+
+# 3. CRLF 3-field: VL_RELAY_MODEL=1 shows relay model/effort & hides duplicate pinned relay;
+#    VL_RELAY_MODEL=0 preserves Claude model/effort & shows head relay
+printf 'VL_CLOCK=off\nVL_RELAY_MODEL=1\nVL_HEAD_SEGMENTS="relay"\nVL_SEGMENTS="model effort"\n' > "$TMP/conf_head1"
+printf 'VL_CLOCK=off\nVL_RELAY_MODEL=0\nVL_HEAD_SEGMENTS="relay"\nVL_SEGMENTS="model effort"\n' > "$TMP/conf_head0"
+status s_crlf 'pinned\tacp-gemini-4-neon[1m]\txhigh\r\n'
+check "CRLF 3-field under VL_RELAY_MODEL=1 (no duplicate head relay)" \
+  "◆ acp-gemini-4-neon ψ xhigh" "$(render_plain s_crlf "$TMP/conf_head1" high)"
+check "CRLF 3-field under VL_RELAY_MODEL=0 (unchanged Claude + head relay)" \
+  "↪ acp-gemini-4-neon | ◆ Opus ψ high" "$(render_plain s_crlf "$TMP/conf_head0" high)"
+
+# 4. Crafted ANSI/OSC/bidi/unknown 3rd field dropped cleanly (falls back to payload effort)
+status s_bad1 'pinned\tgemini-4\t\033[31mhigh\n'
+check "ANSI in 3rd field rejected (falls back to payload effort)" \
+  "◆ gemini-4 ψ low" "$(render_plain s_bad1 "$TMP/conf_me" low)"
+status s_bad2 'pinned\tgemini-4\tgarbage\n'
+check "unknown 3rd field rejected (falls back to payload effort)" \
+  "◆ gemini-4 ψ low" "$(render_plain s_bad2 "$TMP/conf_me" low)"
+status s_bad3 'pinned\tgemini-4\t\033]0;X\007\n'
+check "OSC in 3rd field rejected (hidden when payload effort absent)" \
+  "◆ gemini-4" "$(render_plain s_bad3 "$TMP/conf_me")"
+status s_bad4 'pinned\tgemini-4\t\342\200\256high\n'
+check "bidi in 3rd field rejected (falls back to payload effort)" \
+  "◆ gemini-4 ψ low" "$(render_plain s_bad4 "$TMP/conf_me" low)"
+status s_med 'pinned\tgemini-4\tmedium\n'
+check "medium in 3rd field normalized to med" \
+  "◆ gemini-4 ψ med" "$(render_plain s_med "$TMP/conf_me" low)"
+
+# 5. Symlinked status file and leading-dot session_id refused
+status s_target 'pinned\tacp-gemini-4-neon\txhigh\n'
+ln -s "$SDIR/s_target" "$SDIR/s_link"
+check "symlinked status file skipped" \
+  "◆ Opus ψ low" "$(render_plain s_link "$TMP/conf_head1" low)"
+status .dot_sid 'pinned\tacp-gemini-4-neon\txhigh\n'
+check "leading-dot session_id refused" \
+  "◆ Opus ψ low" "$(render_plain .dot_sid "$TMP/conf_head1" low)"
+
+# 6. pinned claude/acct2 stays Claude in model/effort and still shows relay
+status s_acct2 'pinned\tclaude/acct2\txhigh\n'
+check "pinned claude/acct2 keeps Claude model/effort and relay" \
+  "↪ claude/acct2 | ◆ Opus ψ high" "$(render_plain s_acct2 "$TMP/conf_head1" high)"
+
+# 7. failover updates model/effort AND still shows relay with failover note
+status s_fo 'failover\tglm-5.3[1m]\thigh\n'
+check "failover updates model/effort and keeps relay note" \
+  "↪ glm-5.3 · failover | ◆ glm-5.3 ψ high" "$(render_plain s_fo "$TMP/conf_head1" low)"
+
+# 8. offline keeps Claude model and still shows offline relay
+status s_off 'offline\toffline\n'
+check "offline keeps Claude model and shows relay" \
+  "↪ offline | ◆ Opus ψ high" "$(render_plain s_off "$TMP/conf_head1" high)"
+
+# 9. Layout without model segment in _SEG_ROWS still shows pinned relay
+printf 'VL_CLOCK=off\nVL_RELAY_MODEL=1\nVL_SEGMENTS="relay"\n' > "$TMP/conf_relay_only"
+status s_ro 'pinned\tacp-gemini-4-neon\n'
+check "VL_RELAY_MODEL=1 without model segment still shows pinned relay" \
+  "↪ acp-gemini-4-neon" "$(render_plain s_ro "$TMP/conf_relay_only")"
+
+# 10. Wizard preview stand-in still shown under VL_RELAY_MODEL=1
+printf 'VL_CLOCK=off\nVL_RELAY_MODEL=1\nVL_SEGMENTS="model relay"\nVL_RELAY_PREVIEW=glm\n' > "$TMP/conf_prev1"
+check "preview stand-in shown under VL_RELAY_MODEL=1" \
+  "◆ Opus ↪ glm" "$(render_plain s_none "$TMP/conf_prev1")"
+
 exit "$fail"

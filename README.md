@@ -241,6 +241,7 @@ Bash reads `~/.claude/coralline.conf`; the native renderer can read the same fil
 | `VL_SEGMENTS2` / `VL_SEGMENTS3` | empty | optional fixed second and third rows |
 | `VL_HEAD_SEGMENTS` | empty | segments drawn on a line of their own above the rest, in either layout (for example `"relay"`); not counted in `VL_MAX_LINES`, skipped when they all hide. Bash renderer only; set it in `coralline.conf` (the wizard does not keep it) |
 | `VL_RELAY_LIMITS` | `0` | `1` lets `limit5h` and `limit7d` show this session's own 5h and 7d windows from model-relay's limits file (see `fable`) while the payload carries no window yet: a session just started or resumed. They come before the shared store of `VL_LIMIT_SYNC`, which cannot tell accounts apart; a stored reading for the same window with a higher percent is kept. No effect once the payload has a reading, or without the file. Bash renderer only |
+| `VL_RELAY_MODEL` | `0` | `1` lets `model` show model-relay's active non-Claude model (hiding the duplicate `pinned` entry in `relay` when `model` is shown while keeping `failover`, `limit`, `offline`, `direct`, and second-account labels) and lets `effort` show the optional third TAB field from `model-relay-status/<session_id>` (needs a model-relay build that writes the 3rd field, not yet released upstream). Bash renderer only |
 | `VL_CLOCK` / `VL_CLOCK_SECONDS` | `12h` / `1` | `12h`, `24h`, or `off`; seconds toggle |
 | `VL_BAR_WIDTH` | `5` | gauge width |
 | `VL_BAR_FILL` / `VL_BAR_EMPTY` | `▰` / `▱` | gauge glyphs |
@@ -260,7 +261,7 @@ The [quick start](#quick-start) covers Bash installs. This section covers PowerS
 
 ### Windows without Git Bash
 
-`statusline.ps1` is the native Windows PowerShell 5.1 renderer. It needs no Bash, `jq`, WSL, archive extractor, or Git; `git.exe` is optional and only enables `git`, `stash`, and `project`. It supports the same styles, layouts, state-backed features, float output, and themed subagent rows as Bash, and the same main segments except `relay` and `fable`. `VL_HEAD_SEGMENTS`, `VL_GIT_CACHE_TTL` and `VL_RELAY_LIMITS` are Bash only too; the native renderer ignores them.
+`statusline.ps1` is the native Windows PowerShell 5.1 renderer. It needs no Bash, `jq`, WSL, archive extractor, or Git; `git.exe` is optional and only enables `git`, `stash`, and `project`. It supports the same styles, layouts, state-backed features, float output, and themed subagent rows as Bash, and the same main segments except `relay` and `fable`. `VL_HEAD_SEGMENTS`, `VL_GIT_CACHE_TTL`, `VL_RELAY_LIMITS` and `VL_RELAY_MODEL` are Bash only too; the native renderer ignores them.
 
 The following bootstrap follows mutable `main`, resolves it to a commit before downloading executable installer code, then passes the same commit to `install.ps1`:
 
