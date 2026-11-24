@@ -2703,10 +2703,9 @@ if ((Get-JsonMember $J 'product') -is [string] -and [string]::Equals((Get-JsonMe
     # cost.total_cost_usd the case-insensitive reading above is dropped, and
     # total_usd (exact) stands in for it.
     $agyCost = Get-ExactMember $J 'cost'
-    if (-not ($agyCost -is [pscustomobject]) -or $null -eq (Get-ExactMember $agyCost 'total_cost_usd')) {
-        $costKind = 'missing'; $costRaw = ''; $cost = ''
-    }
-    if ($costKind -eq 'missing' -and $agyCost -is [pscustomobject]) {
+    $agyNoPrimary = -not ($agyCost -is [pscustomobject]) -or $null -eq (Get-ExactMember $agyCost 'total_cost_usd')
+    if ($agyNoPrimary) { $costKind = 'missing'; $costRaw = ''; $cost = '' }
+    if ($agyNoPrimary -and $agyCost -is [pscustomobject]) {
         $usd = Get-ExactMember $agyCost 'total_usd'
         if ($usd -is [string]) {
             $costRaw = $usd; $cost = Remove-ControlChars $usd
