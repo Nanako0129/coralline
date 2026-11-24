@@ -2699,8 +2699,10 @@ if ((Get-JsonMember $J 'product') -is [string] -and [string]::Equals((Get-JsonMe
     }
     # agy reports spend as cost.total_usd (an estimate, absent until a cost is
     # reported); classified like total_cost_usd above, as the jq side copies it over.
-    if ($costKind -eq 'missing' -and $costParent -is [pscustomobject]) {
-        $usd = Get-ExactMember $costParent 'total_usd'
+    # Exact names and only when total_cost_usd is absent or null, the jq condition.
+    $agyCost = Get-ExactMember $J 'cost'
+    if ($costKind -eq 'missing' -and $agyCost -is [pscustomobject] -and $null -eq (Get-ExactMember $agyCost 'total_cost_usd')) {
+        $usd = Get-ExactMember $agyCost 'total_usd'
         if ($usd -is [string]) {
             $costRaw = $usd; $cost = Remove-ControlChars $usd
             if ($usd.Length -gt 0) { $costKind = 'scalar' }
