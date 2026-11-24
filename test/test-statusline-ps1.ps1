@@ -3599,7 +3599,8 @@ fi
         [pscustomobject]@{ Name='total_usd string'; Cost='{"total_usd":"0.5"}'; Want='$0.50' },
         [pscustomobject]@{ Name='no total_usd'; Cost='{"estimated":true}'; Want='' },
         [pscustomobject]@{ Name='empty total_cost_usd'; Cost='{"total_cost_usd":"","total_usd":0.42}'; Want='' },
-        [pscustomobject]@{ Name='Cost key in another case'; Key='Cost'; Cost='{"total_usd":0.42}'; Want='' }
+        [pscustomobject]@{ Name='Cost key in another case'; Key='Cost'; Cost='{"total_usd":0.42}'; Want='' },
+        [pscustomobject]@{ Name='total_cost_usd in another case'; Cost='{"Total_Cost_USD":5,"total_usd":0.42}'; Want='$0.42' }
     )) {
         $costKey = 'cost'; if ($null -ne $costCase.PSObject.Properties['Key']) { $costKey = $costCase.Key }
         $costJson = '{"product":"antigravity","model":{"display_name":"Gemini 4 Neon (High)"},"' + $costKey + '":' + $costCase.Cost + '}'

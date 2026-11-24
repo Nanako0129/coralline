@@ -133,6 +133,7 @@ check "agy cost.total_usd as a string"    '$0.50' "$(cst '{"product":"antigravit
 check "agy cost object without total_usd" ''      "$(cst '{"product":"antigravity","model":{"display_name":"G"},"cost":{"estimated":true}}')"
 check "empty total_cost_usd blocks total_usd" '' "$(cst '{"product":"antigravity","model":{"display_name":"G"},"cost":{"total_cost_usd":"","total_usd":0.42}}')"
 check "a Cost key with another case is not cost" '' "$(cst '{"product":"antigravity","model":{"display_name":"G"},"Cost":{"total_usd":0.42}}')"
+check "differently cased total_cost_usd is not cost" '$0.42' "$(cst '{"product":"antigravity","model":{"display_name":"G"},"cost":{"Total_Cost_USD":5,"total_usd":0.42}}')"
 check "Claude payload ignores total_usd"  '$0.00' "$(cst '{"model":{"display_name":"Opus"},"cost":{"total_usd":0.42}}')"
 
 # reset_time is cut to whole-second UTC; any other offset drops the window.
