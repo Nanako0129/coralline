@@ -3594,6 +3594,23 @@ fi
     $agyCostBash = Invoke-BashStatusline (New-AgyPayload 'Gemini 4 Neon (High)' $agyGemini) $agyCostConfig @{}
     Check 'agy shows no cost under VL_COST_ALWAYS_SHOW' (-not (Plain $agyCostPs.Stdout).Contains('$'))
     Check-Exact 'agy cost parity' $agyCostPs $agyCostBash
+    foreach ($costCase in @(
+        [pscustomobject]@{ Name='total_usd number'; Cost='{"total_usd":0.4217,"subagent_usd":0.1,"estimated":true}'; Want='$0.42' },
+        [pscustomobject]@{ Name='total_usd string'; Cost='{"total_usd":"0.5"}'; Want='$0.50' },
+        [pscustomobject]@{ Name='no total_usd'; Cost='{"estimated":true}'; Want='' },
+        [pscustomobject]@{ Name='empty total_cost_usd'; Cost='{"total_cost_usd":"","total_usd":0.42}'; Want='' },
+        [pscustomobject]@{ Name='Cost key in another case'; Key='Cost'; Cost='{"total_usd":0.42}'; Want='' },
+        [pscustomobject]@{ Name='total_cost_usd in another case'; Cost='{"Total_Cost_USD":5,"total_usd":0.42}'; Want='$0.42' }
+    )) {
+        $costKey = 'cost'; if ($null -ne $costCase.PSObject.Properties['Key']) { $costKey = $costCase.Key }
+        $costJson = '{"product":"antigravity","model":{"display_name":"Gemini 4 Neon (High)"},"' + $costKey + '":' + $costCase.Cost + '}'
+        $psRun = Invoke-Statusline $costJson $agyCostConfig @{} '' 8000
+        $bashRun = Invoke-BashStatusline $costJson $agyCostConfig @{}
+        $plain = Plain $psRun.Stdout
+        if ($costCase.Want) { Check ('agy cost ' + $costCase.Name + ' shows ' + $costCase.Want) ($plain.Contains($costCase.Want)) }
+        else { Check ('agy cost ' + $costCase.Name + ' hidden') (-not $plain.Contains('$')) }
+        Check-Exact ('agy cost ' + $costCase.Name + ' parity') $psRun $bashRun
+    }
     # Store isolation: Claude Code's synced windows never show under agy, and agy's
     # land in their own namespace.
     $agyCfgDir = Join-Path $TempRoot 'agy-cfg'

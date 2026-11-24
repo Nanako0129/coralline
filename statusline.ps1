@@ -2640,6 +2640,12 @@ $apiMs = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('cost', 'tot
 $sid = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('session_id')))
 $toksTranscript = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('transcript_path')))
 
+# Names match ordinally (exact code units), as jq does; Get-JsonMember ignores case
+# and -ceq compares by culture, which skips characters such as a soft hyphen.
+function Get-ExactMember($Object, [string]$Name) {
+    foreach ($p in $Object.PSObject.Properties) { if ([string]::Equals($p.Name, $Name, [System.StringComparison]::Ordinal)) { return ,$p.Value } }
+    return $null
+}
 # agy (Antigravity CLI), mirroring agy_bucket/agy_limits in statusline.sh: its
 # Claude-Code-shaped payload carries "product":"antigravity" and a quota map in
 # place of rate_limits, one 5h/weekly pair for Gemini models and one ("3p") for
@@ -2691,17 +2697,30 @@ if ((Get-JsonMember $J 'product') -is [string] -and [string]::Equals((Get-JsonMe
         if ($base.EndsWith('.tsv', [System.StringComparison]::Ordinal)) { $base = $base.Substring(0, $base.Length - 4) }
         $Cfg[$key] = "$base-agy-$agy.tsv"
     }
+    # agy reports spend as cost.total_usd (an estimate, absent until a cost is
+    # reported); classified like total_cost_usd above, as the jq side copies it over.
+    # Decided from exact names only, the jq condition: without an exact
+    # cost.total_cost_usd the case-insensitive reading above is dropped, and
+    # total_usd (exact) stands in for it.
+    $agyCost = Get-ExactMember $J 'cost'
+    $agyNoPrimary = -not ($agyCost -is [pscustomobject]) -or $null -eq (Get-ExactMember $agyCost 'total_cost_usd')
+    if ($agyNoPrimary) { $costKind = 'missing'; $costRaw = ''; $cost = '' }
+    if ($agyNoPrimary -and $agyCost -is [pscustomobject]) {
+        $usd = Get-ExactMember $agyCost 'total_usd'
+        if ($usd -is [string]) {
+            $costRaw = $usd; $cost = Remove-ControlChars $usd
+            if ($usd.Length -gt 0) { $costKind = 'scalar' }
+        } elseif ($usd -is [bool] -or $usd -is [System.Array] -or $usd -is [System.Collections.IDictionary] -or $usd -is [pscustomobject]) {
+            $costKind = 'invalid'
+        } elseif ($usd -is [System.IFormattable]) {
+            $costKind = 'scalar'; $costRaw = To-InvariantString $usd; $cost = $costRaw
+        }
+    }
     # No cost in an agy payload means unknown, not $0.00: VL_COST_ALWAYS_SHOW stays out.
     if ($costKind -eq 'missing') { $costKind = 'invalid' }
 }
-# agy lists the conversation's subagents; finished ones stay listed until the
+# agy lists the subagents of the conversation; finished ones stay listed until the
 # turn ends, so only the running ones are counted (statusline.sh: subrun).
-# Names match ordinally (exact code units), as jq does; Get-JsonMember ignores case
-# and -ceq compares by culture, which skips characters such as a soft hyphen.
-function Get-ExactMember($Object, [string]$Name) {
-    foreach ($p in $Object.PSObject.Properties) { if ([string]::Equals($p.Name, $Name, [System.StringComparison]::Ordinal)) { return ,$p.Value } }
-    return $null
-}
 $subRunning = 0
 $subList = Get-ExactMember $J 'subagents'
 if ($subList -is [System.Array]) {
