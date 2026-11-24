@@ -241,7 +241,7 @@ Bash 讀取 `~/.claude/coralline.conf`，原生 renderer 也能讀同一個檔�
 | `VL_SEGMENTS2` / `VL_SEGMENTS3` | 空 | 選用的固定第二、三列 |
 | `VL_HEAD_SEGMENTS` | 空 | 在其他 segment 上方獨立成一行顯示的 segment，兩種 layout 都適用（例如 `"relay"`）；不計入 `VL_MAX_LINES`，全部隱藏時整行不印。僅 Bash renderer；請直接寫在 `coralline.conf`（wizard 不會保留） |
 | `VL_RELAY_LIMITS` | `0` | 設成 `1` 時，在 payload 還沒有任何視窗（session 剛啟動或剛 resume）的期間，`limit5h` 與 `limit7d` 會顯示 model-relay 用量檔（見 `fable`）裡這個 session 自己的 5h 與 7d 視窗。順序在 `VL_LIMIT_SYNC` 的共用 store 之前，因為 store 分不出帳號；同一個視窗在 store 裡有較高的百分比時保留 store 的。payload 有讀數後，或沒有那個檔案時，沒有作用。僅 Bash renderer |
-| `VL_RELAY_MODEL` | `0` | 設成 `1` 時，非 Claude 路由下 `model` 會顯示 model-relay 目前啟用的模型（同時在有顯示 `model` 的版面隱藏 `relay` 裡重複的 `pinned` 項目，仍保留 `failover`、`limit`、`offline`、`direct` 與第二帳號標記），`effort` 也會改顯示 `model-relay-status/<session_id>` 的選用第三個 TAB 欄位（需要會寫入第三欄位的 model-relay 版本，上游尚未釋出）。僅 Bash renderer |
+| `VL_RELAY_MODEL` | `0` | 設成 `1` 時，非 Claude 路由下 `model` 會顯示 model-relay 目前啟用的模型（同時在有顯示 `model` 的版面隱藏 `relay` 裡重複的 `pinned` 項目，仍保留 `failover`、`limit`、`offline`、`direct` 與第二帳號標記），`effort` 也會改顯示 `model-relay-status/<session_id>` 的選用第三個 TAB 欄位（需要會寫入第三欄位的 model-relay，cablate/model-relay#13，尚未釋出）。僅 Bash renderer |
 | `VL_CLOCK` / `VL_CLOCK_SECONDS` | `12h` / `1` | `12h`、`24h` 或 `off`；秒數開關 |
 | `VL_BAR_WIDTH` | `5` | 量表寬度 |
 | `VL_BAR_FILL` / `VL_BAR_EMPTY` | `▰` / `▱` | 量表字符 |
