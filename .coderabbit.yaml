@@ -48,7 +48,8 @@ reviews:
         It is expected to support the same segments, styles, layouts,
         state-backed features, float output and themed subagent rows as the Bash
         renderer, except what the READMEs name as Bash only (the `relay`
-        segment, VL_HEAD_SEGMENTS, VL_GIT_CACHE_TTL). Flag a feature added to
+        and `fable` segments, VL_HEAD_SEGMENTS, VL_GIT_CACHE_TTL,
+        VL_RELAY_LIMITS, VL_RELAY_MODEL). Flag a feature added to
         one renderer without the other, or an asymmetry the READMEs do not state.
 
         Target is Windows PowerShell 5.1, not PowerShell 7+. Flag constructs

@@ -580,7 +580,7 @@ esac
     $bashSegments = @([regex]::Matches($bashSource, '(?m)^seg_([A-Za-z0-9_]+)\(\)') | ForEach-Object { $_.Groups[1].Value } | Where-Object { $_ -notmatch '_' -and $_ -ne 'len' -and $_ -ne 'limit' } | Sort-Object -Unique)
     # Bash-only segments, listed so the two registries cannot drift silently: relay
     # (model-relay routing) has no statusline.ps1 builder yet.
-    $bashOnlySegments = @('relay')
+    $bashOnlySegments = @('fable', 'relay')
     Check 'Bash public registry equals WIN-02 inventory plus Bash-only segments' (($bashSegments -join ' ') -eq ((@($expectedRegistry) + $bashOnlySegments | Sort-Object) -join ' '))
 
     $script:BashExe = $env:CORALLINE_TEST_BASH
