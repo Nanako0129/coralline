@@ -169,6 +169,7 @@ VL_BG_PYTHON=""                 # optional; falls back to VL_BG_MODEL when empty
 VL_BG_CACHE=""                  # optional; falls back to VL_BG_CTX when empty
 VL_BG_TOKS=""                   # optional; falls back to VL_BG_CTX when empty
 VL_BG_TTFT=""                   # optional; falls back to VL_BG_CTX when empty
+VL_BG_SUBAGENTS=""              # optional; falls back to VL_BG_DURATION when empty
 VL_BG_BAR=""                   # classic style only — the uniform bar behind the whole
                                # row ("R,G,B" or a 256 index); empty → p10k's 238.
                                # An explicit VL_LEAN_BG overrides it.
@@ -2154,6 +2155,12 @@ seg_duration() {  # session wall-clock duration
   push "$VL_BG_DURATION" "${_FG} ⧖ ${_DUR} "
 }
 
+seg_subagents() {  # number of subagents running right now (agy only; Claude Code sends no list)
+  case "$subrun" in (''|0|*[!0-9]*) return 0 ;; esac
+  fg "$VL_FG_TEXT"
+  push "${VL_BG_SUBAGENTS:-$VL_BG_DURATION}" "${_FG} ⇉ ${subrun} "
+}
+
 seg_effort() {  # reasoning effort level (low/medium/high/xhigh/max); glyph ψ is editable
   [ -n "$effort" ] || return 0
   local label="$effort"
@@ -2629,6 +2636,9 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
       if ($x|type) == "number" then ($x | tostring) else "" end),
     (member(member(.; "cost"); "total_api_duration_ms") // 0),
     (if $agy then agy_bucket else "" end),
+    # agy lists the subagents of the conversation in the payload; finished ones stay
+    # listed until the turn ends, so only the running ones are counted.
+    ([member(.; "subagents") | arrays | .[] | objects | select(.status == "running")] | length),
     (member(.; "transcript_path") // ""),
     (member(.; "session_id") // "")
   ] | map(scrub) | join("\u001f")
@@ -2638,7 +2648,7 @@ fi
 IFS=$'\037' read -r cwd model ctx_pct _CTX_EMPTY tok_in tok_out tok_cr tok_cw \
                  fh_pct fh_rst wd_pct wd_rst cost _COST_KIND \
                  lines_add lines_del out_style dur_ms effort \
-                 cache_pct cache_exp api_ms agy transcript sid <<JSON
+                 cache_pct cache_exp api_ms agy subrun transcript sid <<JSON
 $_JSON_FIELDS
 JSON
 sid="${sid%$'\r'}"  # native Windows jq writes CRLF; the last field keeps the CR

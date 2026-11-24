@@ -573,7 +573,7 @@ esac
     Check 'reparse validation precedes config read' ($source.IndexOf('Test-SafeRegularFile $Path') -lt $source.IndexOf('Read-StrictUtf8File $Path'))
     Check 'Bash oracle main extraction contains central scrub' ($bashSource.Contains('] | map(scrub) | join('))
 
-    $expectedRegistry = @('burn','cache','clock','cost','ctx','dir','duration','effort','git','limit5h','limit7d','lines','model','node','project','python','stash','style','toks','ttft')
+    $expectedRegistry = @('burn','cache','clock','cost','ctx','dir','duration','effort','git','limit5h','limit7d','lines','model','node','project','python','stash','style','subagents','toks','ttft')
     $builderBlock = [regex]::Match($source, '(?s)\$SegmentBuilders = \[ordered\]@\{(.*?)\n\}').Groups[1].Value
     $actualRegistry = @([regex]::Matches($builderBlock, '(?m)^    ([A-Za-z0-9]+) =') | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
     Check 'closed PowerShell registry equals WIN-02 inventory' (($actualRegistry -join ' ') -eq (($expectedRegistry | Sort-Object) -join ' '))
@@ -1432,6 +1432,9 @@ fi
     $ttftTableState = Join-Path $ttftTableDir ('coralline\toks-' + $toksSid)
     [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($ttftTableState))
     [IO.File]::WriteAllText($ttftTableState, "$toksSid 5000 1234567:45678 - 1234567:45678 5000 80 2400 0`n", [Text.UTF8Encoding]::new($false))
+    # subagents: agy lists the subagents of the conversation; one running entry shows the pill.
+    $subagentsPayload = Clone-Object $basePayload
+    Add-Member -InputObject $subagentsPayload -NotePropertyName subagents -NotePropertyValue @([pscustomobject]@{ name='scout'; model='Gemini 4 Hydrogen (High)'; status='running' }) -Force
     $segmentCases = [ordered]@{
         burn = [pscustomobject]@{ Show=@('VL_SEGMENTS=burn','VL_CLOCK=off'); Needle=((Glyph 0x2197) + ' 7d ' + (Glyph 0x21E2)); Payload=$burnPayload; Environment=@{CORALLINE_TEST_NOW='1000000'}; Suppress={ param($p) $p.rate_limits.five_hour.used_percentage=$null; $p.rate_limits.seven_day.used_percentage=$null; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=burn' }
         # The payload's expires_at (1000300) is 300s past the pinned CORALLINE_TEST_NOW,
@@ -1453,6 +1456,7 @@ fi
         python = [pscustomobject]@{ Show=@('VL_SEGMENTS=python','VL_CLOCK=off'); Needle='3.12.2'; Suppress={ param($p) $p.cwd='C:/tmp/coralline-win01-no-pin'; $p.workspace.current_dir=$p.cwd; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=python' }
         stash = [pscustomobject]@{ Show=@('VL_SEGMENTS=stash','VL_CLOCK=off'); Needle='1'; Suppress={ param($p) $p.cwd='C:/tmp/coralline-win01-no-repo'; $p.workspace.current_dir=$p.cwd; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=stash' }
         style = [pscustomobject]@{ Show=@('VL_SEGMENTS=style','VL_CLOCK=off'); Needle='Explanatory'; Suppress={ param($p) $p.output_style.name='default'; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=style' }
+        subagents = [pscustomobject]@{ Show=@('VL_SEGMENTS=subagents','VL_CLOCK=off'); Needle=((Glyph 0x21C9) + ' 1'); Payload=$subagentsPayload; Suppress={ param($p) $p.subagents[0].status='completed'; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=subagents' }
         toks = [pscustomobject]@{ Show=@('VL_SEGMENTS=toks','VL_CLOCK=off'); Needle=((Glyph 0x2026) + ' tok/s'); Payload=$toksPayload; Environment=@{CLAUDE_CONFIG_DIR=$toksTableDir}; Suppress={ param($p) $p.cost.total_api_duration_ms=0; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=toks' }
         ttft = [pscustomobject]@{ Show=@('VL_SEGMENTS=ttft','VL_CLOCK=off'); Needle=((Glyph 0xF251) + ' 2.4s'); Payload=$toksPayload; Environment=@{CLAUDE_CONFIG_DIR=$ttftTableDir}; Suppress={ param($p) $p.cost.total_api_duration_ms=0; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=ttft' }
     }
@@ -3563,6 +3567,27 @@ fi
         foreach ($needle in $agyCase.Want) { Check ('agy ' + $agyCase.Name + ' shows ' + $needle) ($plain.Contains($needle)) }
         if ($agyCase.Want.Count -eq 0) { Check ('agy ' + $agyCase.Name + ' hides the gauges') (-not ($plain -match '[0-9]%')) }
         Check ('agy ' + $agyCase.Name + ' parity') ((Strip-Countdown $psRun.Stdout) -ceq (Strip-Countdown $bashRun.Stdout))
+    }
+    $agySubConfig = New-Config 'agy-subagents' @(('VL_SEGMENTS=' + (Quote-FromConfigure 'model subagents')), 'VL_CLOCK=off')
+    $agySubRun = '{"name":"scout","role":"a","model":"Gemini 4 Hydrogen (High)","status":"running"}'
+    $agySubDone = '{"name":"scout","role":"b","model":"Gemini 4 Hydrogen (High)","status":"completed"}'
+    foreach ($subCase in @(
+        [pscustomobject]@{ Name='two running'; List=('[' + $agySubRun + ',' + $agySubRun + ',' + $agySubDone + ']'); Want=((Glyph 0x21C9) + ' 2') },
+        [pscustomobject]@{ Name='one running'; List=('[' + $agySubRun + ']'); Want=((Glyph 0x21C9) + ' 1') },
+        [pscustomobject]@{ Name='none running'; List=('[' + $agySubDone + ']'); Want='' },
+        [pscustomobject]@{ Name='malformed'; List='{"status":"running"}'; Want='' },
+        [pscustomobject]@{ Name='bad entries'; List='["running",{"status":1},{"status":"Running"},null]'; Want='' },
+        [pscustomobject]@{ Name='upper-case key'; List='[{"STATUS":"running"}]'; Want='' },
+        [pscustomobject]@{ Name='soft hyphen in key'; List='[{"sta\u00adtus":"running"}]'; Want='' },
+        [pscustomobject]@{ Name='NUL in value'; List='[{"status":"run\u0000ning"}]'; Want='' }
+    )) {
+        $subJson = '{"product":"antigravity","model":{"display_name":"Gemini 4 Neon (High)"},"subagents":' + $subCase.List + '}'
+        $psRun = Invoke-Statusline $subJson $agySubConfig @{} '' 8000
+        $bashRun = Invoke-BashStatusline $subJson $agySubConfig @{}
+        $plain = Plain $psRun.Stdout
+        if ($subCase.Want) { Check ('agy subagents ' + $subCase.Name + ' shows the count') ($plain.Contains($subCase.Want)) }
+        else { Check ('agy subagents ' + $subCase.Name + ' hidden') (-not $plain.Contains((Glyph 0x21C9))) }
+        Check-Exact ('agy subagents ' + $subCase.Name + ' parity') $psRun $bashRun
     }
     $agyCostConfig = New-Config 'agy-cost' @(('VL_SEGMENTS=' + (Quote-FromConfigure 'model cost')), 'VL_CLOCK=off', 'VL_COST_ALWAYS_SHOW=1')
     $agyCostPs = Invoke-Statusline (New-AgyPayload 'Gemini 4 Neon (High)' $agyGemini) $agyCostConfig @{} '' 8000
