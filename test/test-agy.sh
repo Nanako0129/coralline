@@ -123,6 +123,19 @@ check "soft hyphen or NUL counts nothing" ""   "$(sub '[{"sta\u00adtus":"running
 check "bad entries count nothing"         ""    "$(sub '["running",{"status":1},{"status":"Running"},null]')"
 check "Claude Code payload hidden"       ""    "$(printf '{"model":{"display_name":"Opus"}}' | CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$TMP/subconf" "$BASH" "$SCRIPT" | grep -o '⇉')"
 
+# cost: agy reports an estimate as cost.total_usd once it has one.
+printf 'VL_CLOCK=off\nVL_SEGMENTS="model cost"\nVL_COST_ALWAYS_SHOW=1\n' > "$TMP/costconf"
+cst() {  # $1=payload → the cost pill's text ("" = hidden)
+  printf '%s' "$1" | CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$TMP/costconf" COLUMNS=200 "$BASH" "$SCRIPT" | sed 's/\x1b\[[0-9;]*m//g' | grep -o '\$[0-9.]*'
+}
+check "agy cost.total_usd shown"          '$0.42' "$(cst '{"product":"antigravity","model":{"display_name":"G"},"cost":{"total_usd":0.4217,"subagent_usd":0.1,"estimated":true}}')"
+check "agy cost.total_usd as a string"    '$0.50' "$(cst '{"product":"antigravity","model":{"display_name":"G"},"cost":{"total_usd":"0.5"}}')"
+check "agy cost object without total_usd" ''      "$(cst '{"product":"antigravity","model":{"display_name":"G"},"cost":{"estimated":true}}')"
+check "empty total_cost_usd blocks total_usd" '' "$(cst '{"product":"antigravity","model":{"display_name":"G"},"cost":{"total_cost_usd":"","total_usd":0.42}}')"
+check "a Cost key with another case is not cost" '' "$(cst '{"product":"antigravity","model":{"display_name":"G"},"Cost":{"total_usd":0.42}}')"
+check "differently cased total_cost_usd is not cost" '$0.42' "$(cst '{"product":"antigravity","model":{"display_name":"G"},"cost":{"Total_Cost_USD":5,"total_usd":0.42}}')"
+check "Claude payload ignores total_usd"  '$0.00' "$(cst '{"model":{"display_name":"Opus"},"cost":{"total_usd":0.42}}')"
+
 # reset_time is cut to whole-second UTC; any other offset drops the window.
 rt() {  # $1=reset_time → the 5h pill's "label pct", rendered with sync on and an empty store
   agy 'Gemini 4 Neon (High)' "{\"gemini-5h\":{\"remaining_fraction\":0.5,\"reset_time\":\"$1\",\"reset_in_seconds\":7200}}" |

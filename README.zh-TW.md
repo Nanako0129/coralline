@@ -294,7 +294,7 @@ Windows 上請複製 installer 寫進 Claude Code `settings.json` 的 `statusLin
 
 - `limit5h`、`limit7d` 與 `burn` 讀的是 agy 自己的額度：選 Gemini 模型時是 Gemini 的 5h 與每週 window，選 Claude 或 GPT 模型時是第三方模型的那一組。agy 還沒開啟的 window 不會顯示；但開了 `VL_LIMIT_SYNC=1` 時，會借用其他 agy session 記下的 window，就像 Claude Code 的 session 自己沒有讀數時一樣。
 - agy 的額度與 burn store 和 Claude Code 的分開，每組額度各一套（`limit-5h-agy-gemini.d`、`burn-5h-agy-gemini.tsv`，以及對應的 `-agy-3p` 版本）。所以開了 `VL_LIMIT_SYNC=1` 時，agy 的 session 之間會互相同步，但 Claude Code 的 window 不會出現在 agy 裡，agy 的也不會出現在 Claude Code 裡。
-- `effort` 讀的是模型的 effort。`cost`、`cache`、`toks` 與 `ttft` 不會顯示：agy 不提供費用與 prompt cache 資料，它的 transcript 也不是 Claude Code 的格式。
+- `effort` 讀的是模型的 effort；`cost` 讀 agy 估算的 `cost.total_usd`，agy 要等到有費用可報時才會送出（在那之前不顯示，開了 `VL_COST_ALWAYS_SHOW=1` 也一樣）。`cache`、`toks` 與 `ttft` 不會顯示：agy 不提供 prompt cache 資料，它的 transcript 也不是 Claude Code 的格式。
 - `subagents` 顯示 agy 正在執行的 subagent 數量（subagent 列由 agy 自己畫，所以 Claude Code 的 subagent 面板在 agy 沒有對應功能）。
 - agy 只在狀態改變時重繪 status line，不會定時重繪，所以 session 閒置時 `clock` 與倒數都會停住。
 
