@@ -2155,7 +2155,7 @@ seg_duration() {  # session wall-clock duration
   push "$VL_BG_DURATION" "${_FG} ⧖ ${_DUR} "
 }
 
-seg_subagents() {  # number of subagents running right now (agy)
+seg_subagents() {  # number of subagents running right now (agy only; Claude Code sends no list)
   case "$subrun" in (''|0|*[!0-9]*) return 0 ;; esac
   fg "$VL_FG_TEXT"
   push "${VL_BG_SUBAGENTS:-$VL_BG_DURATION}" "${_FG} ⇉ ${subrun} "

@@ -2700,8 +2700,7 @@ $subRunning = 0
 $subList = Get-JsonMember $J 'subagents'
 if ($subList -is [System.Array]) {
     foreach ($s in $subList) {
-        if (($s -is [pscustomobject] -or $s -is [System.Collections.IDictionary]) -and
-            (Get-JsonMember $s 'status') -is [string] -and (Get-JsonMember $s 'status') -ceq 'running') { $subRunning++ }
+        if ($s -is [pscustomobject] -and (Get-JsonMember $s 'status') -is [string] -and (Get-JsonMember $s 'status') -ceq 'running') { $subRunning++ }
     }
 }
 $effortNode = Get-JsonPath $J @('effort', 'level')
