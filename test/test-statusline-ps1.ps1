@@ -3531,6 +3531,63 @@ fi
         Check-Exact ('WIN-92 HOT/WARN ' + $hw.Name + ' parity') $psRun $bashRun
     }
 
+    # agy (Antigravity CLI): "product":"antigravity" with a quota map instead of
+    # rate_limits (mirrors test/test-agy.sh). Countdowns are stripped before the
+    # parity check, since the two renderers read the clock a moment apart.
+    $agyNow = [DateTimeOffset]::UtcNow
+    $agyIsoFmt = "yyyy-MM-dd'T'HH:mm:ss'Z'"
+    $agyLive5 = '{"remaining_fraction":0.6706072,"reset_time":"' + $agyNow.AddSeconds(7200).ToString($agyIsoFmt, $Invariant) + '","reset_in_seconds":7200}'
+    $agyLive7 = '{"remaining_fraction":0.7472552,"reset_time":"' + $agyNow.AddSeconds(259200).ToString($agyIsoFmt, $Invariant) + '","reset_in_seconds":259200}'
+    $agyNone = '{"remaining_fraction":1,"reset_time":"1970-01-01T00:00:00Z","reset_in_seconds":0}'
+    $agyGemini = '{"gemini-5h":' + $agyLive5 + ',"gemini-weekly":' + $agyLive7 + ',"3p-5h":' + $agyNone + ',"3p-weekly":' + $agyNone + '}'
+    $agy3p = '{"gemini-5h":' + $agyNone + ',"gemini-weekly":' + $agyNone + ',"3p-5h":' + $agyLive5 + ',"3p-weekly":' + $agyLive7 + '}'
+    $agyFrac = '{"gemini-5h":{"remaining_fraction":0.5,"reset_time":"' + $agyNow.AddSeconds(7200).ToString("yyyy-MM-dd'T'HH:mm:ss'.123456789Z'", $Invariant) + '","reset_in_seconds":7200},"gemini-weekly":{"remaining_fraction":0.5,"reset_time":"' + $agyNow.AddSeconds(7200).ToString("yyyy-MM-dd'T'HH:mm:ss", $Invariant) + '","reset_in_seconds":7200}}'
+    function New-AgyPayload([string]$Model, [string]$Quota, [string]$Extra) {
+        return '{"product":"antigravity","session_id":"a68a158b-d5c0-444f-9c11-81a0ffb67c68","model":{"id":"' + $Model + '","display_name":"' + $Model + '","effort":"high"},' + $Extra + '"quota":' + $Quota + '}'
+    }
+    function Strip-Countdown([string]$Text) { return [regex]::Replace((Plain $Text), ((Glyph 0x21BA) + '\S+'), '') }
+    $agyConfig = New-Config 'agy-limits' @(('VL_SEGMENTS=' + (Quote-FromConfigure 'model effort limit5h limit7d')), 'VL_CLOCK=off')
+    foreach ($agyCase in @(
+        [pscustomobject]@{ Name='Gemini model'; Model='Gemini 4 Neon (High)'; Quota=$agyGemini; Want=@('33%', '25%', ((Glyph 0x3C8) + ' high')) },
+        [pscustomobject]@{ Name='Claude model, no live 3p window'; Model='Claude Opus 5.5 (High)'; Quota=$agyGemini; Want=@() },
+        [pscustomobject]@{ Name='Claude model, live 3p windows'; Model='Claude Opus 5.5 (High)'; Quota=$agy3p; Want=@('33%', '25%') },
+        [pscustomobject]@{ Name='GPT model, live 3p windows'; Model='GPT-OSS 120B (Medium)'; Quota=$agy3p; Want=@('33%', '25%') },
+        [pscustomobject]@{ Name='fractional reset kept, offsetless reset dropped'; Model='Gemini 4 Neon (High)'; Quota=$agyFrac; Want=@('5h') },
+        [pscustomobject]@{ Name='own rate_limits win'; Model='Gemini 4 Neon (High)'; Quota=$agyGemini; Extra=('"rate_limits":{"five_hour":{"used_percentage":50,"resets_at":' + ($agyNow.ToUnixTimeSeconds() + 3600) + '}},'); Want=@('50%') }
+    )) {
+        $agyJson = New-AgyPayload $agyCase.Model $agyCase.Quota ([string]$agyCase.Extra)
+        $psRun = Invoke-Statusline $agyJson $agyConfig @{} '' 8000
+        $bashRun = Invoke-BashStatusline $agyJson $agyConfig @{}
+        Check-Run ('agy ' + $agyCase.Name + ' PowerShell') $psRun
+        $plain = Plain $psRun.Stdout
+        foreach ($needle in $agyCase.Want) { Check ('agy ' + $agyCase.Name + ' shows ' + $needle) ($plain.Contains($needle)) }
+        if ($agyCase.Want.Count -eq 0) { Check ('agy ' + $agyCase.Name + ' hides the gauges') (-not ($plain -match '[0-9]%')) }
+        Check ('agy ' + $agyCase.Name + ' parity') ((Strip-Countdown $psRun.Stdout) -ceq (Strip-Countdown $bashRun.Stdout))
+    }
+    $agyCostConfig = New-Config 'agy-cost' @(('VL_SEGMENTS=' + (Quote-FromConfigure 'model cost')), 'VL_CLOCK=off', 'VL_COST_ALWAYS_SHOW=1')
+    $agyCostPs = Invoke-Statusline (New-AgyPayload 'Gemini 4 Neon (High)' $agyGemini) $agyCostConfig @{} '' 8000
+    $agyCostBash = Invoke-BashStatusline (New-AgyPayload 'Gemini 4 Neon (High)' $agyGemini) $agyCostConfig @{}
+    Check 'agy shows no cost under VL_COST_ALWAYS_SHOW' (-not (Plain $agyCostPs.Stdout).Contains('$'))
+    Check-Exact 'agy cost parity' $agyCostPs $agyCostBash
+    # Store isolation: Claude Code's synced windows never show under agy, and agy's
+    # land in their own namespace.
+    $agyCfgDir = Join-Path $TempRoot 'agy-cfg'
+    $agySyncConfig = New-Config 'agy-sync' @(('VL_SEGMENTS=' + (Quote-FromConfigure 'limit5h limit7d')), 'VL_CLOCK=off', 'VL_LIMIT_SYNC=1')
+    $agyWrite = @{ CORALLINE_NO_SAMPLE = '0'; CLAUDE_CONFIG_DIR = (Forward-Path $agyCfgDir) }
+    $agyRead = @{ CLAUDE_CONFIG_DIR = (Forward-Path $agyCfgDir) }
+    $ccPayload = '{"model":{"display_name":"Opus"},"rate_limits":{"five_hour":{"used_percentage":80,"resets_at":' + ($agyNow.ToUnixTimeSeconds() + 3600) + '},"seven_day":{"used_percentage":60,"resets_at":' + ($agyNow.ToUnixTimeSeconds() + 86400) + '}}}'
+    [void](Invoke-Statusline $ccPayload $agySyncConfig $agyWrite '' 8000)
+    $run = Invoke-Statusline (New-AgyPayload 'Gemini 4 Neon (High)' '{}') $agySyncConfig $agyRead '' 8000
+    Check 'agy never shows the Claude store' (-not ((Plain $run.Stdout) -match '[0-9]%'))
+    [void](Invoke-Statusline (New-AgyPayload 'Gemini 4 Neon (High)' $agyGemini) $agySyncConfig $agyWrite '' 8000)
+    $run = Invoke-Statusline (New-AgyPayload 'Gemini 4 Neon (High)' '{}') $agySyncConfig $agyRead '' 8000
+    Check 'agy sessions share their own store' ((Plain $run.Stdout).Contains('33%'))
+    $run = Invoke-Statusline (New-AgyPayload 'Gemini 4 Neon (High)' ('{"gemini-5h":' + $agyNone + ',"gemini-weekly":' + $agyLive7 + '}')) $agySyncConfig $agyRead '' 8000
+    Check 'agy with an unopened 5h borrows a stored one' ((Plain $run.Stdout).Contains('33%'))
+    $run = Invoke-Statusline '{"model":{"display_name":"Opus"}}' $agySyncConfig $agyRead '' 8000
+    Check 'agy windows never reach the Claude store' ((Plain $run.Stdout).Contains('80%'))
+    Check 'agy store has its own namespace' (Test-Path -LiteralPath (Join-Path $agyCfgDir 'coralline\limit-5h-agy-gemini.d'))
+
 } finally {
     try { Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction Stop } catch { }
     $cleanupOk = -not (Test-Path -LiteralPath $TempRoot)

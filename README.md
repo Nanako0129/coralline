@@ -279,6 +279,23 @@ The two renderers treat `coralline.conf` differently. The Bash renderer sources 
 
 </details>
 
+### agy (Antigravity CLI)
+
+coralline also renders inside [agy](https://antigravity.google/), whose custom status line passes a JSON payload shaped like Claude Code's. Point agy's `statusLine` at the same command Claude Code runs, in agy's `settings.json` (`~/.gemini/antigravity-cli/settings.json` on macOS), or with agy's own `/statusline` command:
+
+```json
+{
+  "statusLine": { "type": "command", "command": "bash ~/.claude/coralline/statusline.sh", "enabled": true }
+}
+```
+
+On Windows, copy the `statusLine.command` the installer wrote into Claude Code's `settings.json`. Both renderers recognize agy (`"product": "antigravity"`) and adapt:
+
+- `limit5h`, `limit7d`, and `burn` read agy's own quota: the Gemini 5h and weekly windows while a Gemini model is selected, the third-party ones for Claude and GPT models. A window agy has not opened stays hidden, unless `VL_LIMIT_SYNC=1` borrows one another agy session recorded, as it does for Claude Code sessions with no reading of their own.
+- agy keeps its limit and burn stores apart from Claude Code's, one set per quota (`limit-5h-agy-gemini.d`, `burn-5h-agy-gemini.tsv`, and their `-agy-3p` twins), so with `VL_LIMIT_SYNC=1` agy sessions sync among themselves while Claude Code's windows never show in agy and agy's never show in Claude Code.
+- `effort` reads the model's effort. `cost`, `cache`, `toks`, and `ttft` stay hidden: agy sends no cost or prompt-cache data, and its transcript is not Claude Code's format.
+- agy redraws the status line when its state changes, not on a timer, so `clock` and the countdowns hold still while a session sits idle.
+
 ### Trust and security
 
 The default `main/INSTALL.md`, `main/UPGRADE.md`, and `main/install.sh` URLs are mutable remote inputs. Read the selected [`INSTALL.md`](./INSTALL.md), [`install.sh`](./install.sh), and [`install.ps1`](./install.ps1) before running them.

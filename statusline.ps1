@@ -2316,7 +2316,10 @@ function Get-CorallineState([bool]$BurnGate, [bool]$Limit5Gate, [bool]$Limit7Gat
     # (below) both read this one flag. A session idle past its own 5h reset arrives
     # the same way and shows no 5h gauge until its next response, rather than a
     # stored window it cannot attribute to its own account.
-    $noFive = [string]::IsNullOrEmpty([string]$fhPct) -and $current7.Valid
+    # agy under VL_LIMIT_SYNC=1 is the exception (every agy account has a 5h window;
+    # an unopened one says nothing about a live window another session recorded),
+    # as in statusline.sh. With sync off the unopened window stays hidden, burn included.
+    $noFive = [string]::IsNullOrEmpty([string]$fhPct) -and $current7.Valid -and (-not $agy -or $Cfg.VL_LIMIT_SYNC -ne '1')
     $currentBurn = [pscustomobject]@{ Valid=$false; Reset=0L; Sample=$Now; Pct=0 }
     if ($current5.Valid -and $current5.Reset -ge $Now) { $currentBurn = [pscustomobject]@{ Valid=$true; Reset=[long]$current5.Reset; Sample=$Now; Pct=[int]$current5.Pct } }
 
@@ -2634,6 +2637,69 @@ $effort = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('effort', '
 $apiMs = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('cost', 'total_api_duration_ms')))
 $sid = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('session_id')))
 $toksTranscript = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('transcript_path')))
+
+# agy (Antigravity CLI), mirroring agy_bucket/agy_limits in statusline.sh: its
+# Claude-Code-shaped payload carries "product":"antigravity" and a quota map in
+# place of rate_limits, one 5h/weekly pair for Gemini models and one ("3p") for
+# third-party models. A bucket with no live window (fraction 1, 1970 reset) stays
+# empty. agy gets its own store namespace per bucket, and its transcript is not
+# Claude's format, so toks/ttft stay silent.
+function Get-AgyWindow($Quota, [string]$Key) {  # → @(used pct, reset epoch) or $null
+    $q = Get-JsonMember $Quota $Key
+    if (-not ($q -is [pscustomobject] -or $q -is [System.Collections.IDictionary])) { return $null }
+    $f = Get-JsonMember $q 'remaining_fraction'
+    $s = Get-JsonMember $q 'reset_in_seconds'
+    $t = Get-JsonMember $q 'reset_time'
+    foreach ($n in @($f, $s)) {
+        if (-not ($n -is [double] -or $n -is [decimal] -or $n -is [long] -or $n -is [int])) { return $null }
+    }
+    if ([double]$s -le 0) { return $null }
+    # Same rule as the jq side: whole-second UTC ("Z" or "+00:00", any fraction
+    # dropped); anything else drops the window.
+    $dto = [DateTimeOffset]::MinValue
+    if ($t -is [datetime]) {
+        # PowerShell 7 already parsed the ISO string; no offset at all reads Unspecified.
+        if ($t.Kind -eq [DateTimeKind]::Unspecified) { return $null }
+        $u = $t.ToUniversalTime()
+        $dto = [DateTimeOffset]::new($u.AddTicks(-($u.Ticks % [TimeSpan]::TicksPerSecond)))
+    } elseif ($t -is [string]) {
+        $m = [regex]::Match($t, '\A([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\.[0-9]+)?(Z|\+00:00)\z')
+        if (-not $m.Success) { return $null }
+        $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
+        if (-not [DateTimeOffset]::TryParseExact($m.Groups[1].Value + 'Z', "yyyy-MM-dd'T'HH:mm:ss'Z'", $Invariant, $styles, [ref]$dto)) { return $null }
+    } else { return $null }
+    $pct = [Math]::Round((1 - [double]$f) * 100, [MidpointRounding]::AwayFromZero)   # jq round
+    return @((To-InvariantString $pct), (To-InvariantString $dto.ToUnixTimeSeconds()))
+}
+$agy = ''
+if ((Get-JsonMember $J 'product') -is [string] -and (Get-JsonMember $J 'product') -ceq 'antigravity') {
+    $agy = 'gemini'
+    if ((To-InvariantString (Get-JsonPath $J @('model', 'display_name'))) -cmatch '^(Claude|GPT)') { $agy = '3p' }
+    if ($null -eq (Get-JsonMember $J 'rate_limits')) {
+        $quota = Get-JsonMember $J 'quota'
+        $fhPct = ''; $fhRst = ''; $wdPct = ''; $wdRst = ''
+        $w = Get-AgyWindow $quota "$agy-5h"
+        if ($null -ne $w) { $fhPct = $w[0]; $fhRst = $w[1] }
+        $w = Get-AgyWindow $quota "$agy-weekly"
+        if ($null -ne $w) { $wdPct = $w[0]; $wdRst = $w[1] }
+    }
+    foreach ($key in @('BURN_FILE', 'RL5H_FILE', 'RL7D_FILE')) {
+        $base = [string]$Cfg[$key]
+        if ([string]::IsNullOrEmpty($base)) { continue }   # an empty path keeps its store off
+        if ($base.EndsWith('.tsv', [System.StringComparison]::Ordinal)) { $base = $base.Substring(0, $base.Length - 4) }
+        $Cfg[$key] = "$base-agy-$agy.tsv"
+    }
+    # No cost in an agy payload means unknown, not $0.00: VL_COST_ALWAYS_SHOW stays out.
+    if ($costKind -eq 'missing') { $costKind = 'invalid' }
+}
+$effortNode = Get-JsonPath $J @('effort', 'level')
+if ($null -eq $effortNode -or ($effortNode -is [bool] -and -not $effortNode)) {   # jq //: agy puts effort on the model
+    $effortNode = Get-JsonPath $J @('model', 'effort')
+    $effort = ''
+    if ($null -ne $effortNode -and -not ($effortNode -is [bool] -and -not $effortNode)) {
+        $effort = Remove-ControlChars (To-InvariantString $effortNode)
+    }
+}
 
 function ConvertTo-ProbePath([string]$Path) {
     if ([string]::IsNullOrEmpty($Path)) { return '' }
@@ -3337,7 +3403,7 @@ function Get-ToksSteady {
 }
 
 $Toks = [pscustomobject]@{ Ok=$false; Rate=''; Dec=''; Ttft=''; ApiMs=0L }
-if ($ProbeSegmentNames.Contains('toks') -or $ProbeSegmentNames.Contains('ttft')) {
+if (-not $agy -and ($ProbeSegmentNames.Contains('toks') -or $ProbeSegmentNames.Contains('ttft'))) {
     $Toks = Get-ToksSteady
     if ($null -eq $Toks) { $Toks = Get-ToksSample }
 }

@@ -709,7 +709,12 @@ state_gate() {  # canonicalize one render's values and state namespaces
   # A live 7d window with an empty five_hour reading: no 5h window (see rl_choose).
   # Claude Code's builder emits five_hour only for a live window, always numeric. The
   # gauge (rl_choose) and the projection (burn_estimate) both read this one flag.
-  [ -z "${fh_pct:-}" ] && [ "$_CUR7_VALID" = 1 ] && _CUR5_NONE=1
+  # agy under VL_LIMIT_SYNC=1 is the exception: every agy account has a 5h window,
+  # and an unopened one (or this session's stale fetch) says nothing about whether
+  # another session has since recorded a live one, so it borrows like a payload
+  # with no reading. With sync off the unopened window stays hidden, burn included.
+  [ -z "${fh_pct:-}" ] && [ "$_CUR7_VALID" = 1 ] \
+    && { [ -z "${agy:-}" ] || [ "$VL_LIMIT_SYNC" != 1 ]; } && _CUR5_NONE=1
   if [ "$_CUR5_VALID" = 1 ] && state_epoch "$NOW" 12; then
     _CUR_BURN_SAMP=$_SE_VALUE; _CUR_BURN_RST=$_CUR5_RST
     _CUR_BURN_PCT=$_CUR5_PCT; _CUR_BURN_TSV=$_CUR5_TSV; _CUR_BURN_VALID=1
@@ -2565,7 +2570,30 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
     else (($ctx.used_percentage == null) or (($ctx.used_percentage|type) == "string" and $ctx.used_percentage == "")) end;
   def cost_value:
     member(member(.; "cost"); "total_cost_usd");
+  # agy (Antigravity CLI) sends a Claude-Code-shaped payload tagged product
+  # "antigravity", with its limits in a quota map instead of rate_limits: one
+  # 5h/weekly pair for Gemini models and one ("3p") for third-party models.
+  # ponytail: picked by display-name prefix; a new third-party family lands on gemini.
+  def agy_bucket:
+    if (member(member(.; "model"); "display_name") // "" | tostring | test("^(Claude|GPT)"))
+    then "3p" else "gemini" end;
+  def agy_limits:  # → Claude Code rate_limits; a bucket with no live window (agy
+    # sends fraction 1 with a 1970 reset) maps to null, as Claude Code omits it.
+    # reset_time is cut to whole-second UTC, the one shape the stores accept;
+    # any other offset drops the window (statusline.ps1 applies the same rule).
+    agy_bucket as $b | member(.; "quota") as $quota |
+    def win($k): member($quota; "\($b)-\($k)") as $q |
+      (if ($q|type) == "object" and ($q.reset_time|type) == "string" then
+         ($q.reset_time | capture("^(?<t>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\\.[0-9]+)?(Z|\\+00:00)$") // null)
+       else null end) as $rt |
+      if $rt != null and ($q.remaining_fraction|type) == "number"
+         and ($q.reset_in_seconds|type) == "number" and $q.reset_in_seconds > 0
+      then {used_percentage: ((1 - $q.remaining_fraction) * 100 | round), resets_at: ($rt.t + "Z")}
+      else null end;
+    {five_hour: win("5h"), seven_day: win("weekly")};
   if type != "object" then error("non-object root") else
+  (member(.; "product") == "antigravity") as $agy |
+  (if $agy and member(.; "rate_limits") == null then .rate_limits = agy_limits else . end) |
   [
     (member(member(.; "workspace"); "current_dir") // member(.; "cwd") // ""),
     (member(member(.; "model"); "display_name") // ""),
@@ -2594,12 +2622,13 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
     (member(member(.; "cost"); "total_lines_removed") // 0),
     (member(member(.; "output_style"); "name") // ""),
     (member(member(.; "cost"); "total_duration_ms") // 0),
-    (member(member(.; "effort"); "level") // ""),
+    (member(member(.; "effort"); "level") // member(member(.; "model"); "effort") // ""),
     ((member(member(.; "prompt_cache"); "hit_ratio")) as $h |
       if ($h|type) == "number" then ($h * 100 | tostring) else "" end),
     ((member(member(.; "prompt_cache"); "expires_at")) as $x |
       if ($x|type) == "number" then ($x | tostring) else "" end),
     (member(member(.; "cost"); "total_api_duration_ms") // 0),
+    (if $agy then agy_bucket else "" end),
     (member(.; "transcript_path") // ""),
     (member(.; "session_id") // "")
   ] | map(scrub) | join("\u001f")
@@ -2609,10 +2638,22 @@ fi
 IFS=$'\037' read -r cwd model ctx_pct _CTX_EMPTY tok_in tok_out tok_cr tok_cw \
                  fh_pct fh_rst wd_pct wd_rst cost _COST_KIND \
                  lines_add lines_del out_style dur_ms effort \
-                 cache_pct cache_exp api_ms transcript sid <<JSON
+                 cache_pct cache_exp api_ms agy transcript sid <<JSON
 $_JSON_FIELDS
 JSON
 sid="${sid%$'\r'}"  # native Windows jq writes CRLF; the last field keeps the CR
+# Under agy the cross-session stores hold Claude's windows, so agy gets its own
+# per-bucket namespace beside them (agy sessions still sync with each other),
+# and its transcript is not Claude's format, so toks/ttft stay silent.
+if [ -n "$agy" ]; then
+  # An empty path keeps its store off; a suffix would make it relative to cwd.
+  [ -z "$BURN_FILE" ] || BURN_FILE="${BURN_FILE%.tsv}-agy-$agy.tsv"
+  [ -z "$RL5H_FILE" ] || RL5H_FILE="${RL5H_FILE%.tsv}-agy-$agy.tsv"
+  [ -z "$RL7D_FILE" ] || RL7D_FILE="${RL7D_FILE%.tsv}-agy-$agy.tsv"
+  transcript=""; api_ms=""   # toks_sample returns before touching its state file
+  # No cost in an agy payload means unknown, not $0.00: VL_COST_ALWAYS_SHOW stays out.
+  [ "$_COST_KIND" != missing ] || _COST_KIND=invalid
+fi
 
 # Every segment drawn in a row (seg_project reads it too); _SEG_SCAN adds float's.
 # The lists are split on any whitespace when they are drawn (build_segments), so
