@@ -2268,7 +2268,7 @@ seg_relay() {  # model-relay: which model this session talks to (claude, a pinne
     case "$relay" in
       (claude|claude/*) ;;
       (*)
-        case "${_SEG_ROWS:-}" in (*" model "*) return 0 ;; esac
+        case "${_SEG_DRAWN:-}" in (*" model "*) return 0 ;; esac
         ;;
     esac
   fi
@@ -2810,6 +2810,10 @@ words_of() {  # $1=segment lists → _SW: the names, single-spaced, with a space
   _SW=" $* "
 }
 words_of "$VL_HEAD_SEGMENTS $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3"; _SEG_ROWS="$_SW"
+# What the bar draws (seg_relay's duplicate check): auto draws only VL_SEGMENTS
+# below the head line; emit_float sets its own list while it builds.
+_SEG_DRAWN="$_SEG_ROWS"
+if [ "$VL_LAYOUT" = "auto" ]; then words_of "$VL_HEAD_SEGMENTS $VL_SEGMENTS"; _SEG_DRAWN="$_SW"; fi
 _SEG_SCAN="$_SEG_ROWS"
 if [ "$VL_FLOAT" = "1" ]; then words_of "$VL_FLOAT_SEGMENTS"; _SEG_SCAN="$_SEG_ROWS${_SW# }"; fi
 case "$_SEG_SCAN" in *" git "*|*" stash "*|*" project "*) read_git ;; esac
@@ -2878,8 +2882,11 @@ strip_ansi() {
 emit_float() {
   local _nc="$VL_NOCOLOR" _b="$BOLD" _n="$NORM" _r="$R"
   local dir line i s tmp
+  local _drawn="$_SEG_DRAWN"
   VL_NOCOLOR=1 ; BOLD="" ; NORM="" ; R=""
+  words_of "$VL_FLOAT_SEGMENTS"; _SEG_DRAWN="$_SW"
   build_segments "$VL_FLOAT_SEGMENTS"
+  _SEG_DRAWN="$_drawn"
   line=""
   for ((i=0; i<${#SEG_TXT[@]}; i++)); do
     strip_ansi "${SEG_TXT[$i]}" ; s="$_PLAIN"

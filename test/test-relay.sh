@@ -184,6 +184,17 @@ status s_ro 'pinned\tacp-gemini-4-neon\n'
 check "VL_RELAY_MODEL=1 without model segment still shows pinned relay" \
   "↪ acp-gemini-4-neon" "$(render_plain s_ro "$TMP/conf_relay_only")"
 
+# 9b. The duplicate check follows what is drawn, not every configured row
+printf 'VL_CLOCK=off\nVL_RELAY_MODEL=1\nVL_LAYOUT=auto\nVL_SEGMENTS="relay"\nVL_SEGMENTS2="model"\n' > "$TMP/conf_auto2"
+check "auto layout: model only in VL_SEGMENTS2 (not drawn) keeps pinned relay" \
+  "↪ acp-gemini-4-neon" "$(render_plain s_ro "$TMP/conf_auto2")"
+printf 'VL_CLOCK=off\nVL_RELAY_MODEL=1\nVL_SEGMENTS="relay"\nVL_SEGMENTS2="model"\n' > "$TMP/conf_fixed2"
+check "fixed layout: model on row 2 hides the duplicate pinned relay" \
+  "◆ acp-gemini-4-neon" "$(render_plain s_ro "$TMP/conf_fixed2")"
+printf 'VL_CLOCK=off\nVL_RELAY_MODEL=1\nVL_SEGMENTS="model"\nVL_FLOAT=1\nVL_FLOAT_SEGMENTS="relay"\nVL_FLOAT_FILE=%s\n' "$TMP/float.txt" > "$TMP/conf_float"
+render_plain s_ro "$TMP/conf_float" >/dev/null
+check "float without model keeps pinned relay" "↪ acp-gemini-4-neon" "$(cat "$TMP/float.txt" 2>/dev/null)"
+
 # 10. Wizard preview stand-in still shown under VL_RELAY_MODEL=1
 printf 'VL_CLOCK=off\nVL_RELAY_MODEL=1\nVL_SEGMENTS="model relay"\nVL_RELAY_PREVIEW=glm\n' > "$TMP/conf_prev1"
 check "preview stand-in shown under VL_RELAY_MODEL=1" \
