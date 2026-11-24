@@ -152,7 +152,12 @@ VL_BG_GIT_OK=65
 VL_BG_STASH=""                 # optional; falls back to VL_BG_GIT_OK when empty
 VL_BG_RELAY=""                 # optional; falls back to VL_BG_STYLE when empty (not
                                # VL_BG_MODEL or VL_BG_EFFORT: relay sits between them)
+VL_BG_FABLE=""                 # optional; falls back to VL_BG_7D when empty
 VL_RELAY_PREVIEW=""            # internal: provider the wizard preview shows for relay
+VL_FABLE_PREVIEW=""            # internal: percent the wizard preview shows for fable
+VL_RELAY_LIMITS=0              # 1 = limit5h/limit7d take this session's own windows
+                               # from model-relay's limits file while the payload
+                               # has none yet (a session just started or resumed)
 VL_BG_GIT_DIRTY=130
 VL_BG_MODEL=173
 VL_BG_CTX=238
@@ -944,10 +949,10 @@ rl_sample() {  # $1=canonical base $2=pct_milli $3=reset
   mkdir "$path" 2>/dev/null || true
 }
 
-rl_latest() {  # $1=canonical base $2=max secs ahead $3=mutate → _LL_*
-  local base="$1" max="$2" mutate="${3:-0}" root path name raw=0 complete=1 hi="" i cut gc=0 LC_ALL=C
+rl_latest() {  # $1=canonical base $2=max secs ahead $3=mutate $4=reset to match → _LL_*
+  local base="$1" max="$2" mutate="${3:-0}" want="${4:-}" root path name raw=0 complete=1 hi="" i cut gc=0 LC_ALL=C
   local names=() paths=() resets=() pcts=()
-  _LL_VALID=0; _LL_PCT=""; _LL_PCT_MILLI=0; _LL_RST=""
+  _LL_VALID=0; _LL_PCT=""; _LL_PCT_MILLI=0; _LL_RST=""; _LL_MATCH_MILLI=""
   case "$max" in (''|*[!0-9]*) return 0 ;; esac
   [ "${#max}" -le 6 ] && [ "$max" -ge 1 ] 2>/dev/null || return 0
   rl_dir "$base" || return 0; root=$_RLD
@@ -963,9 +968,15 @@ rl_latest() {  # $1=canonical base $2=max secs ahead $3=mutate → _LL_*
     i=${#names[@]}; names[$i]="$name"; paths[$i]="$path"; resets[$i]=$_SLN_RST; pcts[$i]=$_SLN_PCT
     if [ "$_SLN_RST" -gt "$NOW" ] && [ "$_SLN_RST" -le "$cut" ]; then
       [ -n "$hi" ] && [[ "$name" < "$hi" ]] || hi="$name"
+      # $4 (rl_choose's own-file reset): the highest stored reading for that very
+      # window, taken here because the latest entry may be a later window and the
+      # GC below removes every other one.
+      if [ "$_SLN_RST" = "$want" ] && { [ -z "$_LL_MATCH_MILLI" ] || [ "$_SLN_PCT" -gt "$_LL_MATCH_MILLI" ]; }; then
+        _LL_MATCH_MILLI=$_SLN_PCT
+      fi
     fi
   done
-  [ "$complete" = 1 ] || return 0
+  [ "$complete" = 1 ] || { _LL_MATCH_MILLI=""; return 0; }
   if [ -n "$hi" ]; then
     for ((i=0; i<${#names[@]}; i++)); do
       if [ "${names[$i]}" = "$hi" ] && state_limit_entry_ok "$base" "$root" "${paths[$i]}" "$hi"; then
@@ -976,11 +987,17 @@ rl_latest() {  # $1=canonical base $2=max secs ahead $3=mutate → _LL_*
     done
   fi
   [ "$mutate" = 1 ] || return 0
-  for ((i=0; i<${#names[@]}; i++)); do [ "${names[$i]}" = "$hi" ] || { gc=1; break; }; done
+  # The GC keeps $4's entries too: rl_choose needs that window's reading again on
+  # the next render. Another session's GC (which matches nothing) still removes
+  # them; the file's own reading shows then, never another account's.
+  for ((i=0; i<${#names[@]}; i++)); do
+    [ "${names[$i]}" = "$hi" ] || { [ -n "$want" ] && [ "${resets[$i]}" = "$want" ]; } || { gc=1; break; }
+  done
   [ "$gc" = 1 ] || return 0
   state_paths_revalidate && state_limit_root_ok "$base" "$root" || return 0
   for ((i=0; i<${#names[@]}; i++)); do
     [ "${names[$i]}" = "$hi" ] && continue
+    [ -n "$want" ] && [ "${resets[$i]}" = "$want" ] && continue
     state_limit_entry_ok "$base" "$root" "${paths[$i]}" "${names[$i]}" || continue
     rmdir "${paths[$i]}" 2>/dev/null || true
   done
@@ -1025,6 +1042,21 @@ rl_choose() {  # $1=5|7; this session's valid reading wins; the store fills in o
   [ "$which" = 5 ] && [ "${_CUR5_NONE:-0}" = 1 ] && valid=0
   if [ "$cvalid" = 1 ]; then
     valid=1; rst=$crst; pct=$cpct
+  elif [ "${_OWN_LIMITS:-0}" = 1 ]; then
+    # The payload carries no window at all (a session just started or resumed),
+    # and VL_RELAY_LIMITS asked for the relay's file for this session: its own
+    # windows beat the shared store, which cannot say whose its entries are. One
+    # exception: a store entry for the very same reset with a higher percent is
+    # the same window, read later by another session, so the store keeps that.
+    # Only for a payload with no window: one that has 7d but no 5h has no 5h
+    # window (_CUR5_NONE), and burn makes no 5h projection for it either.
+    if [ "$which" = 5 ]; then crst=${own5_rst:-}; cpct=${own5_pct:-}; else crst=${own7_rst:-}; cpct=${own7_pct:-}; fi
+    # rl_latest matched that reset over the whole store (_LL_MATCH_MILLI), not
+    # only against its latest entry, which may be another account's later window.
+    if [ -n "$cpct" ]; then
+      valid=1; rst=$crst; pct=$(( cpct * 1000 ))
+      [ -n "${_LL_MATCH_MILLI:-}" ] && [ "$_LL_MATCH_MILLI" -gt "$pct" ] && pct=$_LL_MATCH_MILLI
+    fi
   fi
   if [ "$which" = 5 ]; then _STATE_RL5_VALID=$valid; _STATE_RL5_RST=$rst; _STATE_RL5_PCT=$pct
   else _STATE_RL7_VALID=$valid; _STATE_RL7_RST=$rst; _STATE_RL7_PCT=$pct; fi
@@ -2028,6 +2060,7 @@ limit_elapsed_ok() {  # $1=canonical pct $2=parsed reset $3=max elapsed age; set
 # Both windows use the same rule.
 seg_limit5h() {  # 5h rate-limit gauge with reset countdown
   local p="$fh_pct" r="$fh_rst" m=""
+  [ "${_OWN_LIMITS:-0}" = 0 ] || { p="${own5_pct:-}"; r="${own5_rst:-}"; }   # VL_RELAY_LIMITS, payload without any window
   if [ "$VL_LIMIT_SYNC" = 1 ]; then
     limit_elapsed_ok "${_CUR5_CANON:-}" "${_CUR5_RST:-0}" "$RL_MAX_5H"
     if [ "${_STATE_RL5_VALID:-0}" = 1 ]; then m=$_STATE_RL5_PCT; r=$_STATE_RL5_RST
@@ -2039,6 +2072,7 @@ seg_limit5h() {  # 5h rate-limit gauge with reset countdown
 }
 seg_limit7d() {  # 7d rate-limit gauge with reset countdown
   local p="$wd_pct" r="$wd_rst" m=""
+  [ "${_OWN_LIMITS:-0}" = 0 ] || { p="${own7_pct:-}"; r="${own7_rst:-}"; }
   if [ "$VL_LIMIT_SYNC" = 1 ]; then
     limit_elapsed_ok "${_CUR7_CANON:-}" "${_CUR7_RST:-0}" "$RL_MAX_7D"
     if [ "${_STATE_RL7_VALID:-0}" = 1 ]; then m=$_STATE_RL7_PCT; r=$_STATE_RL7_RST
@@ -2202,6 +2236,54 @@ seg_relay() {  # model-relay: which model this session talks to (claude, a pinne
   trunc "$p" "$VL_NAME_MAX"
   fg "$VL_FG_TEXT"
   push "${VL_BG_RELAY:-$VL_BG_STYLE}" "${_FG} ↪ ${_TR}${note} "
+}
+
+# Usage windows from model-relay, per session. Claude Code's payload carries only
+# the 5h and 7d windows and not the weekly window of the model with its own limit
+# (7d_oi, "Fable" in /usage); model-relay's router writes what each answer's
+# rate-limit headers report to
+# <relay config dir>/model-relay-status/<session_id>.limits, one line
+# "window<TAB>percent<TAB>reset" per window. Read with the builtin, so no fork. The
+# file is this session's own, so it never holds another account's window. A line
+# whose reset has passed is skipped (the router leaves an expired file as it is),
+# and so is one further out than its window can be, or with a percent past 200;
+# 101-200 is drawn as 100, the way a window over its limit is.
+# The router writes this file in its own config dir, which a second account's
+# window reaches through MODEL_RELAY_CONFIG_DIR. relay_sample's status file is a
+# different one, written by the window's own hook into the window's config dir,
+# so the two lookups differ on purpose.
+relay_limits_sample() {  # → fable_pct/rst, own5_pct/rst, own7_pct/rst ("" = none)
+  fable_pct="" fable_rst="" own5_pct="" own5_rst="" own7_pct="" own7_rst=""
+  case "$sid" in (''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) return 0 ;; esac
+  local f="${MODEL_RELAY_CONFIG_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/model-relay-status/$sid.limits" w p r n=0 max
+  [ -f "$f" ] || return 0                   # -f: a FIFO here must not block
+  # The braces keep a failed open (the file replaced or unreadable since the test
+  # above) off the render's stderr. "|| [ -n "$w" ]" takes a last line that has
+  # no newline; a torn one fails the checks below like any other bad line.
+  {
+    while [ "$n" -lt 16 ] && { IFS=$'\t' read -r w p r || [ -n "$w" ]; }; do
+      n=$(( n + 1 ))
+      case "$w" in (5h) max=$RL_MAX_5H ;; (7d|7d_oi) max=$RL_MAX_7D ;; (*) w=""; continue ;; esac
+      r="${r%$'\r'}"
+      case "$p" in (''|*[!0123456789]*|????*) w=""; continue ;; esac
+      case "$r" in (''|*[!0123456789]*|????????????*) w=""; continue ;; esac
+      # 10#: a leading zero would be read as octal and abort the render on "09"
+      p=$(( 10#$p )) r=$(( 10#$r ))
+      { [ "$p" -le 200 ] && [ "$r" -gt "$NOW" ] && [ "$r" -le $(( NOW + max )) ]; } || { w=""; continue; }
+      [ "$p" -le 100 ] || p=100
+      case "$w" in
+        (5h)    own5_pct=$p own5_rst=$r ;;
+        (7d)    own7_pct=$p own7_rst=$r ;;
+        (7d_oi) fable_pct=$p fable_rst=$r ;;
+      esac
+      w=""
+    done < "$f"
+  } 2>/dev/null
+}
+
+seg_fable() {  # Fable weekly usage gauge, from model-relay's per-session limits file
+  # VL_FABLE_PREVIEW: the wizard preview has no limits file, so it names a percent.
+  limit_pill "fable" "${fable_pct:-$VL_FABLE_PREVIEW}" "$fable_rst" "${VL_BG_FABLE:-$VL_BG_7D}"
 }
 
 seg_stash() {  # git stash count
@@ -2686,6 +2768,16 @@ _SEG_SCAN="$_SEG_ROWS"
 if [ "$VL_FLOAT" = "1" ]; then words_of "$VL_FLOAT_SEGMENTS"; _SEG_SCAN="$_SEG_ROWS${_SW# }"; fi
 case "$_SEG_SCAN" in *" git "*|*" stash "*|*" project "*) read_git ;; esac
 case "$_SEG_SCAN" in (*" relay "*) relay_sample ;; esac
+# The session's own windows from model-relay. fable always reads the file. With
+# VL_RELAY_LIMITS=1 the limit gauges (and, under the sync, burn, which binds to
+# what they show) read it too, but only for a payload that carries no window at
+# all, so a render with readings never opens it.
+own5_pct="" own5_rst="" own7_pct="" own7_rst="" fable_pct="" fable_rst="" _OWN_LIMITS=0
+if [ "$VL_RELAY_LIMITS" = 1 ] && [ -z "${fh_pct:-}" ] && [ -z "${wd_pct:-}" ]; then
+  case "$_SEG_SCAN" in (*" limit5h "*|*" limit7d "*) _OWN_LIMITS=1 ;; esac
+  [ "$VL_LIMIT_SYNC" = 1 ] && case "$_SEG_SCAN" in (*" burn "*) _OWN_LIMITS=1 ;; esac
+fi
+case "$_SEG_SCAN" in (*" fable "*) relay_limits_sample ;; (*) [ "$_OWN_LIMITS" = 0 ] || relay_limits_sample ;; esac
 
 # The disabled/default path performs no state work. Enabled paths canonicalize
 # values and namespaces once, then use the released TSV/compact-directory flow.
@@ -2709,8 +2801,8 @@ if [ "$_STATE_BURN_GATE" = 1 ] || [ "$_STATE_RL5_GATE" = 1 ] || [ "$_STATE_RL7_G
     [ "$_STATE_RL7_GATE" != 1 ] || rl_sample "${_SL7_BASE:-}" "$_CUR7_PCT" "$_CUR7_RST"
   fi
   if [ "$VL_LIMIT_SYNC" = 1 ]; then
-    if [ "$_STATE_RL5_GATE" = 1 ]; then rl_latest "${_SL5_BASE:-}" "$RL_MAX_5H" "$_STATE_MUTATE"; rl_choose 5; fi
-    if [ "$_STATE_RL7_GATE" = 1 ]; then rl_latest "${_SL7_BASE:-}" "$RL_MAX_7D" "$_STATE_MUTATE"; rl_choose 7; fi
+    if [ "$_STATE_RL5_GATE" = 1 ]; then rl_latest "${_SL5_BASE:-}" "$RL_MAX_5H" "$_STATE_MUTATE" "${own5_rst:-}"; rl_choose 5; fi
+    if [ "$_STATE_RL7_GATE" = 1 ]; then rl_latest "${_SL7_BASE:-}" "$RL_MAX_7D" "$_STATE_MUTATE" "${own7_rst:-}"; rl_choose 7; fi
   fi
   case "$_SEG_SCAN" in (*" burn "*) burn_estimate ;; esac
 fi

@@ -152,6 +152,7 @@ Installer 可以從 `~/.p10k.zsh` 匯入選定的風格、色彩與時鐘設定�
 | `ttft` | 否 | 最後一則回應的第一個 token 等待時間；推算不出來時隱藏 |
 | `limit5h` | 是 | 五小時額度量表與重置倒數 |
 | `limit7d` | 是 | 七天額度量表與重置倒數 |
+| `fable` | 否 | 有自己每週上限的模型（`/usage` 裡 Fable 那一項）的量表與重置倒數，Claude Code 不會把它傳給 statusline。讀取 [model-relay](https://github.com/cablate/model-relay) 依每次回應的 rate-limit 標頭為每個 session 寫的用量檔（`model-relay-status/<session_id>.limits`；需要會寫這個檔的 model-relay，cablate/model-relay#9，尚未發版）；沒有檔案時隱藏，這個 session 第一次收到該模型的回應前也隱藏。檔案是 session 自己的，不會顯示其他帳號的視窗。設定 `VL_RELAY_LIMITS=1` 後，`limit5h` 與 `limit7d` 在 payload 還沒有任何視窗時也會用同一個檔案裡自己的視窗。僅 Bash renderer；不增加 fork |
 | `burn` | 否 | 綁定中的 5h 或 7d 額度到達 100% 的預估時間 |
 | `lines` | 否 | 本次 session 新增與刪除的行數 |
 | `cost` | 是 | 本次 session 花費（USD） |
@@ -239,6 +240,7 @@ Bash 讀取 `~/.claude/coralline.conf`，原生 renderer 也能讀同一個檔�
 | `VL_SEGMENTS` | `dir git model ctx limit5h limit7d cost clock` | 第一列，亦是 `auto` 模式的完整清單 |
 | `VL_SEGMENTS2` / `VL_SEGMENTS3` | 空 | 選用的固定第二、三列 |
 | `VL_HEAD_SEGMENTS` | 空 | 在其他 segment 上方獨立成一行顯示的 segment，兩種 layout 都適用（例如 `"relay"`）；不計入 `VL_MAX_LINES`，全部隱藏時整行不印。僅 Bash renderer；請直接寫在 `coralline.conf`（wizard 不會保留） |
+| `VL_RELAY_LIMITS` | `0` | 設成 `1` 時，在 payload 還沒有任何視窗（session 剛啟動或剛 resume）的期間，`limit5h` 與 `limit7d` 會顯示 model-relay 用量檔（見 `fable`）裡這個 session 自己的 5h 與 7d 視窗。順序在 `VL_LIMIT_SYNC` 的共用 store 之前，因為 store 分不出帳號；同一個視窗在 store 裡有較高的百分比時保留 store 的。payload 有讀數後，或沒有那個檔案時，沒有作用。僅 Bash renderer |
 | `VL_CLOCK` / `VL_CLOCK_SECONDS` | `12h` / `1` | `12h`、`24h` 或 `off`；秒數開關 |
 | `VL_BAR_WIDTH` | `5` | 量表寬度 |
 | `VL_BAR_FILL` / `VL_BAR_EMPTY` | `▰` / `▱` | 量表字符 |
@@ -258,7 +260,7 @@ Bash 讀取 `~/.claude/coralline.conf`，原生 renderer 也能讀同一個檔�
 
 ### Windows 無 Git Bash
 
-`statusline.ps1` 是原生 Windows PowerShell 5.1 renderer。它不需要 Bash、`jq`、WSL、archive 解壓工具或 Git；`git.exe` 是選用項目，只用來啟用 `git`、`stash` 與 `project`。它支援和 Bash 相同的風格、版面、state-backed 功能、float 輸出與套用主題的 subagent 列；主列區段除了 `relay` 以外也都相同。`VL_HEAD_SEGMENTS` 與 `VL_GIT_CACHE_TTL` 同樣只有 Bash 支援，原生 renderer 會略過它們。
+`statusline.ps1` 是原生 Windows PowerShell 5.1 renderer。它不需要 Bash、`jq`、WSL、archive 解壓工具或 Git；`git.exe` 是選用項目，只用來啟用 `git`、`stash` 與 `project`。它支援和 Bash 相同的風格、版面、state-backed 功能、float 輸出與套用主題的 subagent 列；主列區段除了 `relay` 與 `fable` 以外也都相同。`VL_HEAD_SEGMENTS`、`VL_GIT_CACHE_TTL` 與 `VL_RELAY_LIMITS` 同樣只有 Bash 支援，原生 renderer 會略過它們。
 
 以下 bootstrap 會跟隨可變的 `main`，在下載可執行 installer 前先解析成 commit，再把同一個 commit 傳給 `install.ps1`：
 
