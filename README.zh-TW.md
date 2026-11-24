@@ -279,6 +279,23 @@ Bash 讀取 `~/.claude/coralline.conf`，原生 renderer 也能讀同一個檔�
 
 </details>
 
+### agy（Antigravity CLI）
+
+coralline 也能在 [agy](https://antigravity.google/) 裡渲染：agy 的自訂 status line 傳入的 JSON payload 與 Claude Code 的格式相近。把 agy 的 `statusLine` 指向 Claude Code 執行的同一個指令即可，寫在 agy 的 `settings.json`（macOS 上是 `~/.gemini/antigravity-cli/settings.json`），或用 agy 自己的 `/statusline` 指令設定：
+
+```json
+{
+  "statusLine": { "type": "command", "command": "bash ~/.claude/coralline/statusline.sh", "enabled": true }
+}
+```
+
+Windows 上請複製 installer 寫進 Claude Code `settings.json` 的 `statusLine.command`。兩種 renderer 都會辨識 agy（`"product": "antigravity"`）並自動調整：
+
+- `limit5h`、`limit7d` 與 `burn` 讀的是 agy 自己的額度：選 Gemini 模型時是 Gemini 的 5h 與每週 window，選 Claude 或 GPT 模型時是第三方模型的那一組。agy 還沒開啟的 window 不會顯示。
+- 開了 `VL_LIMIT_SYNC=1` 時，agy 的 session 之間共用一份獨立的 store（`limit-5h-agy-gemini.tsv` 等），所以 Claude Code 的 window 不會出現在 agy 裡，agy 的也不會出現在 Claude Code 裡。
+- `effort` 讀的是模型的 effort。`cost`、`cache`、`toks` 與 `ttft` 不會顯示：agy 不提供費用與 prompt cache 資料，它的 transcript 也不是 Claude Code 的格式。
+- agy 只在狀態改變時重繪 status line，不會定時重繪，所以 session 閒置時 `clock` 與倒數都會停住。
+
 ### 信任與安全
 
 預設的 `main/INSTALL.md`、`main/UPGRADE.md` 與 `main/install.sh` URL 都是可變的遠端輸入。執行前請讀取選定的 [`INSTALL.md`](./INSTALL.md)、[`install.sh`](./install.sh) 與 [`install.ps1`](./install.ps1)。

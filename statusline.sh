@@ -2565,7 +2565,26 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
     else (($ctx.used_percentage == null) or (($ctx.used_percentage|type) == "string" and $ctx.used_percentage == "")) end;
   def cost_value:
     member(member(.; "cost"); "total_cost_usd");
+  # agy (Antigravity CLI) sends a Claude-Code-shaped payload tagged product
+  # "antigravity", with its limits in a quota map instead of rate_limits: one
+  # 5h/weekly pair for Gemini models and one ("3p") for third-party models.
+  # ponytail: picked by display-name prefix; a new third-party family lands on gemini.
+  def agy_bucket:
+    if (member(member(.; "model"); "display_name") // "" | tostring | test("^(Claude|GPT)"))
+    then "3p" else "gemini" end;
+  def agy_limits:  # → Claude Code rate_limits; a bucket with no live window (agy
+    # sends fraction 1 with a 1970 reset) maps to null, as Claude Code omits it
+    agy_bucket as $b | member(.; "quota") as $quota |
+    def win($k): member($quota; "\($b)-\($k)") as $q |
+      if ($q|type) == "object" and ($q.remaining_fraction|type) == "number"
+         and ($q.reset_in_seconds|type) == "number" and $q.reset_in_seconds > 0
+         and ($q.reset_time|type) == "string"
+      then {used_percentage: ((1 - $q.remaining_fraction) * 100 | round), resets_at: $q.reset_time}
+      else null end;
+    {five_hour: win("5h"), seven_day: win("weekly")};
   if type != "object" then error("non-object root") else
+  (member(.; "product") == "antigravity") as $agy |
+  (if $agy and member(.; "rate_limits") == null then .rate_limits = agy_limits else . end) |
   [
     (member(member(.; "workspace"); "current_dir") // member(.; "cwd") // ""),
     (member(member(.; "model"); "display_name") // ""),
@@ -2594,12 +2613,13 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
     (member(member(.; "cost"); "total_lines_removed") // 0),
     (member(member(.; "output_style"); "name") // ""),
     (member(member(.; "cost"); "total_duration_ms") // 0),
-    (member(member(.; "effort"); "level") // ""),
+    (member(member(.; "effort"); "level") // member(member(.; "model"); "effort") // ""),
     ((member(member(.; "prompt_cache"); "hit_ratio")) as $h |
       if ($h|type) == "number" then ($h * 100 | tostring) else "" end),
     ((member(member(.; "prompt_cache"); "expires_at")) as $x |
       if ($x|type) == "number" then ($x | tostring) else "" end),
     (member(member(.; "cost"); "total_api_duration_ms") // 0),
+    (if $agy then agy_bucket else "" end),
     (member(.; "transcript_path") // ""),
     (member(.; "session_id") // "")
   ] | map(scrub) | join("\u001f")
@@ -2609,10 +2629,19 @@ fi
 IFS=$'\037' read -r cwd model ctx_pct _CTX_EMPTY tok_in tok_out tok_cr tok_cw \
                  fh_pct fh_rst wd_pct wd_rst cost _COST_KIND \
                  lines_add lines_del out_style dur_ms effort \
-                 cache_pct cache_exp api_ms transcript sid <<JSON
+                 cache_pct cache_exp api_ms agy transcript sid <<JSON
 $_JSON_FIELDS
 JSON
 sid="${sid%$'\r'}"  # native Windows jq writes CRLF; the last field keeps the CR
+# Under agy the cross-session stores hold Claude's windows, so agy gets its own
+# per-bucket namespace beside them (agy sessions still sync with each other),
+# and its transcript is not Claude's format, so toks/ttft stay silent.
+if [ -n "$agy" ]; then
+  BURN_FILE="${BURN_FILE%.tsv}-agy-$agy.tsv"
+  RL5H_FILE="${RL5H_FILE%.tsv}-agy-$agy.tsv"
+  RL7D_FILE="${RL7D_FILE%.tsv}-agy-$agy.tsv"
+  transcript=""; api_ms=""   # toks_sample returns before touching its state file
+fi
 
 # Every segment drawn in a row (seg_project reads it too); _SEG_SCAN adds float's.
 # The lists are split on any whitespace when they are drawn (build_segments), so

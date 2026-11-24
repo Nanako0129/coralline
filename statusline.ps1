@@ -2635,6 +2635,54 @@ $apiMs = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('cost', 'tot
 $sid = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('session_id')))
 $toksTranscript = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('transcript_path')))
 
+# agy (Antigravity CLI), mirroring agy_bucket/agy_limits in statusline.sh: its
+# Claude-Code-shaped payload carries "product":"antigravity" and a quota map in
+# place of rate_limits, one 5h/weekly pair for Gemini models and one ("3p") for
+# third-party models. A bucket with no live window (fraction 1, 1970 reset) stays
+# empty. agy gets its own store namespace per bucket, and its transcript is not
+# Claude's format, so toks/ttft stay silent.
+function Get-AgyWindow($Quota, [string]$Key) {  # → @(used pct, reset epoch) or $null
+    $q = Get-JsonMember $Quota $Key
+    if (-not ($q -is [pscustomobject] -or $q -is [System.Collections.IDictionary])) { return $null }
+    $f = Get-JsonMember $q 'remaining_fraction'
+    $s = Get-JsonMember $q 'reset_in_seconds'
+    $t = Get-JsonMember $q 'reset_time'
+    foreach ($n in @($f, $s)) {
+        if (-not ($n -is [double] -or $n -is [decimal] -or $n -is [long] -or $n -is [int])) { return $null }
+    }
+    if ([double]$s -le 0) { return $null }
+    $dto = [DateTimeOffset]::MinValue
+    if ($t -is [datetime]) {
+        $dto = [DateTimeOffset]::new($t.ToUniversalTime())   # PowerShell 7 already parsed the ISO string
+    } elseif ($t -is [string]) {
+        $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
+        if (-not [DateTimeOffset]::TryParse($t, $Invariant, $styles, [ref]$dto)) { return $null }
+    } else { return $null }
+    $pct = [Math]::Round((1 - [double]$f) * 100, [MidpointRounding]::AwayFromZero)   # jq round
+    return @((To-InvariantString $pct), (To-InvariantString $dto.ToUnixTimeSeconds()))
+}
+$agy = ''
+if ((Get-JsonMember $J 'product') -is [string] -and (Get-JsonMember $J 'product') -ceq 'antigravity') {
+    $agy = 'gemini'
+    if ((To-InvariantString (Get-JsonPath $J @('model', 'display_name'))) -cmatch '^(Claude|GPT)') { $agy = '3p' }
+    if ($null -eq (Get-JsonMember $J 'rate_limits')) {
+        $quota = Get-JsonMember $J 'quota'
+        $fhPct = ''; $fhRst = ''; $wdPct = ''; $wdRst = ''
+        $w = Get-AgyWindow $quota "$agy-5h"
+        if ($null -ne $w) { $fhPct = $w[0]; $fhRst = $w[1] }
+        $w = Get-AgyWindow $quota "$agy-weekly"
+        if ($null -ne $w) { $wdPct = $w[0]; $wdRst = $w[1] }
+    }
+    foreach ($key in @('BURN_FILE', 'RL5H_FILE', 'RL7D_FILE')) {
+        $base = [string]$Cfg[$key]
+        if ($base.EndsWith('.tsv', [System.StringComparison]::Ordinal)) { $base = $base.Substring(0, $base.Length - 4) }
+        $Cfg[$key] = "$base-agy-$agy.tsv"
+    }
+}
+if ([string]::IsNullOrEmpty($effort)) {   # agy puts effort on the model
+    $effort = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('model', 'effort')))
+}
+
 function ConvertTo-ProbePath([string]$Path) {
     if ([string]::IsNullOrEmpty($Path)) { return '' }
     if ($Path.Length -gt 4096 -or $Path -match '[\u0000-\u001f\u007f-\u009f]') { return '' }
@@ -3337,7 +3385,7 @@ function Get-ToksSteady {
 }
 
 $Toks = [pscustomobject]@{ Ok=$false; Rate=''; Dec=''; Ttft=''; ApiMs=0L }
-if ($ProbeSegmentNames.Contains('toks') -or $ProbeSegmentNames.Contains('ttft')) {
+if (-not $agy -and ($ProbeSegmentNames.Contains('toks') -or $ProbeSegmentNames.Contains('ttft'))) {
     $Toks = Get-ToksSteady
     if ($null -eq $Toks) { $Toks = Get-ToksSample }
 }
