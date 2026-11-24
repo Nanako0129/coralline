@@ -3564,6 +3564,23 @@ fi
         if ($agyCase.Want.Count -eq 0) { Check ('agy ' + $agyCase.Name + ' hides the gauges') (-not ($plain -match '[0-9]%')) }
         Check ('agy ' + $agyCase.Name + ' parity') ((Strip-Countdown $psRun.Stdout) -ceq (Strip-Countdown $bashRun.Stdout))
     }
+    $agySubConfig = New-Config 'agy-subagents' @(('VL_SEGMENTS=' + (Quote-FromConfigure 'model subagents')), 'VL_CLOCK=off')
+    $agySubRun = '{"name":"scout","role":"a","model":"Gemini 4 Hydrogen (High)","status":"running"}'
+    $agySubDone = '{"name":"scout","role":"b","model":"Gemini 4 Hydrogen (High)","status":"completed"}'
+    foreach ($subCase in @(
+        [pscustomobject]@{ Name='two running'; List=('[' + $agySubRun + ',' + $agySubRun + ',' + $agySubDone + ']'); Want=((Glyph 0x21C9) + ' 2') },
+        [pscustomobject]@{ Name='one running'; List=('[' + $agySubRun + ']'); Want=((Glyph 0x21C9) + ' 1') },
+        [pscustomobject]@{ Name='none running'; List=('[' + $agySubDone + ']'); Want='' },
+        [pscustomobject]@{ Name='malformed'; List='{"status":"running"}'; Want='' }
+    )) {
+        $subJson = '{"product":"antigravity","model":{"display_name":"Gemini 4 Neon (High)"},"subagents":' + $subCase.List + '}'
+        $psRun = Invoke-Statusline $subJson $agySubConfig @{} '' 8000
+        $bashRun = Invoke-BashStatusline $subJson $agySubConfig @{}
+        $plain = Plain $psRun.Stdout
+        if ($subCase.Want) { Check ('agy subagents ' + $subCase.Name + ' shows the count') ($plain.Contains($subCase.Want)) }
+        else { Check ('agy subagents ' + $subCase.Name + ' hidden') (-not $plain.Contains((Glyph 0x21C9))) }
+        Check-Exact ('agy subagents ' + $subCase.Name + ' parity') $psRun $bashRun
+    }
     $agyCostConfig = New-Config 'agy-cost' @(('VL_SEGMENTS=' + (Quote-FromConfigure 'model cost')), 'VL_CLOCK=off', 'VL_COST_ALWAYS_SHOW=1')
     $agyCostPs = Invoke-Statusline (New-AgyPayload 'Gemini 4 Neon (High)' $agyGemini) $agyCostConfig @{} '' 8000
     $agyCostBash = Invoke-BashStatusline (New-AgyPayload 'Gemini 4 Neon (High)' $agyGemini) $agyCostConfig @{}

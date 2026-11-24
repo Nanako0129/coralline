@@ -145,6 +145,7 @@ Installer 可以從 `~/.p10k.zsh` 匯入選定的風格、色彩與時鐘設定�
 | `model` | 是 | 目前使用的 Claude model |
 | `relay` | 否 | 這個 session 經由 [model-relay](https://github.com/cablate/model-relay) 實際使用的模型：`↪ claude`、`/provider` 固定或 failover 選中的模型（`↪ glm-5.3`、`· failover`）、Claude 額度用完又沒有備援時的 `↪ claude · limit`、`↪ offline`，或轉發站停止時的 `↪ claude · direct`。讀取 model-relay 為每個 session 寫的狀態檔（`model-relay-status/<session_id>`，需要會寫狀態檔的 model-relay 版本）；沒有時隱藏。僅 Bash renderer；不增加 fork |
 | `effort` | 否 | 推理強度：`low`、`med`、`high`、`xhigh` 或 `max` |
+| `subagents` | 否 | 目前正在執行的 subagent 數量（`⇉ 2`），沒有時隱藏。資料來自 agy 的 payload；Claude Code 不提供這份清單，所以在 Claude Code 裡不會顯示（請用 [Subagent 面板](#subagent-面板)） |
 | `ctx` | 是 | context 用量條與輸入、輸出、快取 token 數 |
 | `cache` | 否 | prompt cache 命中率，以及快取失效的倒數；失效後顯示 `cold` |
 | `toks` | 否 | 最後一則回應的生成速度（每秒輸出 token 數，不含 prefill）；`≥` 表示改用含 prefill 的替代值 |
@@ -294,6 +295,7 @@ Windows 上請複製 installer 寫進 Claude Code `settings.json` 的 `statusLin
 - `limit5h`、`limit7d` 與 `burn` 讀的是 agy 自己的額度：選 Gemini 模型時是 Gemini 的 5h 與每週 window，選 Claude 或 GPT 模型時是第三方模型的那一組。agy 還沒開啟的 window 不會顯示；但開了 `VL_LIMIT_SYNC=1` 時，會借用其他 agy session 記下的 window，就像 Claude Code 的 session 自己沒有讀數時一樣。
 - agy 的額度與 burn store 和 Claude Code 的分開，每組額度各一套（`limit-5h-agy-gemini.d`、`burn-5h-agy-gemini.tsv`，以及對應的 `-agy-3p` 版本）。所以開了 `VL_LIMIT_SYNC=1` 時，agy 的 session 之間會互相同步，但 Claude Code 的 window 不會出現在 agy 裡，agy 的也不會出現在 Claude Code 裡。
 - `effort` 讀的是模型的 effort。`cost`、`cache`、`toks` 與 `ttft` 不會顯示：agy 不提供費用與 prompt cache 資料，它的 transcript 也不是 Claude Code 的格式。
+- `subagents` 顯示 agy 正在執行的 subagent 數量（subagent 列由 agy 自己畫，所以 Claude Code 的 subagent 面板在 agy 沒有對應功能）。
 - agy 只在狀態改變時重繪 status line，不會定時重繪，所以 session 閒置時 `clock` 與倒數都會停住。
 
 ### 信任與安全
