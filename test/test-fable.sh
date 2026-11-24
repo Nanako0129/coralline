@@ -124,6 +124,9 @@ check "sync=1: same window, the store's higher reading is kept" "5h 80% 7d 10%" 
 # ...also when a later window (another account's) is the store's latest entry
 rm -rf "$CLAUDE_CONFIG_DIR/coralline"; mkdir -p "$S5/$(printf '%010d' "$R5")_080.000" "$S5/$(printf '%010d' $(( R5 + 1000 )))_001.000"
 check "sync=1: same window kept behind a later stored one" "5h 80% 7d 10%" "$(gauges s1 '')"
+# with sampling on, the GC of the first render must not drop it for the second
+G1=$(CORALLINE_NO_SAMPLE=0 gauges s1 ''); G2=$(CORALLINE_NO_SAMPLE=0 gauges s1 '')
+check "sync=1: kept across renders with sampling on" "5h 80% 7d 10% | 5h 80% 7d 10%" "$G1 | $G2"
 rm -rf "$CLAUDE_CONFIG_DIR/coralline"
 # a 5h line further out than a 5h window can be is not one
 limits s3 "5h\t61\t$(( NOW + 90000 ))\n"

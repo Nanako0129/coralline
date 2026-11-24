@@ -987,11 +987,17 @@ rl_latest() {  # $1=canonical base $2=max secs ahead $3=mutate $4=reset to match
     done
   fi
   [ "$mutate" = 1 ] || return 0
-  for ((i=0; i<${#names[@]}; i++)); do [ "${names[$i]}" = "$hi" ] || { gc=1; break; }; done
+  # The GC keeps $4's entries too: rl_choose needs that window's reading again on
+  # the next render. Another session's GC (which matches nothing) still removes
+  # them; the file's own reading shows then, never another account's.
+  for ((i=0; i<${#names[@]}; i++)); do
+    [ "${names[$i]}" = "$hi" ] || { [ -n "$want" ] && [ "${resets[$i]}" = "$want" ]; } || { gc=1; break; }
+  done
   [ "$gc" = 1 ] || return 0
   state_paths_revalidate && state_limit_root_ok "$base" "$root" || return 0
   for ((i=0; i<${#names[@]}; i++)); do
     [ "${names[$i]}" = "$hi" ] && continue
+    [ -n "$want" ] && [ "${resets[$i]}" = "$want" ] && continue
     state_limit_entry_ok "$base" "$root" "${paths[$i]}" "${names[$i]}" || continue
     rmdir "${paths[$i]}" 2>/dev/null || true
   done
