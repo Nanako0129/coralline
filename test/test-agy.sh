@@ -70,6 +70,9 @@ check "agy never shows Claude's stored windows"         ""              "$(agy '
 agy 'Gemini 4 Neon (High)' "$G" | render 1 >/dev/null
 check "agy sessions share their own store"              "5h 33% 7d 25%" "$(agy 'Gemini 4 Neon (High)' "{}" | render | pills)"
 check "agy's windows never reach Claude's store"        "5h 80% 7d 60%" "$(printf '{"model":{"display_name":"Opus"}}' | render | pills)"
+W="{\"gemini-5h\":$NONE,\"gemini-weekly\":{\"remaining_fraction\":0.5,\"reset_time\":\"$R7\",\"reset_in_seconds\":259200}}"
+check "agy with an unopened 5h borrows a stored one"    "5h 33% 7d 50%" "$(agy 'Gemini 4 Neon (High)' "$W" | render | pills)"
+check "control: Claude with a live 7d and no 5h does not" "7d 60%"      "$(printf '{"model":{"display_name":"Opus"},"rate_limits":{"seven_day":{"used_percentage":60,"resets_at":%s}}}' $(( now + 86400 )) | render | pills)"
 check "agy wrote only under its own namespace" "limit-5h-agy-gemini.d" "$(cd "$CLAUDE_CONFIG_DIR/coralline" && ls -d limit-5h*agy*)"
 check "agy writes no toks state" "" "$(cd "$CLAUDE_CONFIG_DIR/coralline" && ls -d toks-* 2>/dev/null)"
 agy 'Claude Opus 5.5 (High)' "$P" | render 1 >/dev/null
@@ -79,13 +82,19 @@ agy 'Gemini 4 Neon (High)' "$G" | CORALLINE_NO_SAMPLE=0 CORALLINE_CONFIG="$TMP/b
 check "agy burn samples land in their own file" "burn-5h-agy-gemini.tsv" "$(cd "$CLAUDE_CONFIG_DIR/coralline" && ls burn-5h*.tsv)"
 
 # toks/ttft never sample agy's transcript nor show a seeded state; cost never pads $0.00.
+# The payloads carry API time and token counts, so without the agy guard the
+# sampler would write and show state.
 printf 'VL_CLOCK=off\nVL_SEGMENTS="model toks ttft cost"\nVL_COST_ALWAYS_SHOW=1\n' > "$TMP/toksconf"
-agyt() { agy 'Gemini 4 Neon (High)' "$G" | CORALLINE_NO_SAMPLE=0 CORALLINE_CONFIG="$TMP/toksconf" COLUMNS=200 "$BASH" "$SCRIPT" | sed 's/\x1b\[[0-9;]*m//g'; }
-out=$(agyt)
+agyt() {  # $1=product ("" = a Claude Code payload) → visible text
+  printf '{"product":"%s","session_id":"a68a158b-d5c0-444f-9c11-81a0ffb67c68","model":{"display_name":"Gemini 4 Neon (High)"},"context_window":{"total_input_tokens":10,"total_output_tokens":10},"cost":{"total_api_duration_ms":5000}}' "$1" |
+    CORALLINE_NO_SAMPLE=0 CORALLINE_CONFIG="$TMP/toksconf" COLUMNS=200 "$BASH" "$SCRIPT" | sed 's/\x1b\[[0-9;]*m//g'
+}
+out=$(agyt antigravity)
 check "agy with toks/ttft enabled writes no toks state" "" "$(cd "$CLAUDE_CONFIG_DIR/coralline" && ls -d toks-* 2>/dev/null)"
 check "agy shows no cost under VL_COST_ALWAYS_SHOW" "" "$(printf '%s' "$out" | grep -o '\$[0-9.]*')"
 printf 'a68a158b-d5c0-444f-9c11-81a0ffb67c68 5000 10:10 4321 10:10 5000 4321 250 0\n' > "$CLAUDE_CONFIG_DIR/coralline/toks-a68a158b-d5c0-444f-9c11-81a0ffb67c68"
-check "agy ignores a seeded toks state" "" "$(agyt | grep -o 'tok/s\|ttft')"
+check "control: a Claude payload shows the seeded toks state" "tok/s 0.3s" "$(agyt '' | grep -o 'tok/s\|0\.3s' | tr '\n' ' ' | sed 's/ $//')"
+check "agy ignores a seeded toks state" "" "$(agyt antigravity | grep -o 'tok/s\|0\.3s')"
 
 # reset_time is cut to whole-second UTC; any other offset drops the window.
 rt() {  # $1=reset_time → the 5h pill's "label pct", rendered with sync on and an empty store

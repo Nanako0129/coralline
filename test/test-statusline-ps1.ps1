@@ -3582,6 +3582,8 @@ fi
     [void](Invoke-Statusline (New-AgyPayload 'Gemini 4 Neon (High)' $agyGemini) $agySyncConfig $agyWrite '' 8000)
     $run = Invoke-Statusline (New-AgyPayload 'Gemini 4 Neon (High)' '{}') $agySyncConfig $agyRead '' 8000
     Check 'agy sessions share their own store' ((Plain $run.Stdout).Contains('33%'))
+    $run = Invoke-Statusline (New-AgyPayload 'Gemini 4 Neon (High)' ('{"gemini-5h":' + $agyNone + ',"gemini-weekly":' + $agyLive7 + '}')) $agySyncConfig $agyRead '' 8000
+    Check 'agy with an unopened 5h borrows a stored one' ((Plain $run.Stdout).Contains('33%'))
     $run = Invoke-Statusline '{"model":{"display_name":"Opus"}}' $agySyncConfig $agyRead '' 8000
     Check 'agy windows never reach the Claude store' ((Plain $run.Stdout).Contains('80%'))
     Check 'agy store has its own namespace' (Test-Path -LiteralPath (Join-Path $agyCfgDir 'coralline\limit-5h-agy-gemini.d'))
