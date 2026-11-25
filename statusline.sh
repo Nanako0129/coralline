@@ -160,6 +160,10 @@ VL_RELAY_LIMITS=0              # 1 = limit5h/limit7d take this session's own win
                                # has none yet (a session just started or resumed)
 VL_RELAY_MODEL=0               # 1 = model/effort show model-relay's active model and
                                # effort for non-Claude routes (Bash renderer only)
+VL_RELAY_ISOLATE=0             # 1 = on non-Claude model-relay routes, hide Claude's
+                               # client-side cost and isolate limit5h/limit7d/fable/burn
+                               # from Claude's windows (acp-gemini*/agy-gemini* reads the
+                               # agy-gemini synced stores; other providers hide)
 VL_BG_GIT_DIRTY=130
 VL_BG_MODEL=173
 VL_BG_CTX=238
@@ -2824,41 +2828,81 @@ _SEG_SCAN="$_SEG_ROWS"
 if [ "$VL_FLOAT" = "1" ]; then words_of "$VL_FLOAT_SEGMENTS"; _SEG_SCAN="$_SEG_ROWS${_SW# }"; fi
 case "$_SEG_SCAN" in *" git "*|*" stash "*|*" project "*) read_git ;; esac
 relay_kind="" relay="" relay_effort=""
-case "$_SEG_SCAN" in
-  (*" relay "*) relay_sample ;;
-  (*)
-    if [ "$VL_RELAY_MODEL" = "1" ]; then
-      case "$_SEG_SCAN" in (*" model "*|*" effort "*) relay_sample ;; esac
-    fi
-    ;;
-esac
+_NEED_RELAY=0
+case "$_SEG_SCAN" in (*" relay "*) _NEED_RELAY=1 ;; esac
+if [ "$_NEED_RELAY" = 0 ] && [ "$VL_RELAY_MODEL" = "1" ]; then
+  case "$_SEG_SCAN" in (*" model "*|*" effort "*) _NEED_RELAY=1 ;; esac
+fi
+if [ "$_NEED_RELAY" = 0 ] && [ "$VL_RELAY_ISOLATE" = "1" ] && [ -z "$agy" ]; then
+  case "$_SEG_SCAN" in (*" cost "*|*" limit5h "*|*" limit7d "*|*" fable "*|*" burn "*) _NEED_RELAY=1 ;; esac
+fi
+[ "$_NEED_RELAY" = 1 ] && relay_sample
+# Opt-in non-Claude isolation for model-relay: Claude Code's client-side cost uses
+# Claude pricing for unknown model IDs, and VL_LIMIT_SYNC would borrow Claude's
+# windows when the upstream sends no Anthropic rate-limit headers. For Antigravity
+# ACP Gemini routes, rebind the stores to agy-gemini (read-only when synced); other
+# non-Claude providers clear the stores so limits and burn hide without forking.
+_RELAY_NON_CLAUDE=0 _RELAY_AGY=0
+if [ "$VL_RELAY_ISOLATE" = "1" ] && [ -z "$agy" ] && [ -n "${relay:-}" ]; then
+  case "$relay_kind:$relay" in
+    (pinned:claude|pinned:claude/*|failover:claude|failover:claude/*) ;;
+    (pinned:*|failover:*) _RELAY_NON_CLAUDE=1 ;;
+  esac
+fi
+if [ "$_RELAY_NON_CLAUDE" = 1 ]; then
+  _COST_KIND=invalid; cost=""
+  fh_pct="" fh_rst="" wd_pct="" wd_rst=""
+  case "$relay" in
+    (acp-gemini|acp-gemini-*|agy-gemini|agy-gemini-*|agy/gemini|agy/gemini-*)
+      _RELAY_AGY=1
+      [ -z "$BURN_FILE" ] || BURN_FILE="${BURN_FILE%.tsv}-agy-gemini.tsv"
+      [ -z "$RL5H_FILE" ] || RL5H_FILE="${RL5H_FILE%.tsv}-agy-gemini.tsv"
+      [ -z "$RL7D_FILE" ] || RL7D_FILE="${RL7D_FILE%.tsv}-agy-gemini.tsv"
+      ;;
+    (*)
+      BURN_FILE="" RL5H_FILE="" RL7D_FILE=""
+      ;;
+  esac
+fi
 # The session's own windows from model-relay. fable always reads the file. With
 # VL_RELAY_LIMITS=1 the limit gauges (and, under the sync, burn, which binds to
 # what they show) read it too, but only for a payload that carries no window at
 # all, so a render with readings never opens it.
 own5_pct="" own5_rst="" own7_pct="" own7_rst="" fable_pct="" fable_rst="" _OWN_LIMITS=0
-if [ "$VL_RELAY_LIMITS" = 1 ] && [ -z "${fh_pct:-}" ] && [ -z "${wd_pct:-}" ]; then
-  case "$_SEG_SCAN" in (*" limit5h "*|*" limit7d "*) _OWN_LIMITS=1 ;; esac
-  [ "$VL_LIMIT_SYNC" = 1 ] && case "$_SEG_SCAN" in (*" burn "*) _OWN_LIMITS=1 ;; esac
+if [ "$_RELAY_NON_CLAUDE" = 0 ]; then
+  if [ "$VL_RELAY_LIMITS" = 1 ] && [ -z "${fh_pct:-}" ] && [ -z "${wd_pct:-}" ]; then
+    case "$_SEG_SCAN" in (*" limit5h "*|*" limit7d "*) _OWN_LIMITS=1 ;; esac
+    [ "$VL_LIMIT_SYNC" = 1 ] && case "$_SEG_SCAN" in (*" burn "*) _OWN_LIMITS=1 ;; esac
+  fi
+  case "$_SEG_SCAN" in (*" fable "*) relay_limits_sample ;; (*) [ "$_OWN_LIMITS" = 0 ] || relay_limits_sample ;; esac
 fi
-case "$_SEG_SCAN" in (*" fable "*) relay_limits_sample ;; (*) [ "$_OWN_LIMITS" = 0 ] || relay_limits_sample ;; esac
 
 # The disabled/default path performs no state work. Enabled paths canonicalize
 # values and namespaces once, then use the released TSV/compact-directory flow.
 # CORALLINE_NO_SAMPLE keeps every read but forbids all state mutation.
 _STATE_READY=0; _STATE_BURN_GATE=0; _STATE_RL5_GATE=0; _STATE_RL7_GATE=0
-case "$_SEG_SCAN" in (*" burn "*) _STATE_BURN_GATE=1 ;; esac
-if [ "$VL_LIMIT_SYNC" = 1 ]; then
-  # burn takes both gates, not just 7d. It can bind to either window, its projection
-  # is rebound to the synced 5h state in burn_estimate, and its own source gate
-  # accepts that state, so a layout with burn but no limit5h would otherwise leave
-  # _STATE_RL5_VALID permanently 0 and hide the segment for a session that has no
-  # payload reading but does have a usable stored window.
+_STATE_RL5_VALID=0; _STATE_RL7_VALID=0; _CUR5_CANON=""; _CUR7_CANON=""
+if [ "$_RELAY_NON_CLAUDE" = 0 ]; then
+  case "$_SEG_SCAN" in (*" burn "*) _STATE_BURN_GATE=1 ;; esac
+  if [ "$VL_LIMIT_SYNC" = 1 ]; then
+    # burn takes both gates, not just 7d. It can bind to either window, its projection
+    # is rebound to the synced 5h state in burn_estimate, and its own source gate
+    # accepts that state, so a layout with burn but no limit5h would otherwise leave
+    # _STATE_RL5_VALID permanently 0 and hide the segment for a session that has no
+    # payload reading but does have a usable stored window.
+    case "$_SEG_SCAN" in (*" limit5h "*|*" burn "*) _STATE_RL5_GATE=1 ;; esac
+    case "$_SEG_SCAN" in (*" limit7d "*|*" burn "*) _STATE_RL7_GATE=1 ;; esac
+  fi
+elif [ "$_RELAY_AGY" = 1 ] && [ "$VL_LIMIT_SYNC" = 1 ]; then
+  case "$_SEG_SCAN" in (*" burn "*) _STATE_BURN_GATE=1 ;; esac
   case "$_SEG_SCAN" in (*" limit5h "*|*" burn "*) _STATE_RL5_GATE=1 ;; esac
   case "$_SEG_SCAN" in (*" limit7d "*|*" burn "*) _STATE_RL7_GATE=1 ;; esac
 fi
 if [ "$_STATE_BURN_GATE" = 1 ] || [ "$_STATE_RL5_GATE" = 1 ] || [ "$_STATE_RL7_GATE" = 1 ]; then
   state_gate
+  # Routed agy-gemini sessions only borrow agy's synced stores; never write
+  # tick/trim/GC mutations to stores owned by native agy sessions.
+  [ "$_RELAY_AGY" = 1 ] && _STATE_MUTATE=0
   if [ "$_STATE_MUTATE" = 1 ]; then
     [ "$_STATE_BURN_GATE" != 1 ] || burn_sample "$_CUR_BURN_SAMP" "$_CUR_BURN_TSV" "$_CUR_BURN_RST"
     [ "$_STATE_RL5_GATE" != 1 ] || rl_sample "${_SL5_BASE:-}" "$_CUR5_PCT" "$_CUR5_RST"
@@ -2868,7 +2912,17 @@ if [ "$_STATE_BURN_GATE" = 1 ] || [ "$_STATE_RL5_GATE" = 1 ] || [ "$_STATE_RL7_G
     if [ "$_STATE_RL5_GATE" = 1 ]; then rl_latest "${_SL5_BASE:-}" "$RL_MAX_5H" "$_STATE_MUTATE" "${own5_rst:-}"; rl_choose 5; fi
     if [ "$_STATE_RL7_GATE" = 1 ]; then rl_latest "${_SL7_BASE:-}" "$RL_MAX_7D" "$_STATE_MUTATE" "${own7_rst:-}"; rl_choose 7; fi
   fi
-  case "$_SEG_SCAN" in (*" burn "*) burn_estimate ;; esac
+  # Without a live synced 5h window, a borrowed agy-gemini route must not
+  # project from an expired 5h TSV window (and skips awk entirely when both
+  # synced windows are absent).
+  if [ "$_RELAY_AGY" = 1 ] && [ "${_STATE_RL5_VALID:-0}" = 0 ]; then _CUR5_NONE=1; fi
+  case "$_SEG_SCAN" in
+    (*" burn "*)
+      if [ "$_RELAY_AGY" = 0 ] || [ "${_STATE_RL5_VALID:-0}" = 1 ] || [ "${_STATE_RL7_VALID:-0}" = 1 ]; then
+        burn_estimate
+      fi
+      ;;
+  esac
 fi
 _TOKS_OK=0; _TOKS_RATE=""; _TOKS_DEC=""; _TOKS_TTFT=""
 case "$_SEG_SCAN" in (*" toks "*|*" ttft "*) toks_sample ;; esac
