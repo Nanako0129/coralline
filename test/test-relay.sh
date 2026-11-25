@@ -200,4 +200,190 @@ printf 'VL_CLOCK=off\nVL_RELAY_MODEL=1\nVL_SEGMENTS="model relay"\nVL_RELAY_PREV
 check "preview stand-in shown under VL_RELAY_MODEL=1" \
   "◆ Opus ↪ glm" "$(render_plain s_none "$TMP/conf_prev1")"
 
+# ── VL_RELAY_ISOLATE ─────────────────────────────────────────────────────────
+# Seed live Claude and agy-gemini synced stores in a dedicated non-symlinked dir.
+ITMP=$(cd "$TMP" && pwd -P)/iso
+mkdir -p "$ITMP/cfg/model-relay-status"
+now=$(date +%s)
+iso_utc() {
+  date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ
+}
+R5=$(( now + 7200 )); R7=$(( now + 3 * 86400 ))
+R5_ISO=$(iso_utc "$R5"); R7_ISO=$(iso_utc "$R7")
+
+printf 'VL_CLOCK=off\nVL_LIMIT_SYNC=1\nVL_SEGMENTS="model limit5h limit7d burn"\n' > "$ITMP/seed.conf"
+# Seed Claude synced stores (5h 82%, 7d 61%)
+printf '{"model":{"display_name":"Opus"},"rate_limits":{"five_hour":{"used_percentage":82,"resets_at":%s},"seven_day":{"used_percentage":61,"resets_at":%s}}}' "$R5" "$R7" |
+  CLAUDE_CONFIG_DIR="$ITMP/cfg" CORALLINE_NO_SAMPLE=0 CORALLINE_CONFIG="$ITMP/seed.conf" COLUMNS=200 "$BASH" "$SCRIPT" >/dev/null
+# Seed agy-gemini synced stores (5h 24%, 7d 18%)
+printf '{"product":"antigravity","model":{"display_name":"Gemini 4 Neon (High)"},"quota":{"gemini-5h":{"remaining_fraction":0.76,"reset_time":"%s","reset_in_seconds":7200},"gemini-weekly":{"remaining_fraction":0.82,"reset_time":"%s","reset_in_seconds":259200}}}' "$R5_ISO" "$R7_ISO" |
+  CLAUDE_CONFIG_DIR="$ITMP/cfg" CORALLINE_NO_SAMPLE=0 CORALLINE_CONFIG="$ITMP/seed.conf" COLUMNS=200 "$BASH" "$SCRIPT" >/dev/null
+
+# Per-session Claude limits file (would supply fable & own5/7 if not isolated)
+printf '5h\t77\t%s\n7d\t55\t%s\n7d_oi\t44\t%s\n' "$R5" "$R7" "$R7" > "$ITMP/cfg/model-relay-status/s_glm.limits"
+printf '5h\t77\t%s\n7d\t55\t%s\n7d_oi\t44\t%s\n' "$R5" "$R7" "$R7" > "$ITMP/cfg/model-relay-status/s_acp.limits"
+printf '5h\t77\t%s\n7d\t55\t%s\n7d_oi\t44\t%s\n' "$R5" "$R7" "$R7" > "$ITMP/cfg/model-relay-status/s_cl.limits"
+
+printf 'pinned\tglm-5.3[1m]\thigh\n'            > "$ITMP/cfg/model-relay-status/s_glm"
+printf 'pinned\tacp-gemini-4-neon[1m]\txhigh\n' > "$ITMP/cfg/model-relay-status/s_acp"
+printf 'pinned\tclaude/acct2\thigh\n'           > "$ITMP/cfg/model-relay-status/s_cl"
+
+# Config without relay/VL_RELAY_MODEL to prove VL_RELAY_ISOLATE samples relay status on its own
+printf 'VL_CLOCK=off\nVL_LIMIT_SYNC=1\nVL_RELAY_LIMITS=1\nVL_COST_ALWAYS_SHOW=1\nVL_RELAY_ISOLATE=1\nVL_SEGMENTS="model limit5h limit7d fable burn cost"\n' > "$ITMP/iso1.conf"
+printf 'VL_CLOCK=off\nVL_LIMIT_SYNC=1\nVL_RELAY_LIMITS=1\nVL_COST_ALWAYS_SHOW=1\nVL_RELAY_ISOLATE=0\nVL_SEGMENTS="model limit5h limit7d fable burn cost"\n' > "$ITMP/iso0.conf"
+printf 'VL_CLOCK=off\nVL_LIMIT_SYNC=0\nVL_RELAY_LIMITS=1\nVL_COST_ALWAYS_SHOW=1\nVL_RELAY_ISOLATE=1\nVL_SEGMENTS="model limit5h limit7d fable burn cost"\n' > "$ITMP/iso1_nosync.conf"
+
+iso_render() {  # $1=sid $2=conf $3=with_claude_rl(0|1) → plain text
+  local p
+  if [ "$3" = 1 ]; then
+    p="{\"session_id\":\"$1\",\"model\":{\"display_name\":\"Opus\"},\"cost\":{\"total_cost_usd\":14.22},\"rate_limits\":{\"five_hour\":{\"used_percentage\":82,\"resets_at\":$R5},\"seven_day\":{\"used_percentage\":61,\"resets_at\":$R7}}}"
+  else
+    p="{\"session_id\":\"$1\",\"model\":{\"display_name\":\"Opus\"},\"cost\":{\"total_cost_usd\":14.22}}"
+  fi
+  printf '%s' "$p" |
+    CLAUDE_CONFIG_DIR="$ITMP/cfg" MODEL_RELAY_CONFIG_DIR="$ITMP/cfg" CORALLINE_NO_SAMPLE=1 \
+    CORALLINE_CONFIG="$2" COLUMNS=200 "$BASH" "$SCRIPT" |
+    perl -0777 -ne '
+      s/\e\[[0-9;]*m//g;
+      s/\xee\x82[\xb0\xb4\xb6]/ /g;
+      s/^\s+|\s+$//g; s/\s+/ /g; print;
+    '
+}
+iso_summary() {  # strip reset countdowns & bar glyphs for deterministic checks
+  printf '%s' "$1" | perl -ne '
+    my @m;
+    push @m, "5h:$1"    if /5h [▰▱]+ (\d+%)/;
+    push @m, "7d:$1"    if /7d [▰▱]+ (\d+%)/;
+    push @m, "fable:$1" if /fable [▰▱]+ (\d+%)/;
+    push @m, "burn"     if /↗/;
+    push @m, "cost:$1"  if /(\$\d+\.\d+)/;
+    print join(" ", @m);
+  '
+}
+
+# 11. VL_RELAY_ISOLATE=0 keeps default Claude cost/limits/fable on non-Claude routes
+check "VL_RELAY_ISOLATE=0 leaves non-Claude route untouched" \
+  "5h:82% 7d:61% fable:44% burn cost:\$14.22" \
+  "$(iso_summary "$(iso_render s_acp "$ITMP/iso0.conf" 0)")"
+
+# 12. VL_RELAY_ISOLATE=1 on non-agy provider (glm-5.3) hides cost, fable, limits, burn (even with stale Claude RL in payload)
+check "VL_RELAY_ISOLATE=1 on glm hides cost, fable, limits, burn" \
+  "" \
+  "$(iso_summary "$(iso_render s_glm "$ITMP/iso1.conf" 1)")"
+
+# 13. VL_RELAY_ISOLATE=1 on acp-gemini* hides cost & fable, reads agy-gemini synced stores (24% / 18%) instead of Claude (82% / 61%)
+check "VL_RELAY_ISOLATE=1 on acp-gemini reads agy-gemini synced limits and hides cost/fable" \
+  "5h:24% 7d:18% burn" \
+  "$(iso_summary "$(iso_render s_acp "$ITMP/iso1.conf" 1)")"
+
+# 14. VL_RELAY_ISOLATE=1 on acp-gemini* with VL_LIMIT_SYNC=0 hides limits, burn, cost, fable
+check "VL_RELAY_ISOLATE=1 on acp-gemini with sync off hides everything Claude-only" \
+  "" \
+  "$(iso_summary "$(iso_render s_acp "$ITMP/iso1_nosync.conf" 1)")"
+
+# 15. VL_RELAY_ISOLATE=1 on acp-gemini* with empty agy stores hides limits/burn cleanly
+mkdir -p "$ITMP/empty_cfg/model-relay-status"
+printf 'pinned\tacp-gemini-4-neon[1m]\txhigh\n' > "$ITMP/empty_cfg/model-relay-status/s_acp"
+empty_out=$(printf '{"session_id":"s_acp","model":{"display_name":"Opus"},"cost":{"total_cost_usd":9.99}}' |
+  CLAUDE_CONFIG_DIR="$ITMP/empty_cfg" MODEL_RELAY_CONFIG_DIR="$ITMP/empty_cfg" CORALLINE_NO_SAMPLE=1 \
+  CORALLINE_CONFIG="$ITMP/iso1.conf" COLUMNS=200 "$BASH" "$SCRIPT" |
+  perl -0777 -ne 's/\e\[[0-9;]*m//g; s/\xee\x82[\xb0\xb4\xb6]/ /g; print;')
+check "VL_RELAY_ISOLATE=1 on acp-gemini with no agy store hides limits/burn/cost" \
+  "" "$(iso_summary "$empty_out")"
+
+# 16. VL_RELAY_ISOLATE=1 on Claude route (pinned claude/acct2) keeps Claude cost, fable, limits, burn
+check "VL_RELAY_ISOLATE=1 on pinned claude/acct2 keeps Claude segments" \
+  "5h:82% 7d:61% fable:44% burn cost:\$14.22" \
+  "$(iso_summary "$(iso_render s_cl "$ITMP/iso1.conf" 1)")"
+
+# 17. VL_RELAY_ISOLATE=1 on acp-gemini* is strictly read-only even with CORALLINE_NO_SAMPLE=0
+mkdir -p "$ITMP/ro_cfg/coralline/limit-5h-agy-gemini.d" "$ITMP/ro_cfg/model-relay-status"
+cp -R "$ITMP/cfg/coralline/." "$ITMP/ro_cfg/coralline/"
+printf 'pinned\tacp-gemini-4-neon[1m]\txhigh\n' > "$ITMP/ro_cfg/model-relay-status/s_acp"
+EXPIRED_ENT=$(printf '%010d_050.000' "$(( now - 600 ))")
+mkdir -p "$ITMP/ro_cfg/coralline/limit-5h-agy-gemini.d/$EXPIRED_ENT"
+before_ro=$(cd "$ITMP/ro_cfg/coralline" && find . | LC_ALL=C sort)
+ro_out=$(printf '{"session_id":"s_acp","model":{"display_name":"Opus"},"cost":{"total_cost_usd":14.22},"rate_limits":{"five_hour":{"used_percentage":82,"resets_at":%s},"seven_day":{"used_percentage":61,"resets_at":%s}}}' "$R5" "$R7" |
+  CLAUDE_CONFIG_DIR="$ITMP/ro_cfg" MODEL_RELAY_CONFIG_DIR="$ITMP/ro_cfg" CORALLINE_NO_SAMPLE=0 \
+  CORALLINE_CONFIG="$ITMP/iso1.conf" COLUMNS=200 "$BASH" "$SCRIPT" |
+  perl -0777 -ne 's/\e\[[0-9;]*m//g; s/\xee\x82[\xb0\xb4\xb6]/ /g; s/^\s+|\s+$//g; s/\s+/ /g; print;')
+after_ro=$(cd "$ITMP/ro_cfg/coralline" && find . | LC_ALL=C sort)
+check "VL_RELAY_ISOLATE=1 acp-gemini read-only render shows agy-gemini limits" \
+  "5h:24% 7d:18% burn" "$(iso_summary "$ro_out")"
+check "VL_RELAY_ISOLATE=1 acp-gemini creates no ticks and runs no GC under CORALLINE_NO_SAMPLE=0" \
+  "$before_ro" "$after_ro"
+
+# 18. Expired 5h store + live 7d store with stale 5h TSV never leaks a 5h burn ETA
+mkdir -p "$ITMP/exp5_cfg/coralline/limit-5h-agy-gemini.d" "$ITMP/exp5_cfg/coralline/limit-7d-agy-gemini.d" "$ITMP/exp5_cfg/model-relay-status"
+cp -R "$ITMP/cfg/coralline/limit-7d-agy-gemini.d/." "$ITMP/exp5_cfg/coralline/limit-7d-agy-gemini.d/"
+printf 'pinned\tacp-gemini-4-neon[1m]\txhigh\n' > "$ITMP/exp5_cfg/model-relay-status/s_acp"
+OLD_R5=$(( now - 60 ))
+printf '%s\t10.000\t%s\n%s\t40.000\t%s\n' "$(( now - 600 ))" "$OLD_R5" "$(( now - 120 ))" "$OLD_R5" > "$ITMP/exp5_cfg/coralline/burn-5h-agy-gemini.tsv"
+exp5_out=$(printf '{"session_id":"s_acp","model":{"display_name":"Opus"},"cost":{"total_cost_usd":14.22}}' |
+  CLAUDE_CONFIG_DIR="$ITMP/exp5_cfg" MODEL_RELAY_CONFIG_DIR="$ITMP/exp5_cfg" CORALLINE_NO_SAMPLE=0 \
+  CORALLINE_CONFIG="$ITMP/iso1.conf" COLUMNS=200 "$BASH" "$SCRIPT" |
+  perl -0777 -ne 's/\e\[[0-9;]*m//g; s/\xee\x82[\xb0\xb4\xb6]/ /g; s/^\s+|\s+$//g; s/\s+/ /g; print;')
+check "VL_RELAY_ISOLATE=1 with expired 5h store shows 7d+burn and hides 5h" \
+  "7d:18% burn" "$(iso_summary "$exp5_out")"
+exp5_has_5h=0
+case "$exp5_out" in (*"5h ⇢"*) exp5_has_5h=1 ;; esac
+check "expired 5h TSV does not leak 5h burn ETA" "0" "$exp5_has_5h"
+
+# 18b. VL_RELAY_ISOLATE=1 on acp-gemini* with no coralline dir creates nothing under CORALLINE_NO_SAMPLE=0
+mkdir -p "$ITMP/nodir_cfg/model-relay-status"
+printf 'pinned\tacp-gemini-4-neon[1m]\txhigh\n' > "$ITMP/nodir_cfg/model-relay-status/s_acp"
+printf '{"session_id":"s_acp","model":{"display_name":"Opus"},"cost":{"total_cost_usd":9.99}}' |
+  CLAUDE_CONFIG_DIR="$ITMP/nodir_cfg" MODEL_RELAY_CONFIG_DIR="$ITMP/nodir_cfg" CORALLINE_NO_SAMPLE=0 \
+  CORALLINE_CONFIG="$ITMP/iso1.conf" COLUMNS=200 "$BASH" "$SCRIPT" >/dev/null
+nodir_exists=0; [ -e "$ITMP/nodir_cfg/coralline" ] && nodir_exists=1
+check "VL_RELAY_ISOLATE=1 acp-gemini creates no store dir when empty under CORALLINE_NO_SAMPLE=0" "0" "$nodir_exists"
+
+# 19. failover non-Claude isolates; failover agy/gemini* borrows agy-gemini; failover claude/acct2 stays Claude
+printf 'failover\tglm-5.3[1m]\thigh\n'       > "$ITMP/cfg/model-relay-status/s_fo_glm"
+printf 'failover\tagy/gemini-4[1m]\thigh\n'  > "$ITMP/cfg/model-relay-status/s_fo_agy"
+printf 'failover\tclaude/acct2\thigh\n'      > "$ITMP/cfg/model-relay-status/s_fo_cl"
+printf 'pinned\tacp-gemini4\thigh\n'         > "$ITMP/cfg/model-relay-status/s_acp4"
+printf 'pinned\tagy-gemini4\thigh\n'         > "$ITMP/cfg/model-relay-status/s_agy4"
+printf 'pinned\tagy/gemini4\thigh\n'         > "$ITMP/cfg/model-relay-status/s_agys4"
+printf '5h\t77\t%s\n7d\t55\t%s\n7d_oi\t44\t%s\n' "$R5" "$R7" "$R7" > "$ITMP/cfg/model-relay-status/s_fo_cl.limits"
+check "VL_RELAY_ISOLATE=1 on failover glm hides Claude segments" \
+  "" "$(iso_summary "$(iso_render s_fo_glm "$ITMP/iso1.conf" 1)")"
+check "VL_RELAY_ISOLATE=1 on failover agy/gemini borrows agy-gemini synced stores" \
+  "5h:24% 7d:18% burn" "$(iso_summary "$(iso_render s_fo_agy "$ITMP/iso1.conf" 1)")"
+check "VL_RELAY_ISOLATE=1 on failover claude/acct2 keeps Claude segments" \
+  "5h:82% 7d:61% fable:44% burn cost:\$14.22" "$(iso_summary "$(iso_render s_fo_cl "$ITMP/iso1.conf" 1)")"
+check "VL_RELAY_ISOLATE=1 on acp-gemini4 (no hyphen) borrows agy-gemini synced stores" \
+  "5h:24% 7d:18% burn" "$(iso_summary "$(iso_render s_acp4 "$ITMP/iso1.conf" 1)")"
+check "VL_RELAY_ISOLATE=1 on agy-gemini4 (no hyphen) borrows agy-gemini synced stores" \
+  "5h:24% 7d:18% burn" "$(iso_summary "$(iso_render s_agy4 "$ITMP/iso1.conf" 1)")"
+check "VL_RELAY_ISOLATE=1 on agy/gemini4 (no hyphen) borrows agy-gemini synced stores" \
+  "5h:24% 7d:18% burn" "$(iso_summary "$(iso_render s_agys4 "$ITMP/iso1.conf" 1)")"
+
+# 20. Native agy payload is never altered by VL_RELAY_ISOLATE=1 even with a relay status file for the same sid
+agy_payload=$(printf '{"product":"antigravity","session_id":"s_glm","model":{"display_name":"Gemini 4 Neon (High)"},"cost":{"total_usd":1.25},"quota":{"gemini-5h":{"remaining_fraction":0.76,"reset_time":"%s","reset_in_seconds":7200},"gemini-weekly":{"remaining_fraction":0.82,"reset_time":"%s","reset_in_seconds":259200}}}' "$R5_ISO" "$R7_ISO")
+agy_native_0=$(printf '%s' "$agy_payload" |
+  CLAUDE_CONFIG_DIR="$ITMP/cfg" MODEL_RELAY_CONFIG_DIR="$ITMP/cfg" CORALLINE_NO_SAMPLE=1 \
+  CORALLINE_CONFIG="$ITMP/iso0.conf" COLUMNS=200 "$BASH" "$SCRIPT" |
+  perl -0777 -ne 's/\e\[[0-9;]*m//g; s/\xee\x82[\xb0\xb4\xb6]/ /g; s/^\s+|\s+$//g; s/\s+/ /g; print;')
+agy_native_1=$(printf '%s' "$agy_payload" |
+  CLAUDE_CONFIG_DIR="$ITMP/cfg" MODEL_RELAY_CONFIG_DIR="$ITMP/cfg" CORALLINE_NO_SAMPLE=1 \
+  CORALLINE_CONFIG="$ITMP/iso1.conf" COLUMNS=200 "$BASH" "$SCRIPT" |
+  perl -0777 -ne 's/\e\[[0-9;]*m//g; s/\xee\x82[\xb0\xb4\xb6]/ /g; s/^\s+|\s+$//g; s/\s+/ /g; print;')
+check "VL_RELAY_ISOLATE=1 leaves native agy payload identical to VL_RELAY_ISOLATE=0" \
+  "$(iso_summary "$agy_native_0")" "$(iso_summary "$agy_native_1")"
+check "VL_RELAY_ISOLATE=1 native agy keeps its own limits, burn, and cost" \
+  "5h:24% 7d:18% fable:44% burn cost:\$1.25" "$(iso_summary "$agy_native_1")"
+
+# 21. Inherited internal _STATE_RL* / _CUR*_CANON env vars do not leak limits on isolated routes
+env_leak_out=$(printf '{"session_id":"s_glm","model":{"display_name":"Opus"},"cost":{"total_cost_usd":14.22}}' |
+  _STATE_RL5_VALID=1 _STATE_RL5_PCT=50000 _STATE_RL5_RST="$R5" \
+  _STATE_RL7_VALID=1 _STATE_RL7_PCT=60000 _STATE_RL7_RST="$R7" \
+  _CUR5_CANON=50.000 _CUR5_PCT=50000 _CUR5_RST="$R5" \
+  _CUR7_CANON=60.000 _CUR7_PCT=60000 _CUR7_RST="$R7" \
+  CLAUDE_CONFIG_DIR="$ITMP/cfg" MODEL_RELAY_CONFIG_DIR="$ITMP/cfg" CORALLINE_NO_SAMPLE=1 \
+  CORALLINE_CONFIG="$ITMP/iso1.conf" COLUMNS=200 "$BASH" "$SCRIPT" |
+  perl -0777 -ne 's/\e\[[0-9;]*m//g; s/\xee\x82[\xb0\xb4\xb6]/ /g; s/^\s+|\s+$//g; s/\s+/ /g; print;')
+check "VL_RELAY_ISOLATE=1 clears inherited _STATE_RL* and _CUR*_CANON env vars" \
+  "" "$(iso_summary "$env_leak_out")"
+
 exit "$fail"
