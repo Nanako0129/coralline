@@ -342,6 +342,9 @@ check "VL_RELAY_ISOLATE=1 acp-gemini creates no store dir when empty under CORAL
 printf 'failover\tglm-5.3[1m]\thigh\n'       > "$ITMP/cfg/model-relay-status/s_fo_glm"
 printf 'failover\tagy/gemini-4[1m]\thigh\n'  > "$ITMP/cfg/model-relay-status/s_fo_agy"
 printf 'failover\tclaude/acct2\thigh\n'      > "$ITMP/cfg/model-relay-status/s_fo_cl"
+printf 'pinned\tacp-gemini4\thigh\n'         > "$ITMP/cfg/model-relay-status/s_acp4"
+printf 'pinned\tagy-gemini4\thigh\n'         > "$ITMP/cfg/model-relay-status/s_agy4"
+printf 'pinned\tagy/gemini4\thigh\n'         > "$ITMP/cfg/model-relay-status/s_agys4"
 printf '5h\t77\t%s\n7d\t55\t%s\n7d_oi\t44\t%s\n' "$R5" "$R7" "$R7" > "$ITMP/cfg/model-relay-status/s_fo_cl.limits"
 check "VL_RELAY_ISOLATE=1 on failover glm hides Claude segments" \
   "" "$(iso_summary "$(iso_render s_fo_glm "$ITMP/iso1.conf" 1)")"
@@ -349,6 +352,12 @@ check "VL_RELAY_ISOLATE=1 on failover agy/gemini borrows agy-gemini synced store
   "5h:24% 7d:18% burn" "$(iso_summary "$(iso_render s_fo_agy "$ITMP/iso1.conf" 1)")"
 check "VL_RELAY_ISOLATE=1 on failover claude/acct2 keeps Claude segments" \
   "5h:82% 7d:61% fable:44% burn cost:\$14.22" "$(iso_summary "$(iso_render s_fo_cl "$ITMP/iso1.conf" 1)")"
+check "VL_RELAY_ISOLATE=1 on acp-gemini4 (no hyphen) borrows agy-gemini synced stores" \
+  "5h:24% 7d:18% burn" "$(iso_summary "$(iso_render s_acp4 "$ITMP/iso1.conf" 1)")"
+check "VL_RELAY_ISOLATE=1 on agy-gemini4 (no hyphen) borrows agy-gemini synced stores" \
+  "5h:24% 7d:18% burn" "$(iso_summary "$(iso_render s_agy4 "$ITMP/iso1.conf" 1)")"
+check "VL_RELAY_ISOLATE=1 on agy/gemini4 (no hyphen) borrows agy-gemini synced stores" \
+  "5h:24% 7d:18% burn" "$(iso_summary "$(iso_render s_agys4 "$ITMP/iso1.conf" 1)")"
 
 # 20. Native agy payload is never altered by VL_RELAY_ISOLATE=1 even with a relay status file for the same sid
 agy_payload=$(printf '{"product":"antigravity","session_id":"s_glm","model":{"display_name":"Gemini 4 Neon (High)"},"cost":{"total_usd":1.25},"quota":{"gemini-5h":{"remaining_fraction":0.76,"reset_time":"%s","reset_in_seconds":7200},"gemini-weekly":{"remaining_fraction":0.82,"reset_time":"%s","reset_in_seconds":259200}}}' "$R5_ISO" "$R7_ISO")

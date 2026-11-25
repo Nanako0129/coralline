@@ -2853,7 +2853,7 @@ if [ "$_RELAY_NON_CLAUDE" = 1 ]; then
   _COST_KIND=invalid; cost=""
   fh_pct="" fh_rst="" wd_pct="" wd_rst=""
   case "$relay" in
-    (acp-gemini|acp-gemini-*|agy-gemini|agy-gemini-*|agy/gemini|agy/gemini-*)
+    (acp-gemini*|agy-gemini*|agy/gemini*)
       _RELAY_AGY=1
       [ -z "$BURN_FILE" ] || BURN_FILE="${BURN_FILE%.tsv}-agy-gemini.tsv"
       [ -z "$RL5H_FILE" ] || RL5H_FILE="${RL5H_FILE%.tsv}-agy-gemini.tsv"
@@ -2913,16 +2913,9 @@ if [ "$_STATE_BURN_GATE" = 1 ] || [ "$_STATE_RL5_GATE" = 1 ] || [ "$_STATE_RL7_G
     if [ "$_STATE_RL7_GATE" = 1 ]; then rl_latest "${_SL7_BASE:-}" "$RL_MAX_7D" "$_STATE_MUTATE" "${own7_rst:-}"; rl_choose 7; fi
   fi
   # Without a live synced 5h window, a borrowed agy-gemini route must not
-  # project from an expired 5h TSV window (and skips awk entirely when both
-  # synced windows are absent).
+  # project from an expired 5h TSV window (_CUR5_NONE=1 also skips awk).
   if [ "$_RELAY_AGY" = 1 ] && [ "${_STATE_RL5_VALID:-0}" = 0 ]; then _CUR5_NONE=1; fi
-  case "$_SEG_SCAN" in
-    (*" burn "*)
-      if [ "$_RELAY_AGY" = 0 ] || [ "${_STATE_RL5_VALID:-0}" = 1 ] || [ "${_STATE_RL7_VALID:-0}" = 1 ]; then
-        burn_estimate
-      fi
-      ;;
-  esac
+  case "$_SEG_SCAN" in (*" burn "*) burn_estimate ;; esac
 fi
 _TOKS_OK=0; _TOKS_RATE=""; _TOKS_DEC=""; _TOKS_TTFT=""
 case "$_SEG_SCAN" in (*" toks "*|*" ttft "*) toks_sample ;; esac
